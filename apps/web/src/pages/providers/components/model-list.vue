@@ -53,6 +53,7 @@
           :delete-loading="deleteModelLoading"
           :search-aligned="searchVisible"
           :managed="managed"
+          :preview="preview"
           @edit="(model) => $emit('edit', model)"
           @delete="(id) => $emit('delete', id)"
         />
@@ -164,6 +165,8 @@ const props = defineProps<{
   managed?: boolean
   clientType?: string
   ensureProviderId?: () => Promise<string>
+  // Read-only rows: a template draft lists the catalog it will apply.
+  preview?: boolean
 }>()
 
 defineEmits<{

@@ -378,6 +378,20 @@ func (s *Service) FetchRemoteModels(ctx context.Context, id string) ([]RemoteMod
 	return s.fetchRemoteModelsViaSDK(ctx, provider)
 }
 
+// TemplateModels returns the model catalog of the provider template with the
+// given ID. An ID that does not parse is ErrNotFound.
+func (s *Service) TemplateModels(ctx context.Context, templateID string) ([]RemoteModel, error) {
+	pgID, err := db.ParseUUID(strings.TrimSpace(templateID))
+	if err != nil {
+		return nil, fmt.Errorf("%w: %w", providertemplates.ErrNotFound, err)
+	}
+	items, err := s.queries.ListProviderTemplateModels(ctx, pgID)
+	if err != nil {
+		return nil, errs.Wrap(err, "list provider template models")
+	}
+	return remoteModelsFromCatalog(items), nil
+}
+
 // fetchTemplateModels returns the curated template/catalog entries for a
 // provider, when one is associated. The list describes CAPABILITIES of known
 // models, never which models this endpoint actually serves: callers must treat

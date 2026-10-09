@@ -25664,6 +25664,10 @@ const docTemplate = `{
                 "template_id"
             ],
             "properties": {
+                "apply_template_models": {
+                    "description": "ApplyTemplateModels also writes the template's model catalog as the new\nprovider's models, so a template draft starts with the catalog it\npreviewed. They land disabled, like a bulk import. LLM templates only.",
+                    "type": "boolean"
+                },
                 "config": {
                     "type": "object",
                     "additionalProperties": {}

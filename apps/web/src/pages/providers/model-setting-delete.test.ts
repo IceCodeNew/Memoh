@@ -90,6 +90,7 @@ vi.mock('@felinic/ui', async () => {
       },
     }),
     SettingsShell: Passthrough,
+    SurfaceCard: Passthrough,
     Switch: Passthrough,
     toast: {
       error: vi.fn(),

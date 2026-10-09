@@ -21,6 +21,10 @@ type CreateFromTemplateRequest struct {
 	Name       string         `json:"name,omitempty"`
 	Config     map[string]any `json:"config,omitempty"`
 	Metadata   map[string]any `json:"metadata,omitempty"`
+	// ApplyTemplateModels also writes the template's model catalog as the new
+	// provider's models, so a template draft starts with the catalog it
+	// previewed. They land disabled, like a bulk import. LLM templates only.
+	ApplyTemplateModels bool `json:"apply_template_models,omitempty"`
 }
 
 // UpdateRequest represents a request to update an existing provider.

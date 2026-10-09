@@ -10,6 +10,9 @@ const mocks = vi.hoisted(() => ({
   deleteModelsById: vi.fn(),
   deleteProvidersById: vi.fn(),
   getProvidersByIdModels: vi.fn(),
+  templateModels: [] as Array<{ model_id: string, name?: string, type?: string, config: Record<string, unknown> }>,
+  modelList: {} as { models?: Array<Record<string, unknown>>, preview?: boolean },
+  saveProvider: undefined as undefined | ((data: Record<string, unknown>) => Promise<unknown>),
 }))
 
 async function flushPromises() {
@@ -47,7 +50,7 @@ vi.mock('@memohai/sdk', () => ({
 
 vi.mock('@/composables/useProviderTemplateModels', async () => {
   const { ref } = await import('vue')
-  return { useProviderTemplateModels: () => ({ models: ref([]) }) }
+  return { useProviderTemplateModels: () => ({ models: ref(mocks.templateModels) }) }
 })
 
 vi.mock('@/constants/client-types', () => ({
@@ -58,15 +61,28 @@ vi.mock('@/components/provider-icon/index.vue', () => ({ default: () => h('span'
 vi.mock('./components/provider-form.vue', () => ({
   // eslint-disable-next-line vue/one-component-per-file -- Test double for the child form.
   default: defineComponent({
-    props: { provider: { type: Object, default: undefined } },
-    setup: () => () => h('div', { 'data-testid': 'provider-form' }),
+    props: {
+      provider: { type: Object, default: undefined },
+      saveProvider: { type: Function, default: undefined },
+    },
+    setup: (props: { saveProvider?: (data: Record<string, unknown>) => Promise<unknown> }) => {
+      mocks.saveProvider = props.saveProvider
+      return () => h('div', { 'data-testid': 'provider-form' })
+    },
   }),
 }))
 vi.mock('./components/model-list.vue', () => ({
   // eslint-disable-next-line vue/one-component-per-file -- Test double for the child list.
   default: defineComponent({
-    props: { providerId: { type: String, default: undefined } },
-    setup: () => () => h('div', { 'data-testid': 'model-list' }),
+    props: {
+      providerId: { type: String, default: undefined },
+      models: { type: Array, default: undefined },
+      preview: { type: Boolean, default: false },
+    },
+    setup: (props: { models?: Array<Record<string, unknown>>, preview?: boolean }) => () => {
+      mocks.modelList = { models: props.models, preview: props.preview }
+      return h('div', { 'data-testid': 'model-list' })
+    },
   }),
 }))
 vi.mock('lucide-vue-next', () => ({
@@ -80,6 +96,7 @@ vi.mock('@felinic/ui', async () => {
     Button: Passthrough,
     ConfirmPopover: Passthrough,
     SettingsShell: Passthrough,
+    SurfaceCard: Passthrough,
     Switch: define({
       props: ['modelValue', 'disabled'],
       emits: ['update:modelValue'],
@@ -100,6 +117,9 @@ vi.mock('@felinic/ui', async () => {
 describe('provider draft enable', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    mocks.templateModels = []
+    mocks.modelList = {}
+    mocks.saveProvider = undefined
     mocks.postProvidersFromTemplate.mockResolvedValue({
       data: {
         id: 'created-provider',
@@ -155,6 +175,46 @@ describe('provider draft enable', () => {
     expect(mocks.postProvidersFromTemplate).not.toHaveBeenCalled()
     expect(mocks.postProvidersByIdImportModels).not.toHaveBeenCalled()
     expect(mocks.putProvidersById).not.toHaveBeenCalled()
+
+    app.unmount()
+    root.remove()
+  })
+
+  it('previews the template catalog read-only and applies it when the draft is saved', async () => {
+    mocks.templateModels = [
+      { model_id: 'chat-a', name: 'Chat A', type: 'chat', config: { context_window: 128000 } },
+      { model_id: 'embed-a', type: 'embedding', config: {} },
+      { model_id: 'tts-a', type: 'speech', config: {} },
+    ]
+    const ModelSetting = (await import('./model-setting.vue')).default
+    const root = document.createElement('div')
+    document.body.append(root)
+    // eslint-disable-next-line vue/one-component-per-file -- Mounts the page under test with a draft provider.
+    const app = createApp(ModelSetting, {
+      provider: {
+        provider_template_id: 'template-anthropic',
+        name: 'Anthropic',
+        client_type: 'anthropic-messages',
+        enable: true,
+        config: {},
+      },
+    })
+    app.config.globalProperties.$t = (key: string) => key
+    app.mount(root)
+    await nextTick()
+
+    expect(mocks.modelList.preview).toBe(true)
+    expect(mocks.modelList.models).toEqual([
+      { model_id: 'chat-a', name: 'Chat A', type: 'chat', config: { context_window: 128000 }, enable: false },
+      { model_id: 'embed-a', name: undefined, type: 'embedding', config: {}, enable: false },
+    ])
+
+    await mocks.saveProvider?.({ name: 'Anthropic', config: { api_key: '' }, enable: true })
+    await flushPromises()
+
+    expect(mocks.postProvidersFromTemplate).toHaveBeenCalledWith(expect.objectContaining({
+      body: expect.objectContaining({ template_id: 'template-anthropic', apply_template_models: true }),
+    }))
 
     app.unmount()
     root.remove()

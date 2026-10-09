@@ -70,11 +70,58 @@ func (h *ProvidersHandler) CreateFromTemplate(c echo.Context) error {
 	if err := c.Bind(&req); err != nil {
 		return apperror.Wrap(apperror.CodeProviderTemplateRequestInvalid, err, nil)
 	}
-	resp, err := h.service.CreateFromTemplate(c.Request().Context(), req)
+	ctx := c.Request().Context()
+	resp, err := h.service.CreateFromTemplate(ctx, req)
 	if err != nil {
 		return providerTemplateError(err)
 	}
+	if req.ApplyTemplateModels && models.IsLLMClientType(models.ClientType(resp.ClientType)) {
+		h.applyTemplateModels(ctx, resp)
+	}
 	return c.JSON(http.StatusCreated, resp)
+}
+
+// applyTemplateModels writes the template catalog as the provider's models.
+// Like a bulk import they land disabled: catalogs such as OpenRouter's list
+// hundreds of models, and bot model pickers only show enabled ones. The
+// provider already exists, so a failure is logged instead of undoing it.
+func (h *ProvidersHandler) applyTemplateModels(ctx context.Context, provider providers.GetResponse) {
+	if h.modelsService == nil || strings.TrimSpace(provider.ProviderTemplateID) == "" {
+		return
+	}
+	catalog, err := h.service.TemplateModels(ctx, provider.ProviderTemplateID)
+	if err != nil {
+		h.logger.WarnContext(ctx, "failed to load provider template models", slog.String("provider_id", provider.ID), slog.Any("error", err))
+		return
+	}
+	disabled := false
+	// Provider models list newest first, so creating the catalog back to front
+	// keeps the template's order, the order the draft previewed.
+	for i := len(catalog) - 1; i >= 0; i-- {
+		m := catalog[i]
+		modelType := models.ModelType(strings.TrimSpace(m.Type))
+		if modelType == "" {
+			modelType = models.ModelTypeChat
+		}
+		if modelType != models.ModelTypeChat && modelType != models.ModelTypeEmbedding {
+			continue
+		}
+		name := strings.TrimSpace(m.Name)
+		if name == "" {
+			name = m.ID
+		}
+		_, err := h.modelsService.Create(ctx, models.AddRequest{
+			ModelID:    m.ID,
+			Name:       name,
+			ProviderID: provider.ID,
+			Type:       modelType,
+			Enable:     &disabled,
+			Config:     modelConfigFromRemote(m, append([]string(nil), m.Compatibilities...)),
+		})
+		if err != nil && !errors.Is(err, models.ErrModelIDAlreadyExists) {
+			h.logger.WarnContext(ctx, "failed to apply provider template model", slog.String("provider_id", provider.ID), slog.String("model_id", m.ID), slog.Any("error", err))
+		}
+	}
 }
 
 // Create godoc

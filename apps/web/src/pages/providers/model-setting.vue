@@ -61,6 +61,7 @@
         :managed="isManagedModelCatalogClientType(curProvider?.client_type)"
         :client-type="curProvider?.client_type"
         :ensure-provider-id="curProvider?.id ? undefined : ensureProviderId"
+        :preview="!curProvider?.id"
         :delete-model-loading="deleteModelLoading"
         @edit="handleEditModel"
         @delete="deleteModel"
@@ -92,6 +93,7 @@ import type { ModelsGetResponse, ProvidersGetResponse, ProvidersUpdateRequest } 
 import { useI18n } from 'vue-i18n'
 import { toast } from '@felinic/ui'
 import { isManagedModelCatalogClientType } from '@/constants/client-types'
+import { useProviderTemplateModels } from '@/composables/useProviderTemplateModels'
 
 // ---- Model 编辑状态（provide 给 CreateModel） ----
 const openModel = reactive<{
@@ -120,6 +122,10 @@ const emit = defineEmits<{
   materialized: [provider: ProvidersGetResponse]
 }>()
 const curProviderId = computed(() => curProvider.value?.id)
+const draftTemplateId = computed(() => curProviderId.value
+  ? undefined
+  : curProvider.value?.provider_template_id)
+const { models: templateModels } = useProviderTemplateModels(draftTemplateId)
 const enableLoading = ref(false)
 const { t } = useI18n()
 
@@ -188,6 +194,9 @@ async function materializeProvider(
         name: String(data.name ?? curProvider.value?.name ?? ''),
         config: (data.config as Record<string, unknown> | undefined) ?? {},
         metadata: (data.metadata as Record<string, unknown> | undefined) ?? {},
+        // The draft previews the template catalog; creating the provider
+        // applies it so the list does not vanish.
+        apply_template_models: true,
       },
       throwOnError: true,
     })
@@ -218,6 +227,7 @@ async function materializeProvider(
     }
 
     invalidateProviderQueries()
+    invalidateModelQueries()
     queryCache.invalidateQueries({ key: ['provider-templates', 'llm'] })
     return result
   })()
@@ -317,10 +327,18 @@ const { data: modelDataList } = useQuery({
   enabled: () => !!curProviderId.value,
 })
 
-// A template draft has no models of its own. The template catalog only
-// enriches imported models, so listing it here would show models that vanish
-// as soon as the provider is created.
-const providerModels = computed<ModelsGetResponse[]>(() => modelDataList.value ?? [])
+// A template draft previews the catalog that creating the provider applies.
+// Applied models land disabled, so the preview shows them that way too.
+const providerModels = computed<ModelsGetResponse[]>(() => {
+  if (curProviderId.value) return modelDataList.value ?? []
+  return templateModels.value.filter(model => !model.type || model.type === 'chat' || model.type === 'embedding').map(model => ({
+    model_id: model.model_id,
+    name: model.name,
+    type: model.type as ModelsGetResponse['type'],
+    config: model.config as ModelsGetResponse['config'],
+    enable: false,
+  }))
+})
 
 watch(curProvider, () => {
   queryCache.invalidateQueries({ key: ['provider-models'] })

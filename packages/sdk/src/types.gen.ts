@@ -3475,6 +3475,12 @@ export type ProvidersCountResponse = {
 };
 
 export type ProvidersCreateFromTemplateRequest = {
+    /**
+     * ApplyTemplateModels also writes the template's model catalog as the new
+     * provider's models, so a template draft starts with the catalog it
+     * previewed. They land disabled, like a bulk import. LLM templates only.
+     */
+    apply_template_models?: boolean;
     config?: {
         [key: string]: unknown;
     };
