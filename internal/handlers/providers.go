@@ -572,6 +572,7 @@ func modelConfigFromRemote(m providers.RemoteModel, compatibilities []string) mo
 		ThinkingBudgetMin:   m.ThinkingBudgetMin,
 		ThinkingBudgetMax:   m.ThinkingBudgetMax,
 		ContextWindow:       m.ContextWindow,
+		MaxOutputTokens:     m.MaxOutputTokens,
 		Dimensions:          m.Dimensions,
 	}
 }
@@ -656,6 +657,10 @@ func mergeDiscoveredConfig(existing, discovered models.ModelConfig) (models.Mode
 	}
 	if discovered.ContextWindow != nil && (out.ContextWindow == nil || *discovered.ContextWindow != *out.ContextWindow) {
 		out.ContextWindow = discovered.ContextWindow
+		changed = true
+	}
+	if discovered.MaxOutputTokens != nil && (out.MaxOutputTokens == nil || *discovered.MaxOutputTokens != *out.MaxOutputTokens) {
+		out.MaxOutputTokens = discovered.MaxOutputTokens
 		changed = true
 	}
 	if discovered.CatalogAvailable != nil && (out.CatalogAvailable == nil || *discovered.CatalogAvailable != *out.CatalogAvailable) {
