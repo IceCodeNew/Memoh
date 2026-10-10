@@ -1147,7 +1147,6 @@ func resolveReasoningConfig(chatModel models.GetResponse, botSettings settings.S
 		chatModel.ReasoningOptions(clientType),
 		stored,
 		requestedEffort,
-		clientType,
 	)
 }
 

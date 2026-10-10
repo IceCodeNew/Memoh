@@ -1944,7 +1944,6 @@ func (p *SpawnProvider) resolveSubagentReasoning(
 		modelInfo.ReasoningOptions(clientType),
 		stored,
 		requested,
-		clientType,
 	), nil
 }
 
