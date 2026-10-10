@@ -21,6 +21,7 @@ import (
 	"github.com/felinics/memoh/internal/models"
 	"github.com/felinics/memoh/internal/oauthctx"
 	"github.com/felinics/memoh/internal/providers"
+	"github.com/felinics/memoh/internal/reasoning"
 )
 
 type ProvidersHandler struct {
@@ -575,24 +576,6 @@ func modelConfigFromRemote(m providers.RemoteModel, compatibilities []string) mo
 	}
 }
 
-// preserveDeclaredCapabilities lets generic discovery refresh the tier list while
-// keeping capability tokens it structurally cannot know about.
-//
-// The disable token declares that a model can be turned off. For providers whose
-// off travels outside the effort field — DeepSeek through chat_completions_compat,
-// Gemini 2.5 Flash through a zero budget — the hand-maintained template is the only
-// source. Managed Codex/Copilot catalogs skip this helper and replace the list
-// exactly, so an upstream removal can revoke Off.
-func preserveDeclaredCapabilities(stored, discovered []string) []string {
-	out := append([]string(nil), discovered...)
-	for _, token := range []string{models.ReasoningEffortDisable} {
-		if slices.Contains(stored, token) && !slices.Contains(out, token) {
-			out = append([]string{token}, out...)
-		}
-	}
-	return out
-}
-
 func mergeManagedDiscoveredConfig(existing, discovered models.ModelConfig) (models.ModelConfig, bool) {
 	out, changed := mergeDiscoveredConfig(existing, discovered)
 	if !slices.Equal(out.Compatibilities, discovered.Compatibilities) {
@@ -647,11 +630,9 @@ func mergeDiscoveredConfig(existing, discovered models.ModelConfig) (models.Mode
 		out.ThinkingMode = discovered.ThinkingMode
 		changed = true
 	}
-	if len(discovered.ReasoningEfforts) > 0 {
-		if wanted := preserveDeclaredCapabilities(out.ReasoningEfforts, discovered.ReasoningEfforts); !slices.Equal(wanted, out.ReasoningEfforts) {
-			out.ReasoningEfforts = wanted
-			changed = true
-		}
+	if merged := reasoning.MergeTiers(out.ReasoningEfforts, discovered.ReasoningEfforts); !slices.Equal(merged, out.ReasoningEfforts) {
+		out.ReasoningEfforts = merged
+		changed = true
 	}
 	if discovered.ReasoningDialect != "" && discovered.ReasoningDialect != out.ReasoningDialect {
 		out.ReasoningDialect = discovered.ReasoningDialect
