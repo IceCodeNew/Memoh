@@ -27,6 +27,12 @@ var (
 
 const CatalogRefreshInterval = 10 * time.Minute
 
+// catalogStaleRefreshes is how many refresh intervals a cached catalog may age
+// before reads report it stale. Refreshes run late under upstream latency and
+// may fail once; reporting stale only after missed refreshes keeps a healthy
+// registry from looking unavailable.
+const catalogStaleRefreshes = 3
+
 type CatalogResult struct {
 	Catalog   *catalog.Catalog
 	Stale     bool
@@ -307,7 +313,7 @@ func (p *RemoteCatalog) refresh(ctx context.Context, previous CachedCatalog) (Ca
 }
 
 func (p *RemoteCatalog) catalogResult(entry CachedCatalog, cat *catalog.Catalog) CatalogResult {
-	return CatalogResult{Catalog: cat, FetchedAt: entry.FetchedAt, Stale: p.now().Sub(entry.FetchedAt) >= p.refreshInterval}
+	return CatalogResult{Catalog: cat, FetchedAt: entry.FetchedAt, Stale: p.now().Sub(entry.FetchedAt) >= catalogStaleRefreshes*p.refreshInterval}
 }
 
 func (p *RemoteCatalog) hydrate(ctx context.Context, entry CachedCatalog) (CatalogResult, error) {

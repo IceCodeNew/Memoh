@@ -208,6 +208,37 @@ func TestRemoteCatalogPersistsVerifiedDefinitionsAndWorksOffline(t *testing.T) {
 	}
 }
 
+// A background refresh that runs late or fails once must not mark the cache
+// stale; only a cache that missed several refreshes in a row is.
+func TestRemoteCatalogToleratesLateRefreshBeforeReportingStale(t *testing.T) {
+	p, _, _ := providerFixture(t)
+	fetchedAt := time.Date(2026, 10, 9, 6, 32, 0, 0, time.UTC)
+	now := fetchedAt
+	p.now = func() time.Time { return now }
+	if _, err := p.Snapshot(t.Context(), true); err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		age   time.Duration
+		stale bool
+	}{
+		{age: CatalogRefreshInterval - time.Second},
+		{age: CatalogRefreshInterval + 30*time.Second},
+		{age: 2*CatalogRefreshInterval + time.Minute},
+		{age: catalogStaleRefreshes*CatalogRefreshInterval - time.Second},
+		{age: catalogStaleRefreshes * CatalogRefreshInterval, stale: true},
+	} {
+		now = fetchedAt.Add(tc.age)
+		result, err := p.Snapshot(t.Context(), false)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if result.Stale != tc.stale {
+			t.Fatalf("age %s: stale = %v, want %v", tc.age, result.Stale, tc.stale)
+		}
+	}
+}
+
 func TestRemoteCatalogNoCacheAndInvalidContentFailExplicitly(t *testing.T) {
 	p, store, server := providerFixture(t)
 	server.mu.Lock()
