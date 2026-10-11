@@ -3,7 +3,14 @@ package bridge
 import (
 	"context"
 	"strings"
+	"time"
 )
+
+// AuxiliaryLoadTimeout bounds the best-effort workspace reads made while
+// preparing a chat turn: the target probe, skills, hooks and context files.
+// Explicit failures degrade immediately; this only catches a workspace that
+// stops responding, so it stays well above a slow but healthy bridge.
+const AuxiliaryLoadTimeout = 10 * time.Second
 
 type workspaceTargetContextKey struct{}
 

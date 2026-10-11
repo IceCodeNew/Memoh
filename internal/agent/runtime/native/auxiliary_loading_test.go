@@ -14,6 +14,7 @@ import (
 	"github.com/felinics/memoh/internal/agent/step"
 	tools "github.com/felinics/memoh/internal/agent/tool"
 	"github.com/felinics/memoh/internal/hooks"
+	pb "github.com/felinics/memoh/internal/workspace/bridgepb"
 )
 
 func TestWorkspaceUnavailableAllowsModelResponseWithoutTools(t *testing.T) {
@@ -116,5 +117,33 @@ func TestLoadingStatusRetainsUnknownFilesWithoutFabricatingTheirContent(t *testi
 	}
 	if !found {
 		t.Fatal("missing service status")
+	}
+}
+
+type slowContextFileService struct {
+	pb.UnimplementedContainerServiceServer
+	delay time.Duration
+}
+
+func (s slowContextFileService) ReadFile(ctx context.Context, req *pb.ReadFileRequest) (*pb.ReadFileResponse, error) {
+	if req.GetPath() == "/data/AGENTS.md" {
+		select {
+		case <-time.After(s.delay):
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+	}
+	return &pb.ReadFileResponse{Content: "content of " + req.GetPath()}, nil
+}
+
+// A slow but healthy workspace must not be reported as unavailable: only an
+// explicit failure or a long stall degrades the context files.
+func TestLoadSystemFilesWaitsForSlowHealthyWorkspace(t *testing.T) {
+	provider, cleanup := setupExecTestInfra(t, slowContextFileService{delay: 1500 * time.Millisecond})
+	defer cleanup()
+	for _, file := range NewFSClient(provider, "bot", nil).LoadSystemFiles(t.Context()) {
+		if file.LoadStatus != "" || !strings.Contains(file.Content, file.Filename) {
+			t.Fatalf("file=%+v", file)
+		}
 	}
 }

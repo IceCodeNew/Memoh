@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"strings"
-	"time"
 
 	"github.com/felinics/memoh/internal/agent/runtime/native"
 	"github.com/felinics/memoh/internal/bots"
@@ -139,7 +138,7 @@ type preparedWorkspaceTargetKey struct{}
 // Target resolution may return a lazy bridge client before it connects. Probe
 // it within the auxiliary budget so a dead bridge cannot register live tools.
 func (s *Service) resolveChatWorkspaceTarget(ctx context.Context, botID, targetID string) (workspace.ResolvedWorkspaceTarget, error) {
-	resolveCtx, cancel := context.WithTimeout(ctx, 1200*time.Millisecond)
+	resolveCtx, cancel := context.WithTimeout(ctx, bridge.AuxiliaryLoadTimeout)
 	defer cancel()
 	target, err := s.workspaceTargets.ResolveWorkspaceTarget(resolveCtx, botID, targetID)
 	if err == nil && target.Client != nil {

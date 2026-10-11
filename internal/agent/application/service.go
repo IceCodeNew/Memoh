@@ -1062,7 +1062,7 @@ func (s *Service) buildBaseRunConfig(ctx context.Context, p baseRunConfigParams)
 	ctx = workspace.WithWorkspaceTarget(ctx, cfg.Identity.WorkspaceTargetID)
 	var agentSkills []native.SkillEntry
 	if s.skillLoader != nil {
-		skillCtx, cancel := context.WithTimeout(ctx, 1200*time.Millisecond)
+		skillCtx, cancel := context.WithTimeout(ctx, bridge.AuxiliaryLoadTimeout)
 		var entries []SkillEntry
 		var skillErr error
 		if cfg.WorkspaceUnavailable {

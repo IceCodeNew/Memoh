@@ -18,7 +18,6 @@ import (
 )
 
 const (
-	loadTimeout           = 1200 * time.Millisecond
 	maxConfigBytes        = 1024 * 1024
 	unavailableLoadNotice = "Hooks configuration could not be loaded for this turn. Hooks were skipped; do not claim their checks or actions ran."
 )
@@ -118,7 +117,7 @@ func (s *Service) loadRuntime(ctx context.Context, botID string) runtimeLoad {
 	if s == nil || s.provider == nil {
 		return emptyRuntimeLoad("disabled")
 	}
-	ctx, cancel := context.WithTimeout(ctx, loadTimeout)
+	ctx, cancel := context.WithTimeout(ctx, bridge.AuxiliaryLoadTimeout)
 	defer cancel()
 	client, err := s.provider.MCPClient(ctx, strings.TrimSpace(botID))
 	if err != nil {

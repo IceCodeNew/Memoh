@@ -56,7 +56,7 @@ func (f *FSClient) ReadTextSafe(ctx context.Context, path string) string {
 
 // LoadSystemFiles loads the standard set of system files from the bot container.
 func (f *FSClient) LoadSystemFiles(ctx context.Context) []SystemFile {
-	ctx, cancel := context.WithTimeout(ctx, 1200*time.Millisecond)
+	ctx, cancel := context.WithTimeout(ctx, bridge.AuxiliaryLoadTimeout)
 	defer cancel()
 	home := "/data"
 	filenames := []string{
