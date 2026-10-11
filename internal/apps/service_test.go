@@ -15,6 +15,7 @@ import (
 
 	connectsdk "github.com/felinics/connect-it/sdk/go"
 
+	"github.com/felinics/memoh/internal/apperror"
 	"github.com/felinics/memoh/internal/connectors"
 	"github.com/felinics/memoh/internal/supermarket"
 	"github.com/felinics/memoh/internal/workspacedeps"
@@ -78,7 +79,8 @@ func (m *memoryStore) Upsert(_ context.Context, in UpsertInstallation) (Installa
 	defer m.mu.Unlock()
 	for id, inst := range m.installations {
 		if inst.BotID == in.BotID && inst.RegistryID == in.RegistryID && inst.AppID == in.AppID {
-			inst.Revision, inst.Version, inst.Status, inst.Release, inst.LastError = in.Revision, in.Version, in.Status, in.Release, ""
+			inst.Revision, inst.Version, inst.Status, inst.Release = in.Revision, in.Version, in.Status, in.Release
+			inst.LastError, inst.LastErrorCode = "", ""
 			if in.Reason == ReasonUser {
 				inst.Reason = ReasonUser
 			}
@@ -96,14 +98,14 @@ func (m *memoryStore) Upsert(_ context.Context, in UpsertInstallation) (Installa
 	return inst, nil
 }
 
-func (m *memoryStore) SetStatus(_ context.Context, botID, id string, status Status, lastError string) (Installation, error) {
+func (m *memoryStore) SetStatus(_ context.Context, botID, id string, status Status, lastErrorCode string) (Installation, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	inst, ok := m.installations[id]
 	if !ok || inst.BotID != botID {
 		return Installation{}, ErrNotInstalled
 	}
-	inst.Status, inst.LastError = status, lastError
+	inst.Status, inst.LastError, inst.LastErrorCode = status, "", lastErrorCode
 	m.installations[id] = inst
 	return inst, nil
 }
@@ -597,7 +599,7 @@ func TestInstallIsPartialWhenADependencyFailsAndResumeCompletesIt(t *testing.T) 
 	h.publish(pkg)
 
 	result, rec := h.install(t, pkg)
-	if result.Installation.Status != StatusPartial || !strings.Contains(result.Installation.LastError, "npm exploded") {
+	if result.Installation.Status != StatusPartial || result.Installation.LastErrorCode != string(apperror.CodeAppOperationFailed) || result.Installation.LastError != "" {
 		t.Fatalf("installation = %+v", result.Installation)
 	}
 	if !strings.Contains(rec.types(), "step_done:dependency:codex=failed") || !strings.HasSuffix(rec.types(), "done=partial") {
@@ -609,7 +611,7 @@ func TestInstallIsPartialWhenADependencyFailsAndResumeCompletesIt(t *testing.T) 
 	if err != nil {
 		t.Fatalf("Resume: %v", err)
 	}
-	if resumed.Installation.Status != StatusInstalled || resumed.Installation.LastError != "" {
+	if resumed.Installation.Status != StatusInstalled || resumed.Installation.LastErrorCode != "" {
 		t.Fatalf("resumed installation = %+v", resumed.Installation)
 	}
 	if len(h.publisher.published) != 2 {

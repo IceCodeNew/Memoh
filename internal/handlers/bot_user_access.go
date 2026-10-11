@@ -8,6 +8,7 @@ import (
 	"github.com/labstack/echo/v4"
 
 	"github.com/felinics/memoh/internal/accounts"
+	"github.com/felinics/memoh/internal/apperror"
 	"github.com/felinics/memoh/internal/bots"
 	"github.com/felinics/memoh/internal/errs"
 	"github.com/felinics/memoh/internal/httpx"
@@ -247,18 +248,21 @@ func (h *BotUserAccessHandler) requireManageAccess(c echo.Context) (string, stri
 func (*BotUserAccessHandler) mapGrantError(err error) error {
 	switch {
 	case errors.Is(err, bots.ErrGrantNotFound):
-		return echo.NewHTTPError(http.StatusNotFound, err.Error())
+		return apperror.Wrap(apperror.CodeBotAccessGrantNotFound, err, nil)
 	case errors.Is(err, bots.ErrOwnerUserNotFound):
-		return echo.NewHTTPError(http.StatusBadRequest, "user not found")
-	case errors.Is(err, bots.ErrInvalidPermission),
-		errors.Is(err, bots.ErrInvalidGrantSubject),
-		errors.Is(err, bots.ErrGrantUserRequired),
-		errors.Is(err, bots.ErrGrantOwnerConflict):
-		return echo.NewHTTPError(http.StatusBadRequest, err.Error())
+		return apperror.FieldInvalid("user_id", err)
+	case errors.Is(err, bots.ErrInvalidPermission):
+		return apperror.FieldInvalid("permissions", err)
+	case errors.Is(err, bots.ErrInvalidGrantSubject):
+		return apperror.FieldInvalid("subject_type", err)
+	case errors.Is(err, bots.ErrGrantUserRequired):
+		return apperror.FieldRequired("user_id")
+	case errors.Is(err, bots.ErrGrantOwnerConflict):
+		return apperror.FieldInvalid("user_id", err)
 	case errors.Is(err, bots.ErrGrantExists):
-		return echo.NewHTTPError(http.StatusConflict, err.Error())
+		return echo.NewHTTPError(http.StatusConflict).WithInternal(err)
 	case errors.Is(err, bots.ErrBotNotFound):
-		return echo.NewHTTPError(http.StatusNotFound, "bot not found")
+		return apperror.Wrap(apperror.CodeBotNotFound, err, nil)
 	default:
 		return errs.Wrap(err, "grant bot access")
 	}

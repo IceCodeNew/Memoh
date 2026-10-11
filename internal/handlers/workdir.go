@@ -140,7 +140,7 @@ func workdirDirectoriesHTTPError(err error) error {
 		errors.Is(err, bridge.ErrUnavailable):
 		return workspaceUnavailableError(err)
 	case errors.Is(err, workdir.ErrPathForbidden):
-		return echo.NewHTTPError(http.StatusForbidden, err.Error())
+		return echo.NewHTTPError(http.StatusForbidden).WithInternal(err)
 	default:
 		return workdirHTTPError(err)
 	}
@@ -249,16 +249,19 @@ func (h *WorkdirHandler) requirePermission(c echo.Context, permission string) (s
 
 func workdirHTTPError(err error) error {
 	switch {
-	case errors.Is(err, workdir.ErrNameRequired),
-		errors.Is(err, workdir.ErrPathRequired),
-		errors.Is(err, workdir.ErrInvalidPath),
+	case errors.Is(err, workdir.ErrNameRequired):
+		return apperror.FieldRequired("name")
+	case errors.Is(err, workdir.ErrPathRequired):
+		return apperror.FieldRequired("path")
+	case errors.Is(err, workdir.ErrInvalidPath),
 		errors.Is(err, workdir.ErrPathNotFound),
 		errors.Is(err, workdir.ErrPathNotDirectory):
-		return echo.NewHTTPError(http.StatusBadRequest, err.Error())
+		return apperror.FieldInvalid("path", err)
+	case errors.Is(err, workspace.ErrWorkspaceTargetNotFound):
+		return apperror.Wrap(apperror.CodeWorkspaceTargetNotFound, err, nil)
 	case errors.Is(err, workdir.ErrWorkdirNotFound),
-		errors.Is(err, workspace.ErrWorkspaceTargetNotFound),
 		errors.Is(err, db.ErrNotFound):
-		return echo.NewHTTPError(http.StatusNotFound, "workdir not found")
+		return apperror.Wrap(apperror.CodeWorkdirNotFound, err, nil)
 	case errors.Is(err, workdir.ErrDuplicatePath),
 		errors.Is(err, workdir.ErrWorkdirArchived),
 		errors.Is(err, workspace.ErrRemoteRuntimeOffline),
@@ -267,7 +270,7 @@ func workdirHTTPError(err error) error {
 		errors.Is(err, workspace.ErrRemoteRuntimeClientUpdateNeeded),
 		errors.Is(err, workspace.ErrRemoteRuntimeNotUsable),
 		errors.Is(err, workspace.ErrRemoteWorkspaceNotBound):
-		return echo.NewHTTPError(http.StatusConflict, err.Error())
+		return echo.NewHTTPError(http.StatusConflict).WithInternal(err)
 	default:
 		return errs.Wrap(err, "workdir request")
 	}

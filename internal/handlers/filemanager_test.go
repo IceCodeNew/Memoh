@@ -19,6 +19,7 @@ import (
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/labstack/echo/v4"
 
+	"github.com/felinics/memoh/internal/apperror"
 	"github.com/felinics/memoh/internal/workspace"
 	"github.com/felinics/memoh/internal/workspace/bridge"
 )
@@ -91,9 +92,8 @@ func TestFSMkdirInvalidExplicitTargetDoesNotFallBackToPrimary(t *testing.T) {
 	_, err := native.callFileManager(t, http.MethodPost, "/bots/:bot_id/container/fs/mkdir", map[string]string{
 		"path": "/data/new-folder", "workspace_target_id": "unknown-target",
 	}, native.handler.FSMkdir)
-	var httpErr *echo.HTTPError
-	if !errors.As(err, &httpErr) || httpErr.Code != http.StatusNotFound {
-		t.Fatalf("FSMkdir error = %v, want HTTP 404", err)
+	if apperror.CodeOf(err) != apperror.CodeWorkspaceTargetNotFound {
+		t.Fatalf("FSMkdir error = %v, want workspace_target.not_found", err)
 	}
 	for _, env := range []*skillsTestEnv{native, primary} {
 		if _, err := os.Stat(env.localPath("/data/new-folder")); !errors.Is(err, os.ErrNotExist) {
@@ -116,10 +116,7 @@ func TestResolveContainerPathUsesPOSIXSeparators(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, err := resolveContainerPath(tt.path)
-			if err != nil {
-				t.Fatalf("resolveContainerPath(%q) error = %v", tt.path, err)
-			}
+			got := resolveContainerPath(tt.path)
 			if got != tt.want {
 				t.Fatalf("resolveContainerPath(%q) = %q, want %q", tt.path, got, tt.want)
 			}
@@ -275,10 +272,7 @@ func TestFSWriteRejectsEmptyExpectedRevision(t *testing.T) {
 		"content":          "mine",
 		"expectedRevision": "",
 	}, env.handler.FSWrite)
-	var httpErr *echo.HTTPError
-	if !errors.As(err, &httpErr) || httpErr.Code != http.StatusBadRequest {
-		t.Fatalf("expected 400 bad request for empty expectedRevision, got %v", err)
-	}
+	requireFieldError(t, err, apperror.CodeRequestFieldInvalid, "expectedRevision")
 	// Buffer must not have been written under the ambiguous condition.
 	assertLocalFile(t, env.localPath("/data/rev.txt"), "base")
 }
@@ -391,9 +385,8 @@ func TestFSExtractRejectsZipSlipEntry(t *testing.T) {
 	env.writeBinaryFile(t, "/data/bundle.zip", buildZipArchive(t, map[string]string{"../escape.txt": "nope"}, nil))
 
 	_, err := env.callFileManager(t, http.MethodPost, "/bots/:bot_id/container/fs/extract", FSExtractRequest{Path: "/data/bundle.zip"}, env.handler.FSExtract)
-	var httpErr *echo.HTTPError
-	if !errors.As(err, &httpErr) || httpErr.Code != http.StatusBadRequest {
-		t.Fatalf("expected bad request error, got %v", err)
+	if got := apperror.CodeOf(err); got != apperror.CodeWorkspaceArchiveInvalid {
+		t.Fatalf("error = %v, want code %s", err, apperror.CodeWorkspaceArchiveInvalid)
 	}
 	if _, statErr := os.Stat(filepath.Join(env.dataRoot, "escape.txt")); !os.IsNotExist(statErr) {
 		t.Fatalf("zip-slip entry escaped destination: %v", statErr)

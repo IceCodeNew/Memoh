@@ -281,7 +281,7 @@ func (h *SessionHandler) CreateSession(c echo.Context) error {
 	}
 	targetType, targetMode, targetRuntimeType, err := session.ResolveDescriptor(sessionType, req.SessionMode, req.RuntimeType)
 	if err != nil {
-		return echo.NewHTTPError(http.StatusBadRequest, err.Error())
+		return descriptorFieldError(err)
 	}
 	if err := rejectSystemExternalRuntime(targetMode, targetRuntimeType); err != nil {
 		return err
@@ -302,7 +302,7 @@ func (h *SessionHandler) CreateSession(c echo.Context) error {
 			req.RuntimeMetadata = mergeSessionMetadata(req.RuntimeMetadata, map[string]any{"acp_agent_id": botAgentDescriptor.Provider})
 		}
 	}
-	boundWorkdir, err := h.resolveCreateSessionWorkdir(c.Request().Context(), bot.ID, req.WorkdirID, targetRuntimeType)
+	boundWorkdir, err := resolveSessionWorkdirBinding(c.Request().Context(), h.workdirs, bot.ID, req.WorkdirID, targetRuntimeType)
 	if err != nil {
 		return err
 	}
@@ -314,7 +314,7 @@ func (h *SessionHandler) CreateSession(c echo.Context) error {
 				return err
 			}
 		} else if sessionMetadataString(req.Metadata, "project_path") == "" {
-			return echo.NewHTTPError(http.StatusBadRequest, session.ErrACPProjectPathMissing.Error())
+			return apperror.FieldRequired("metadata.project_path")
 		}
 	}
 	createInput := session.CreateInput{
@@ -351,7 +351,7 @@ func (h *SessionHandler) CreateSession(c echo.Context) error {
 		}
 		prefModelID, prefEffort, prefErr := h.modelPrefs.ReconcileSessionModelPreference(c.Request().Context(), bot.ID, modelRef, effortRef)
 		if prefErr != nil {
-			return echo.NewHTTPError(http.StatusBadRequest, prefErr.Error())
+			return modelPreferenceError(prefErr, "reconcile session model preference")
 		}
 		createInput.PreferredChatModelID = prefModelID
 		createInput.PreferredReasoningEffort = prefEffort
@@ -450,7 +450,7 @@ func (h *SessionHandler) ForkSession(c echo.Context) error {
 			return echo.NewHTTPError(http.StatusServiceUnavailable, "agent runtime service unavailable")
 		}
 		if turnID == "" {
-			return echo.NewHTTPError(http.StatusBadRequest, "turn_id is required to fork this session")
+			return apperror.FieldRequired("turn_id")
 		}
 		override, forkErr := h.agentRuntimes.PrepareExternalFork(c.Request().Context(), bot.ID, sessionID, turnID)
 		if forkErr != nil {
@@ -681,7 +681,7 @@ func rejectSystemExternalRuntime(mode, runtimeType string) error {
 	// schedule mode, but those sessions are created by the schedule service —
 	// this user-facing endpoint stays limited to chat and discuss.
 	if runtimekind.IsExternal(runtimeType) && mode != session.TypeChat && mode != session.TypeDiscuss {
-		return echo.NewHTTPError(http.StatusBadRequest, fmt.Sprintf("runtime type %q is only supported for %s or %s sessions here", runtimeType, session.TypeChat, session.TypeDiscuss))
+		return apperror.FieldInvalid("session_mode", fmt.Errorf("runtime type %q is only supported for %s or %s sessions here", runtimeType, session.TypeChat, session.TypeDiscuss))
 	}
 	return nil
 }
@@ -716,7 +716,7 @@ func parseSessionTypesParam(raw string, hasParentFilter bool) ([]string, bool, e
 		out = append(out, token)
 	}
 	if len(out) == 0 {
-		return nil, false, echo.NewHTTPError(http.StatusBadRequest, "types must contain at least one session type")
+		return nil, false, apperror.FieldInvalid("types", nil)
 	}
 	return out, false, nil
 }
@@ -731,7 +731,7 @@ func parseSessionLimitParam(raw string) (int64, error) {
 		return 0, apperror.FieldInvalid("limit", err)
 	}
 	if value < 1 || value > sessionListMaxLimit {
-		return 0, echo.NewHTTPError(http.StatusBadRequest, fmt.Sprintf("limit must be between 1 and %d", sessionListMaxLimit))
+		return 0, apperror.FieldInvalid("limit", fmt.Errorf("limit must be between 1 and %d", sessionListMaxLimit))
 	}
 	return value, nil
 }
@@ -852,7 +852,7 @@ func (h *SessionHandler) UpdateSession(c echo.Context) error {
 		legacyType := strings.TrimSpace(*req.Type)
 		runtimeType := strings.TrimSpace(*req.RuntimeType)
 		if legacyType == session.TypeACPAgent && runtimeType != "" && runtimeType != session.RuntimeACPAgent {
-			return echo.NewHTTPError(http.StatusBadRequest, fmt.Sprintf("session type %q conflicts with runtime_type %q", session.TypeACPAgent, runtimeType))
+			return apperror.FieldInvalid("runtime_type", fmt.Errorf("session type %q conflicts with runtime_type %q", session.TypeACPAgent, runtimeType))
 		}
 	}
 
@@ -932,7 +932,7 @@ func (h *SessionHandler) UpdateSession(c echo.Context) error {
 		}
 		targetType, targetMode, targetRuntime, err = session.ResolveDescriptor(targetType, targetMode, targetRuntime)
 		if err != nil {
-			return echo.NewHTTPError(http.StatusBadRequest, err.Error())
+			return descriptorFieldError(err)
 		}
 		if err := rejectSystemExternalRuntime(targetMode, targetRuntime); err != nil {
 			return err
@@ -1029,7 +1029,7 @@ func (h *SessionHandler) UpdateSession(c echo.Context) error {
 			return echo.NewHTTPError(http.StatusInternalServerError, "model preference service not configured")
 		}
 		if req.ExpectedModelPreferenceRevision == nil {
-			return echo.NewHTTPError(http.StatusBadRequest, "expected_model_preference_revision is required when changing the model preference; send \"\" for a session without one")
+			return apperror.FieldRequired("expected_model_preference_revision")
 		}
 		if prefErr := h.modelPrefs.PatchSessionModelPreference(c.Request().Context(), botID, sessionID, req.PreferredChatModelID, req.PreferredReasoningEffort, *req.ExpectedModelPreferenceRevision); prefErr != nil {
 			if errors.Is(prefErr, application.ErrModelPreferenceConflict) {
@@ -1041,7 +1041,7 @@ func (h *SessionHandler) UpdateSession(c echo.Context) error {
 				}
 				return apperror.Wrap(apperror.CodeACPOperationFailed, prefErr, nil)
 			}
-			return echo.NewHTTPError(http.StatusBadRequest, prefErr.Error())
+			return modelPreferenceError(prefErr, "patch session model preference")
 		}
 		result, err = h.sessionService.Get(c.Request().Context(), sessionID)
 		if err != nil {
@@ -1162,10 +1162,10 @@ func (h *SessionHandler) authorizeSession(c echo.Context, channelIdentityID, bot
 	}
 	sess, err := h.sessionService.Get(c.Request().Context(), sessionID)
 	if err != nil || sess.BotID != bot.ID {
-		return bots.Bot{}, nil, session.Thread{}, echo.NewHTTPError(http.StatusNotFound, "session not found")
+		return bots.Bot{}, nil, session.Thread{}, apperror.New(apperror.CodeSessionNotFound, nil)
 	}
 	if !canAccessSession(sess, channelIdentityID, perms) {
-		return bots.Bot{}, nil, session.Thread{}, echo.NewHTTPError(http.StatusNotFound, "session not found")
+		return bots.Bot{}, nil, session.Thread{}, apperror.New(apperror.CodeSessionNotFound, nil)
 	}
 	return bot, perms, sess, nil
 }
@@ -1271,24 +1271,30 @@ func filterSessionsForPermissions(items []session.Thread, userID string, perms [
 	return out
 }
 
-// resolveCreateSessionWorkdir validates a requested workdir binding. External
-// Agent sessions can only bind native-workspace workdirs until their runtime
-// lifecycles are scoped by workspace target.
-func (h *SessionHandler) resolveCreateSessionWorkdir(ctx context.Context, botID, workdirID, runtimeType string) (*workdir.Workdir, error) {
+// resolveSessionWorkdirBinding validates a workdir binding requested at
+// session creation. Both creation entry points use it — the REST create and
+// the WebSocket first send that creates its session in-band — so a session is
+// only ever born bound to an active workdir of its own bot. An empty id means
+// no binding and returns nil. External Agent sessions can only bind
+// native-workspace workdirs until their runtime lifecycles are scoped by
+// workspace target.
+//
+// Errors are echo.HTTPError values; the WebSocket caller renders them with
+// wsErrorMessage.
+func resolveSessionWorkdirBinding(ctx context.Context, workdirs sessionWorkdirService, botID, workdirID, runtimeType string) (*workdir.Workdir, error) {
 	workdirID = strings.TrimSpace(workdirID)
 	if workdirID == "" {
 		return nil, nil
 	}
-	if h.workdirs == nil {
+	if workdirs == nil {
 		return nil, echo.NewHTTPError(http.StatusInternalServerError, "workdir service not configured")
 	}
-	bound, err := h.workdirs.RequireActive(ctx, botID, workdirID)
+	bound, err := workdirs.RequireActive(ctx, botID, workdirID)
 	if err != nil {
 		return nil, workdirHTTPError(err)
 	}
 	if (runtimeType == session.RuntimeACPAgent || session.IsDirectRuntimeType(runtimeType)) && bound.TargetKind == workdir.TargetKindRemote {
-		return nil, echo.NewHTTPError(http.StatusBadRequest,
-			"external agent sessions cannot use a remote computer workdir yet; bind a native workspace workdir instead")
+		return nil, apperror.New(apperror.CodeWorkdirRemoteUnsupportedForAgent, nil)
 	}
 	return &bound, nil
 }
@@ -1298,15 +1304,45 @@ func (h *SessionHandler) resolveCreateSessionWorkdir(ctx context.Context, botID,
 func (h *SessionHandler) validateACPCreate(ctx context.Context, bot bots.Bot, metadata map[string]any) error {
 	agentID := sessionMetadataString(metadata, "acp_agent_id")
 	if agentID == "" {
-		return echo.NewHTTPError(http.StatusBadRequest, session.ErrACPAgentIDRequired.Error())
+		return apperror.FieldRequired("metadata.acp_agent_id")
 	}
 	if sessionMetadataString(metadata, "project_path") == "" {
-		return echo.NewHTTPError(http.StatusBadRequest, session.ErrACPProjectPathMissing.Error())
+		return apperror.FieldRequired("metadata.project_path")
 	}
 	if err := acpAgentSetupError(ctx, h.botAgents, bot, "", agentID); err != nil {
 		return err
 	}
 	return nil
+}
+
+// descriptorFieldError answers an unusable session descriptor with the request
+// field the caller has to change.
+func descriptorFieldError(err error) error {
+	var descErr *session.DescriptorError
+	if errors.As(err, &descErr) {
+		switch descErr.Field {
+		case "session_mode":
+			return apperror.FieldInvalid("session_mode", err)
+		case "runtime_type":
+			return apperror.FieldInvalid("runtime_type", err)
+		}
+	}
+	return errs.Wrap(err, "resolve session descriptor")
+}
+
+// modelPreferenceError splits the picker's errors: what the caller can fix by
+// choosing again is a field error, store and settings failures are internal.
+func modelPreferenceError(err error, op string) error {
+	switch {
+	case errors.Is(err, application.ErrModelPreferenceInvalid):
+		return apperror.FieldInvalid("preferred_chat_model_id", err)
+	case errors.Is(err, application.ErrModelPreferenceRevisionInvalid):
+		return apperror.FieldInvalid("expected_model_preference_revision", err)
+	case errors.Is(err, application.ErrACPPreferenceUnsupported):
+		return apperror.Wrap(apperror.CodeACPModelSelectionUnsupported, err, nil)
+	default:
+		return errs.Wrap(err, op)
+	}
 }
 
 func sessionServiceError(err error) error {
@@ -1332,7 +1368,7 @@ func sessionServiceError(err error) error {
 func sessionForkError(err error) error {
 	switch {
 	case errors.Is(err, session.ErrForkSourceNotFound):
-		return echo.NewHTTPError(http.StatusNotFound, "session not found")
+		return apperror.Wrap(apperror.CodeSessionNotFound, err, nil)
 	case errors.Is(err, session.ErrForkSourceNotReply):
 		return echo.NewHTTPError(http.StatusConflict, "fork source is not a visible assistant reply")
 	case errors.Is(err, session.ErrForkSourceNotChat):

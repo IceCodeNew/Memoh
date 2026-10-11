@@ -8,8 +8,11 @@ import (
 
 	"github.com/labstack/echo/v4"
 
+	"github.com/felinics/memoh/internal/apperror"
 	"github.com/felinics/memoh/internal/channel"
+	"github.com/felinics/memoh/internal/errlog"
 	"github.com/felinics/memoh/internal/errs"
+	"github.com/felinics/memoh/internal/httpx"
 )
 
 // QRHandler handles WeChat QR code login for the management UI.
@@ -83,7 +86,8 @@ func (h *QRHandler) localTokens(ctx context.Context, botID string) []string {
 	}
 	cfg, found, err := h.lifecycle.ResolveBotChannelConfig(ctx, botID, Type)
 	if err != nil {
-		h.logger.WarnContext(ctx, "weixin qr: read existing config failed", slog.String("bot_id", botID), slog.Any("error", err))
+		result := errlog.Event(ctx, "channel.weixin.qr", errs.Wrap(err, "read existing weixin config", slog.String("bot_id", botID)), errlog.Options{})
+		h.logger.LogAttrs(ctx, result.Level, "weixin qr: read existing config failed", result.Attrs()...)
 		return nil
 	}
 	if !found {
@@ -131,9 +135,9 @@ type QRPollResponse struct {
 // @Router /bots/{id}/channel/weixin/qr/poll [post].
 func (h *QRHandler) Poll(c echo.Context) error {
 	ctx := c.Request().Context()
-	botID := strings.TrimSpace(c.Param("id"))
-	if botID == "" {
-		return echo.NewHTTPError(http.StatusBadRequest, "bot id is required")
+	botID, err := httpx.RequiredParam(c, "id")
+	if err != nil {
+		return err
 	}
 
 	var req QRPollRequest
@@ -142,13 +146,13 @@ func (h *QRHandler) Poll(c echo.Context) error {
 	}
 	qrCode := strings.TrimSpace(req.QRCode)
 	if qrCode == "" {
-		return echo.NewHTTPError(http.StatusBadRequest, "qr_code is required")
+		return apperror.FieldRequired("qr_code")
 	}
 	pollHost := strings.TrimSpace(req.PollHost)
 	apiBaseURL := defaultBaseURL
 	if pollHost != "" {
 		if !isILinkHost(pollHost) {
-			return echo.NewHTTPError(http.StatusBadRequest, "invalid poll_host")
+			return apperror.FieldInvalid("poll_host", nil)
 		}
 		apiBaseURL = "https://" + pollHost
 	}

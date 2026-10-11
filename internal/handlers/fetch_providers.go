@@ -111,7 +111,7 @@ func (h *FetchProvidersHandler) Get(c echo.Context) error {
 	}
 	resp, err := h.service.Get(c.Request().Context(), id)
 	if err != nil {
-		return echo.NewHTTPError(http.StatusNotFound, err.Error())
+		return resourceLookupError(err, "id", apperror.CodeFetchProviderNotFound, "get fetch provider")
 	}
 	return c.JSON(http.StatusOK, resp)
 }
@@ -167,8 +167,11 @@ func (h *FetchProvidersHandler) Delete(c echo.Context) error {
 }
 
 func fetchProviderHTTPError(err error) error {
-	if errors.Is(err, fetchproviders.ErrManagedNativeProvider) || errors.Is(err, fetchproviders.ErrInvalidProvider) {
-		return echo.NewHTTPError(http.StatusBadRequest, err.Error())
+	switch {
+	case errors.Is(err, fetchproviders.ErrManagedNativeProvider):
+		return apperror.Wrap(apperror.CodeFetchProviderNativeManaged, err, nil)
+	case errors.Is(err, fetchproviders.ErrInvalidProvider):
+		return apperror.FieldInvalid("provider", err)
 	}
 	return errs.Wrap(err, "handle fetch provider error")
 }

@@ -18,6 +18,7 @@ import (
 
 	"github.com/labstack/echo/v4"
 
+	"github.com/felinics/memoh/internal/apperror"
 	"github.com/felinics/memoh/internal/errs"
 	"github.com/felinics/memoh/internal/workspace/bridge"
 )
@@ -189,7 +190,7 @@ func (h *ContainerdHandler) CreateBrowserSession(c echo.Context) error {
 		return err
 	}
 	if err := validateBrowserPort(req.Port); err != nil {
-		return echo.NewHTTPError(http.StatusBadRequest, err.Error())
+		return apperror.FieldInvalid("port", err)
 	}
 
 	ctx := c.Request().Context()
@@ -199,7 +200,7 @@ func (h *ContainerdHandler) CreateBrowserSession(c echo.Context) error {
 
 	session, err := h.browserSessions.create(botID, req.Port, time.Now())
 	if err != nil {
-		return echo.NewHTTPError(http.StatusInternalServerError, "create browser session failed")
+		return echo.NewHTTPError(http.StatusInternalServerError).WithInternal(err)
 	}
 	return c.JSON(http.StatusOK, browserSessionCreateResponse{
 		ID:        session.ID,
@@ -225,7 +226,7 @@ func (h *ContainerdHandler) KeepAliveBrowserSession(c echo.Context) error {
 	}
 	session, ok := h.browserSessions.touchForBot(c.Param("session_id"), botID, time.Now())
 	if !ok {
-		return echo.NewHTTPError(http.StatusNotFound, "browser session expired")
+		return apperror.New(apperror.CodeBrowserSessionNotFound, nil)
 	}
 	return c.JSON(http.StatusOK, browserSessionKeepAliveResponse{
 		ID:        session.ID,
@@ -263,11 +264,11 @@ func (h *ContainerdHandler) handleBrowserProxyPre(next echo.HandlerFunc) echo.Ha
 func (h *ContainerdHandler) HandleBrowserProxy(c echo.Context) error {
 	sessionID, ok := browserSessionIDFromHost(c.Request().Host)
 	if !ok {
-		return echo.NewHTTPError(http.StatusNotFound, "browser session not found")
+		return apperror.New(apperror.CodeBrowserSessionNotFound, nil)
 	}
 	session, ok := h.browserSessions.touch(sessionID, time.Now())
 	if !ok {
-		return echo.NewHTTPError(http.StatusNotFound, "browser session expired")
+		return apperror.New(apperror.CodeBrowserSessionNotFound, nil)
 	}
 	if h.manager == nil {
 		return echo.NewHTTPError(http.StatusBadGateway, "manager not configured")

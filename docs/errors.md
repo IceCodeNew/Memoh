@@ -51,7 +51,9 @@ when the status would attribute the code wrongly (see
   401. A code for a dependency's failure answers 5xx, or 429 when the client
   should back off.
 - `internal/apperror/testdata/codes.golden` records the status each code was
-  published with and only grows. A published status is changed only when no
+  published with and only grows. It is sorted by code, and so are the keys
+  under `errors` in the locale files; the guard test checks both, so codes
+  added on parallel branches do not touch the same lines. A published status is changed only when no
   client depends on it, and the change is listed in `restatedStatuses` in the
   guard test.
 - `internal` (500) is the answer when no public error applies, `canceled`
@@ -180,6 +182,11 @@ A field problem whose fix needs more than the field's name, such as a rule
 between two fields or an action the user has to take first, has a code of its
 own in the domain that checks it.
 
+An `*echo.HTTPError` with a 400 or 422 status carries no message: nothing a
+handler writes there reaches the user. Text kept for the access record goes in
+`WithInternal`. A guard test in `internal/apperror` fails on a 400 or 422
+`echo.NewHTTPError` with a message argument.
+
 `fault` is who the process attributes the failure to, not something derived
 from the status:
 
@@ -232,6 +239,7 @@ stays `server`. A guard test in
 | `agent.provider_auth_failed`, `agent.provider_permission_denied`, `agent.provider_quota_exhausted`, `agent.provider_rate_limited`, `agent.provider_overloaded`, `agent.provider_request_rejected`, `agent.provider_unreachable` | `dependency` |
 | `agent.response_interrupted`, `agent.response_timeout` | `dependency` |
 | `runtime_prompt_failed`, `external_runtime.session_resume_failed`, `external_runtime.usage_limited`, `external_runtime.rate_limited`, `external_runtime.overloaded`, `external_runtime.upstream_unreachable`, `acp.config_update_failed` | `dependency` |
+| `connector.oauth_client_not_configured` | `dependency` |
 
 ## Attribution across an RPC
 
