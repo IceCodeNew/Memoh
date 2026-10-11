@@ -13,6 +13,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/felinics/memoh/internal/apperror"
 	"github.com/felinics/memoh/internal/config"
 	"github.com/felinics/memoh/internal/errlog"
 	"github.com/felinics/memoh/internal/errs"
@@ -331,10 +332,11 @@ func (s *Service) Observe(ctx context.Context, botID string) (Workspace, error) 
 	)
 	if w.Desired == DesiredPresent && observed == ObservedAbsent && !insp.Exists {
 		// Drift: the workspace vanished. Make the row due so the loop
-		// re-provisions it; ever_ready stays as it was.
+		// re-provisions it; ever_ready stays as it was. last_error is left
+		// alone: this is an observation, not a failure, and a text written
+		// here would be the one path that still reaches the checks panel.
 		updated, werr = s.writeObserved(ctx, w, ObservedWrite{
 			Observed: ObservedAbsent, ObservedGeneration: w.ObservedGeneration,
-			LastError: "workspace not found on the backend", LastErrorPhase: "",
 			Attempts: 0, NextAttemptAt: s.now(), ReleaseLease: true,
 		})
 	} else {
@@ -583,10 +585,9 @@ func (s *Service) fail(ctx context.Context, w Workspace, step *StepError) error 
 		}
 		next = s.slowRetryAt()
 	}
-	message := sanitize(step.Err)
 	final, err := s.writeObserved(ctx, w, ObservedWrite{
 		Observed: ObservedFailed, ObservedGeneration: w.DesiredGeneration,
-		LastError: message, LastErrorPhase: step.Phase,
+		LastErrorCode: string(FailureCode(step)), LastErrorPhase: step.Phase,
 		Attempts: attempts, NextAttemptAt: next, ReleaseLease: true,
 	})
 	if err != nil {
@@ -594,11 +595,15 @@ func (s *Service) fail(ctx context.Context, w Workspace, step *StepError) error 
 		s.release(ctx, w.BotID)
 	} else {
 		s.deriveBotStatus(ctx, final)
-		s.publish(w.BotID, ProgressEvent{Type: EventError, Phase: step.Phase, Err: step.Err, Message: message, Workspace: &final})
+		// The failure text stays on the unit's result record; the event carries
+		// the phase and the error so a subscriber can classify it without the
+		// row.
+		s.publish(w.BotID, ProgressEvent{Type: EventError, Phase: step.Phase, Err: step.Err, Workspace: &final})
 	}
-	failure := errs.Wrap(step.Err, "provision workspace",
+	// The unit's result names the same code the row records.
+	failure := apperror.Wrap(FailureCode(step), errs.Wrap(step.Err, "provision workspace",
 		slog.String("phase", step.Phase), slog.Bool("retryable", step.Retryable),
-		slog.Int("attempt", int(attempts)), slog.Time("next_attempt_at", next))
+		slog.Int("attempt", int(attempts)), slog.Time("next_attempt_at", next)), nil)
 	if willRetry {
 		return job.WillRetry(failure)
 	}
