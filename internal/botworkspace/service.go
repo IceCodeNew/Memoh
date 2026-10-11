@@ -18,7 +18,6 @@ import (
 	"github.com/felinics/memoh/internal/errlog"
 	"github.com/felinics/memoh/internal/errs"
 	"github.com/felinics/memoh/internal/job"
-	"github.com/felinics/memoh/internal/redact"
 )
 
 // Backend performs the workspace operations for one runtime (containerd,
@@ -664,13 +663,15 @@ func (s *Service) teardown(ctx context.Context, w Workspace) error {
 		}
 		if _, werr := s.writeObserved(ctx, cur, ObservedWrite{
 			Observed: observed, ObservedGeneration: cur.DesiredGeneration,
-			LastError: sanitize(step.Err), LastErrorPhase: PhaseTeardown,
+			LastErrorCode: string(apperror.CodeWorkspaceTeardownFailed), LastErrorPhase: PhaseTeardown,
 			Attempts: attempts, NextAttemptAt: next, ReleaseLease: true,
 		}); werr != nil {
 			s.event(ctx, "record teardown failure failed", errs.Wrap(werr, "record teardown failure"), slog.String("bot_id", w.BotID))
 			s.release(ctx, w.BotID)
 		}
-		failure := errs.Wrap(err, "tear down workspace", slog.Int("attempt", int(attempts)))
+		// The unit's result names the same code the row records.
+		failure := apperror.Wrap(apperror.CodeWorkspaceTeardownFailed, errs.Wrap(err, "tear down workspace",
+			slog.Int("attempt", int(attempts))), nil)
 		if willRetry {
 			return job.WillRetry(failure)
 		}
@@ -848,26 +849,6 @@ func (s *Service) deriveBotStatus(ctx context.Context, w Workspace) {
 func (s *Service) event(ctx context.Context, msg string, err error, attrs ...slog.Attr) {
 	result := errlog.Event(ctx, "workspace.reconcile", err, errlog.Options{})
 	s.log.LogAttrs(ctx, result.Level, msg, append(attrs, result.Attrs()...)...) //nolint:sloglint // message is a constant string supplied by internal callers
-}
-
-const maxErrorRunes = 4096
-
-func sanitize(err error) string {
-	if err == nil {
-		return ""
-	}
-	msg := strings.TrimSpace(err.Error())
-	if msg == "" {
-		return "workspace operation failed"
-	}
-	// last_error is persisted and shown to the user in the bot's runtime
-	// checks, so the credentials an upstream error quotes (a private registry
-	// reference, a signed URL) are masked before the message is stored.
-	msg = redact.Diagnostic(msg)
-	if r := []rune(msg); len(r) > maxErrorRunes {
-		msg = string(r[:maxErrorRunes])
-	}
-	return msg
 }
 
 // String renders a workspace for logs.

@@ -1067,7 +1067,7 @@ func TestFailedRemovalWaitsForTheUser(t *testing.T) {
 	}
 	_, _ = svc.ReconcileOnce(ctx)
 	w := repo.get(bot)
-	if len(backend.teardowns) != attempts || w.RemovalState() != RemovalFailed || w.LastError == "" {
+	if len(backend.teardowns) != attempts || w.RemovalState() != RemovalFailed || w.LastErrorCode == "" {
 		t.Fatalf("failed removal was touched: teardowns %d -> %d, %+v", attempts, len(backend.teardowns), w)
 	}
 
@@ -1104,7 +1104,7 @@ func TestNonRetryableRemovalFailsAtOnce(t *testing.T) {
 	_, _ = svc.RequestAbsent(ctx, bot, true)
 	_, _ = svc.ReconcileOnce(ctx)
 	w := repo.get(bot)
-	if w.RemovalState() != RemovalFailed || w.LastError != "too many files" || !w.Final(svc.opts.MaxAttempts) {
+	if w.RemovalState() != RemovalFailed || w.LastError != "" || w.LastErrorCode != string(apperror.CodeWorkspaceTeardownFailed) || !w.Final(svc.opts.MaxAttempts) {
 		t.Fatalf("after one failed export: %+v", w)
 	}
 }

@@ -11,6 +11,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/felinics/memoh/internal/apperror"
 )
 
 type logBuffer struct {
@@ -142,7 +144,7 @@ func TestSupersededProvisionIsASkip(t *testing.T) {
 
 func TestTeardownAttemptIsOneUnitMarkedWhileRetrying(t *testing.T) {
 	backend := &fakeBackend{}
-	svc, _, _, clk := newTestService(t, backend)
+	svc, repo, _, clk := newTestService(t, backend)
 	ctx := context.Background()
 	_, _ = svc.EnsurePresent(ctx, bot, "")
 	_, _ = svc.ReconcileOnce(ctx)
@@ -161,5 +163,20 @@ func TestTeardownAttemptIsOneUnitMarkedWhileRetrying(t *testing.T) {
 		if got, _ := record["will_retry"].(bool); got != wantRetry {
 			t.Fatalf("attempt %d will_retry = %v, want %v", attempt+1, record["will_retry"], wantRetry)
 		}
+		// The unit's result names the same code the row carries; without it the
+		// record falls back to internal and the two disagree.
+		if got := record["reason"]; got != string(apperror.CodeWorkspaceTeardownFailed) {
+			t.Fatalf("attempt %d reason = %v, want %v", attempt+1, got, apperror.CodeWorkspaceTeardownFailed)
+		}
+	}
+
+	// The row carries the catalog code, not the backend's message: ListChecks
+	// hands LastError straight to the bot checks panel.
+	row := repo.get(bot)
+	if row.LastErrorCode != string(apperror.CodeWorkspaceTeardownFailed) {
+		t.Fatalf("last_error_code = %q, want %q", row.LastErrorCode, apperror.CodeWorkspaceTeardownFailed)
+	}
+	if row.LastError != "" {
+		t.Fatalf("last_error = %q, want empty", row.LastError)
 	}
 }
