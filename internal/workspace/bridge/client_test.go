@@ -811,3 +811,39 @@ func TestExecStreamCloseWithoutCloseSendCancelsProcess(t *testing.T) {
 		return
 	}
 }
+
+type statTimeoutTestServer struct {
+	pb.UnimplementedContainerServiceServer
+	reported bool
+}
+
+func (s *statTimeoutTestServer) Stat(ctx context.Context, _ *pb.StatRequest) (*pb.StatResponse, error) {
+	if s.reported {
+		return nil, status.Error(codes.DeadlineExceeded, "sandbox provider timed out")
+	}
+	<-ctx.Done()
+	return nil, ctx.Err()
+}
+
+// Neither the caller's own deadline nor a timeout the provider reports is
+// ErrUnavailable or context.DeadlineExceeded on the chain; IsDeadlineExceeded
+// recognizes both.
+func TestClientTimeoutsAreDeadlineExceeded(t *testing.T) {
+	t.Parallel()
+
+	for name, reported := range map[string]bool{"caller deadline": false, "provider timeout": true} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			client := newTestClient(t, &statTimeoutTestServer{reported: reported})
+			ctx, cancel := context.WithTimeout(t.Context(), 200*time.Millisecond)
+			defer cancel()
+			_, err := client.Stat(ctx, "/")
+			if err == nil || !IsDeadlineExceeded(err) {
+				t.Fatalf("Stat() error = %v, want a deadline exceeded failure", err)
+			}
+		})
+	}
+	if IsDeadlineExceeded(mapError(context.Background(), status.Error(codes.NotFound, "missing"))) {
+		t.Fatal("not found reported as a timeout")
+	}
+}

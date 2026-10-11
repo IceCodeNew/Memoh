@@ -143,7 +143,7 @@ func (s *Service) resolveChatWorkspaceTarget(ctx context.Context, botID, targetI
 	target, err := s.workspaceTargets.ResolveWorkspaceTarget(resolveCtx, botID, targetID)
 	if err == nil && target.Client != nil {
 		_, probeErr := target.Client.Stat(resolveCtx, "/")
-		if errors.Is(probeErr, bridge.ErrUnavailable) || errors.Is(probeErr, context.DeadlineExceeded) {
+		if errors.Is(probeErr, bridge.ErrUnavailable) || bridge.IsDeadlineExceeded(probeErr) {
 			err = fmt.Errorf("%w: %w", workspace.ErrCapabilityUnavailable, probeErr)
 		}
 	}

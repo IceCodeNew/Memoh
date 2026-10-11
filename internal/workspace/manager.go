@@ -65,6 +65,13 @@ func IsNotReady(err error) bool {
 	return errors.Is(err, ErrContainerNotFound) || ctr.IsNotFound(err) || errors.Is(err, bridge.ErrUnavailable)
 }
 
+// nativeCapabilityUnavailable reports whether a native bridge call failed in
+// a way a chat turn can survive without the workspace: it is not ready, or it
+// timed out. Identity, permission and database failures are not included.
+func nativeCapabilityUnavailable(err error) bool {
+	return IsNotReady(err) || bridge.IsDeadlineExceeded(err)
+}
+
 // ContainerStatus combines DB records with live containerd state.
 type ContainerStatus struct {
 	ContainerID      string    `json:"container_id"`
@@ -342,14 +349,14 @@ func (m *Manager) ResolveWorkspaceTarget(ctx context.Context, botID, targetID st
 		target := ResolvedWorkspaceTarget{TargetID: WorkspaceTargetNative, Kind: WorkspaceTargetNative, Name: "Server Workspace", Primary: primary}
 		client, err := m.nativeMCPClient(ctx, botID)
 		if err != nil {
-			if IsNotReady(err) {
+			if nativeCapabilityUnavailable(err) {
 				return target, fmt.Errorf("%w: %w", ErrCapabilityUnavailable, err)
 			}
 			return ResolvedWorkspaceTarget{}, err
 		}
 		info, err := m.nativeWorkspaceInfo(ctx, botID)
 		if err != nil {
-			if IsNotReady(err) {
+			if nativeCapabilityUnavailable(err) {
 				return target, fmt.Errorf("%w: %w", ErrCapabilityUnavailable, err)
 			}
 			return ResolvedWorkspaceTarget{}, err

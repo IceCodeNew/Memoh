@@ -3,11 +3,19 @@ package application
 import (
 	"context"
 	"errors"
+	"net"
 	"testing"
+
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/status"
+	"google.golang.org/grpc/test/bufconn"
 
 	"github.com/felinics/memoh/internal/workdir"
 	"github.com/felinics/memoh/internal/workspace"
 	"github.com/felinics/memoh/internal/workspace/bridge"
+	pb "github.com/felinics/memoh/internal/workspace/bridgepb"
 )
 
 type unavailableWorkspaceTarget struct {
@@ -57,6 +65,38 @@ func TestLazyBridgeCannotRegisterToolsForUnavailableWorkspace(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	defer func() { _ = client.Close() }()
+	s := &Service{workspaceTargets: unavailableWorkspaceTarget{target: workspace.ResolvedWorkspaceTarget{TargetID: "native", Kind: workspace.WorkspaceTargetNative, Client: client}}}
+	ctx, req, err := s.prepareWorkspaceRequest(t.Context(), ChatRequest{BotID: "bot-1"})
+	if err != nil || req.WorkspaceTargetID != "native" || !bridge.WorkspaceUnavailableFromContext(ctx) {
+		t.Fatalf("req=%+v err=%v", req, err)
+	}
+}
+
+type providerTimeoutBridge struct {
+	pb.UnimplementedContainerServiceServer
+}
+
+func (providerTimeoutBridge) Stat(context.Context, *pb.StatRequest) (*pb.StatResponse, error) {
+	return nil, status.Error(codes.DeadlineExceeded, "sandbox provider timed out")
+}
+
+// A timeout the workspace provider reports is an explicit failure: the turn
+// degrades to text-only instead of registering tools for a stalled workspace.
+func TestProviderTimeoutDegradesWorkspaceProbe(t *testing.T) {
+	lis := bufconn.Listen(1 << 20)
+	srv := grpc.NewServer()
+	pb.RegisterContainerServiceServer(srv, providerTimeoutBridge{})
+	go func() { _ = srv.Serve(lis) }()
+	defer srv.Stop()
+	conn, err := grpc.NewClient("passthrough://bufnet",
+		grpc.WithContextDialer(func(ctx context.Context, _ string) (net.Conn, error) { return lis.DialContext(ctx) }),
+		grpc.WithTransportCredentials(insecure.NewCredentials()),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	client := bridge.NewClientFromConn(conn)
 	defer func() { _ = client.Close() }()
 	s := &Service{workspaceTargets: unavailableWorkspaceTarget{target: workspace.ResolvedWorkspaceTarget{TargetID: "native", Kind: workspace.WorkspaceTargetNative, Client: client}}}
 	ctx, req, err := s.prepareWorkspaceRequest(t.Context(), ChatRequest{BotID: "bot-1"})

@@ -6,6 +6,7 @@ import (
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 
 	"github.com/felinics/memoh/internal/rpc"
 )
@@ -16,6 +17,14 @@ var (
 	ErrBadRequest  = errors.New("invalid argument")
 	ErrForbidden   = errors.New("permission denied")
 )
+
+// IsDeadlineExceeded reports whether a bridge call ran out of time: either
+// the caller's deadline expired or the workspace provider reported its own
+// timeout. Both arrive as a DeadlineExceeded status, which is neither
+// ErrUnavailable nor context.DeadlineExceeded on the error chain.
+func IsDeadlineExceeded(err error) bool {
+	return errors.Is(err, context.DeadlineExceeded) || status.Code(err) == codes.DeadlineExceeded
+}
 
 // restoredByCode is how the client restores a bridge status: the bridge
 // reports its failures by status code alone.
