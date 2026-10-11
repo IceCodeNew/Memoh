@@ -2,6 +2,7 @@ package discuss
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"time"
 
@@ -16,6 +17,10 @@ const discussIdleTimeout = 10 * time.Minute
 // maxDiscussRecomposeAttempts bounds consecutive compact→recompose→resubmit
 // cycles within one trigger; parity with maxAsyncCompactionPasses.
 const maxDiscussRecomposeAttempts = 3
+
+// errDiscussRunFailed is the cause reported to the processing indicator for
+// a run that ended in failure; the run's own result record names the error.
+var errDiscussRunFailed = errors.New("discuss run failed")
 
 func (d *DiscussDriver) runSession(ctx context.Context, sess *discussSession) {
 	initialConfig := d.sessionConfigSnapshot(sess)
@@ -156,7 +161,9 @@ func (d *DiscussDriver) handleReplyWithTurn(ctx context.Context, sess *discussSe
 			slog.Int("messages", plan.messageCount),
 			slog.Int("estimated_tokens", plan.estimatedTokens))
 
+		finishProcessing := startProcessing(ctx, cfg, plan.command.DiscussAddressed)
 		outcome, started := d.runner.Run(ctx, turnSvc, plan.command, log)
+		finishProcessing(processingCause(outcome, started))
 		if !started || outcome.cancelled || outcome.runtimeType == "" {
 			return
 		}
@@ -181,4 +188,29 @@ func (d *DiscussDriver) handleReplyWithTurn(ctx context.Context, sess *discussSe
 		}
 		return
 	}
+}
+
+// startProcessing shows the processing indicator for one run, only when the
+// bot was addressed: a group round nobody pointed at the bot may well end in
+// silence, and must not look like the bot is typing. The returned function
+// is always safe to call.
+func startProcessing(ctx context.Context, cfg DiscussSessionConfig, addressed bool) func(error) {
+	if !addressed || cfg.StartProcessing == nil {
+		return func(error) {}
+	}
+	finish := cfg.StartProcessing(ctx)
+	if finish == nil {
+		return func(error) {}
+	}
+	return finish
+}
+
+// processingCause maps a run outcome to the indicator's terminal status. A
+// run that was not admitted or was abandoned completes; so does a run that
+// recovered and still ended clean.
+func processingCause(outcome discussRunOutcome, started bool) error {
+	if started && !outcome.cancelled && outcome.failed && !outcome.endedClean {
+		return errDiscussRunFailed
+	}
+	return nil
 }
