@@ -1205,6 +1205,12 @@ func (p *ChannelInboundProcessor) HandleInbound(ctx context.Context, cfg channel
 			if failures.observeTerminal(turnEvent) {
 				continue
 			}
+			// No typing while the turn waits on the user's approval or answer.
+			if awaitsUserDecision(turnEvent.Payload) {
+				status.PauseRefresh()
+			} else {
+				status.ResumeRefresh()
+			}
 			events, messages, parseErr := mapStreamChunkToChannelEvents(turnEvent.Payload, loc)
 			if parseErr != nil {
 				if p.logger != nil {
@@ -2102,6 +2108,25 @@ type agentStreamEnvelope struct {
 	Attachments json.RawMessage `json:"attachments"`
 	Reactions   json.RawMessage `json:"reactions"`
 	Speeches    json.RawMessage `json:"speeches"`
+}
+
+// awaitsUserDecision reports whether a stream chunk announces a tool approval
+// or ask_user request that blocks the turn until the user responds.
+func awaitsUserDecision(chunk json.RawMessage) bool {
+	var envelope struct {
+		Type   string `json:"type"`
+		Status string `json:"status"`
+	}
+	if json.Unmarshal(chunk, &envelope) != nil {
+		return false
+	}
+	switch strings.ToLower(strings.TrimSpace(envelope.Type)) {
+	case "tool_approval_request", "user_input_request":
+		status := strings.ToLower(strings.TrimSpace(envelope.Status))
+		return status == "" || status == "pending"
+	default:
+		return false
+	}
 }
 
 // mapStreamChunkToChannelEvents converts one agent stream chunk. An error

@@ -3,6 +3,7 @@ package channel
 import (
 	"context"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -48,6 +49,8 @@ type ProcessingStatus struct {
 	stopCh     chan struct{}
 	refreshed  chan struct{}
 	finishOnce sync.Once
+	paused     atomic.Bool
+	resumed    chan struct{}
 }
 
 // StartProcessingStatus reports Started and, when the notifier implements
@@ -62,6 +65,7 @@ func StartProcessingStatus(ctx context.Context, notifier ProcessingStatusNotifie
 		info:     info,
 		onError:  onError,
 		stopCh:   make(chan struct{}),
+		resumed:  make(chan struct{}, 1),
 	}
 	if notifier == nil {
 		return s
@@ -99,12 +103,17 @@ func (s *ProcessingStatus) refreshLoop(ctx context.Context, refresher Processing
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
+		case <-s.resumed:
+			ticker.Reset(interval)
 		}
 		// The ticker and stop may be ready together; stop wins.
 		select {
 		case <-s.stopCh:
 			return
 		default:
+		}
+		if s.paused.Load() {
+			continue
 		}
 		refreshCtx, cancel := context.WithTimeout(ctx, min(interval, processingStatusTimeout))
 		err := refresher.ProcessingRefresh(refreshCtx, s.cfg, s.msg, s.info, s.handle)
@@ -127,6 +136,28 @@ func (s *ProcessingStatus) StopRefresh() {
 	s.stopOnce.Do(func() { close(s.stopCh) })
 	if s.refreshed != nil {
 		<-s.refreshed
+	}
+}
+
+// PauseRefresh holds the indicator while the turn waits on the user, such as
+// a pending tool approval or ask_user question; the platform indicator then
+// lapses on its own. ResumeRefresh re-sends it at once and restarts the
+// interval.
+func (s *ProcessingStatus) PauseRefresh() {
+	if s == nil {
+		return
+	}
+	s.paused.Store(true)
+}
+
+// ResumeRefresh undoes PauseRefresh. It is cheap to call when not paused.
+func (s *ProcessingStatus) ResumeRefresh() {
+	if s == nil || !s.paused.CompareAndSwap(true, false) {
+		return
+	}
+	select {
+	case s.resumed <- struct{}{}:
+	default:
 	}
 }
 
