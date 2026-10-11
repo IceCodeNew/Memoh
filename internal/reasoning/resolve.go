@@ -72,10 +72,6 @@ func ResolveConfig(mode string, advertised []string, options Options, stored, re
 		// here would make the settings surface claim Off while the provider receives
 		// no off signal and continues with its own (usually active) default.
 		return active("")
-	case req == EffortAdaptive:
-		// Legacy "adaptive" override on a toggle model: treat as on (toggle has no
-		// adaptive concept; send a normal effort).
-		return active("")
 	case req != "":
 		return active(req)
 	case IsDisabled(stored) && canTurnOff:
@@ -93,7 +89,7 @@ func ResolveConfig(mode string, advertised []string, options Options, stored, re
 // outside the effective model+wire effort list are ignored so stale settings or
 // command/API overrides cannot send a known-invalid wire value.
 func pickEffort(requested, stored string, levels []string) string {
-	if e := strings.TrimSpace(requested); e != "" && e != EffortAdaptive && e != EffortDisable {
+	if e := strings.TrimSpace(requested); e != "" && e != EffortDisable {
 		if hasEffort(levels, e) {
 			return e
 		}

@@ -121,11 +121,10 @@ func NearestEffortToMedium(levels []string) string {
 // Thinking mode tokens. Semantics live in internal/reasoning; these are
 // forwarding aliases so existing call sites keep compiling while they migrate.
 const (
-	ThinkingModeAdaptive     = reasoning.ModeAdaptive
-	ThinkingModeToggle       = reasoning.ModeToggle
-	ThinkingModeAlways       = reasoning.ModeAlways
-	ThinkingModeOnlyAdaptive = reasoning.ModeOnlyAdaptive
-	ThinkingModeNone         = reasoning.ModeNone
+	ThinkingModeAdaptive = reasoning.ModeAdaptive
+	ThinkingModeToggle   = reasoning.ModeToggle
+	ThinkingModeAlways   = reasoning.ModeAlways
+	ThinkingModeNone     = reasoning.ModeNone
 )
 
 // validCompatibilities enumerates accepted compatibility tokens.

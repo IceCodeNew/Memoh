@@ -235,9 +235,14 @@ func TestResolveReasoningConfig(t *testing.T) {
 			want:          &models.ReasoningConfig{Active: true, Effort: models.ReasoningEffortHigh},
 		},
 		{
+			// "adaptive" was a per-message override from before the thinking mode was
+			// resolved from the model. It is not a tier, so it neither selects one nor
+			// turns reasoning off: the request resolves like any other value the model
+			// does not offer, landing on the default tier. 0165 clears it from stored
+			// settings; an in-flight override still reads this way.
 			name:          "legacy adaptive request enables toggle with default effort",
 			model:         toggleModel,
-			requestEffort: reasoning.EffortAdaptive,
+			requestEffort: "adaptive",
 			want:          &models.ReasoningConfig{Active: true, Effort: models.ReasoningEffortMedium},
 		},
 		{
