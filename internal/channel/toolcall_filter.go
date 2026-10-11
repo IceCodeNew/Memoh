@@ -1,6 +1,9 @@
 package channel
 
-import "context"
+import (
+	"context"
+	"strings"
+)
 
 // toolCallDroppingStream hides ordinary tool calls from the wrapped primary
 // stream while forwarding every other event unchanged. An ordinary
@@ -11,8 +14,15 @@ import "context"
 // show_tool_calls_in_im setting is off: the IM adapter stops receiving tool
 // lifecycle events, but any upstream TeeStream observer (e.g. the WebUI hub)
 // still sees them because the tee mirrors events independently.
+//
+// A final whose text equals a segment already closed this way is dropped:
+// runtimes that keep pre-tool text as its own assistant output (for example
+// when reasoning separates it from the tool call) would otherwise deliver it
+// twice.
 type toolCallDroppingStream struct {
-	primary OutboundStream
+	primary   OutboundStream
+	segment   strings.Builder
+	committed []string
 }
 
 // NewToolCallDroppingStream wraps primary, replaces non-interactive
@@ -35,12 +45,50 @@ func (s *toolCallDroppingStream) Push(ctx context.Context, event StreamEvent) er
 			(event.ToolCall.ApprovalID != "" || hasUserInputAction(event.ToolCall.Actions)) {
 			return s.primary.Push(ctx, event)
 		}
+		s.closeSegment()
 		return s.primary.Push(ctx, StreamEvent{Type: StreamEventSegmentEnd})
 	case StreamEventToolCallEnd:
 		return nil
-	default:
-		return s.primary.Push(ctx, event)
+	case StreamEventSegmentEnd:
+		s.closeSegment()
+	case StreamEventDelta:
+		if event.Phase != StreamPhaseReasoning {
+			s.segment.WriteString(event.Delta)
+		}
+	case StreamEventReset:
+		s.segment.Reset()
+	case StreamEventFinal:
+		s.segment.Reset()
+		if s.isCommittedFinal(event.Final) {
+			return nil
+		}
 	}
+	return s.primary.Push(ctx, event)
+}
+
+func (s *toolCallDroppingStream) closeSegment() {
+	if text := strings.TrimSpace(s.segment.String()); text != "" {
+		s.committed = append(s.committed, text)
+	}
+	s.segment.Reset()
+}
+
+// isCommittedFinal reports whether a final only repeats text the adapter
+// already delivered as a closed segment.
+func (s *toolCallDroppingStream) isCommittedFinal(final *StreamFinalizePayload) bool {
+	if final == nil || len(final.Message.Attachments) > 0 || len(final.Message.Actions) > 0 {
+		return false
+	}
+	text := strings.TrimSpace(final.Message.PlainText())
+	if text == "" {
+		return false
+	}
+	for _, committed := range s.committed {
+		if committed == text {
+			return true
+		}
+	}
+	return false
 }
 
 func (s *toolCallDroppingStream) Close(ctx context.Context) error {

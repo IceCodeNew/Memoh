@@ -102,3 +102,71 @@ func TestNewToolCallDroppingStreamNilPrimary(t *testing.T) {
 		t.Fatalf("expected nil wrapper when primary is nil, got %T", got)
 	}
 }
+
+func TestToolCallDroppingStreamDropsFinalRepeatingClosedSegment(t *testing.T) {
+	t.Parallel()
+
+	sink := &recordingOutboundStream{}
+	stream := NewToolCallDroppingStream(sink)
+	ctx := context.Background()
+	// Pre-tool text kept as its own assistant output (e.g. reasoning sat
+	// between the text and the tool call) must not be delivered twice.
+	events := []StreamEvent{
+		{Type: StreamEventDelta, Delta: "Let me check.", Phase: StreamPhaseText},
+		{Type: StreamEventDelta, Delta: "thinking", Phase: StreamPhaseReasoning},
+		{Type: StreamEventToolCallStart, ToolCall: &StreamToolCall{Name: "exec", CallID: "c1"}},
+		{Type: StreamEventToolCallEnd, ToolCall: &StreamToolCall{Name: "exec", CallID: "c1"}},
+		{Type: StreamEventDelta, Delta: "Done.", Phase: StreamPhaseText},
+		{Type: StreamEventFinal, Final: &StreamFinalizePayload{Message: Message{Text: " Let me check. "}}},
+		{Type: StreamEventFinal, Final: &StreamFinalizePayload{Message: Message{Text: "Done."}}},
+	}
+	for _, event := range events {
+		if err := stream.Push(ctx, event); err != nil {
+			t.Fatalf("push %s: %v", event.Type, err)
+		}
+	}
+
+	var finals []string
+	for _, event := range sink.events {
+		if event.Type == StreamEventFinal {
+			finals = append(finals, event.Final.Message.PlainText())
+		}
+	}
+	if len(finals) != 1 || finals[0] != "Done." {
+		t.Fatalf("finals = %q, want only the post-tool text", finals)
+	}
+}
+
+func TestToolCallDroppingStreamKeepsFinalWithAttachmentsOrNewText(t *testing.T) {
+	t.Parallel()
+
+	sink := &recordingOutboundStream{}
+	stream := NewToolCallDroppingStream(sink)
+	ctx := context.Background()
+	events := []StreamEvent{
+		{Type: StreamEventDelta, Delta: "draft", Phase: StreamPhaseText},
+		{Type: StreamEventReset},
+		{Type: StreamEventDelta, Delta: "Here it is.", Phase: StreamPhaseText},
+		{Type: StreamEventToolCallStart, ToolCall: &StreamToolCall{Name: "read", CallID: "c1"}},
+		{Type: StreamEventFinal, Final: &StreamFinalizePayload{Message: Message{Text: "draft"}}},
+		{Type: StreamEventFinal, Final: &StreamFinalizePayload{Message: Message{
+			Text:        "Here it is.",
+			Attachments: []Attachment{{Type: AttachmentFile, URL: "https://example.com/a.txt"}},
+		}}},
+	}
+	for _, event := range events {
+		if err := stream.Push(ctx, event); err != nil {
+			t.Fatalf("push %s: %v", event.Type, err)
+		}
+	}
+
+	finals := 0
+	for _, event := range sink.events {
+		if event.Type == StreamEventFinal {
+			finals++
+		}
+	}
+	if finals != 2 {
+		t.Fatalf("finals = %d, want 2 (reset text and attachment final are not duplicates)", finals)
+	}
+}
