@@ -90,12 +90,11 @@ type starterPromptApp struct {
 
 // StarterPrompts returns the new-chat suggestions for one user of one bot.
 //
-// Suggestions are a function of their material (the bot's memory, the user's
-// recent session titles, the bot's installed Apps, its name, and the locale)
-// and of the model that writes them, the bot owner's title model. Every call
-// reads both and hashes the model with the prompt built from the material.
-// When the hash equals req.KnownHash the client's set is still current;
-// otherwise a new set is generated on the spot. Nothing is stored server-side: the client
+// Suggestions are a function of their material: the bot's memory, the user's
+// recent session titles, the bot's installed Apps, its name, and the locale.
+// Every call reads the material and hashes the prompt built from it. When the
+// hash equals req.KnownHash the client's set is still current; otherwise a new
+// set is generated on the spot. Nothing is stored server-side: the client
 // keeps the set and its hash. Concurrent calls for the same material share
 // one generation, which outlives a caller that goes away.
 //
@@ -109,18 +108,14 @@ func (s *Service) StarterPrompts(ctx context.Context, req StarterPromptsRequest)
 	if err != nil {
 		return StarterPromptsResult{}, err
 	}
-	modelID := s.starterPromptModelID(ctx, req.BotID, ownerUserID)
-	if modelID == "" {
-		return StarterPromptsResult{Items: []StarterPrompt{}}, nil
-	}
-	hash := starterPromptsHash(modelID, prompt)
+	hash := starterPromptsHash(prompt)
 	if hash == strings.TrimSpace(req.KnownHash) {
 		return StarterPromptsResult{Unchanged: true, Hash: hash, Items: []StarterPrompt{}}, nil
 	}
 
 	key := req.BotID + "\x00" + req.UserID + "\x00" + hash
 	value, _, _ := s.starterPromptFlights.Do(key, func() (any, error) {
-		return s.generateStarterPrompts(context.WithoutCancel(ctx), req.BotID, ownerUserID, modelID, prompt), nil
+		return s.generateStarterPrompts(context.WithoutCancel(ctx), req.BotID, ownerUserID, prompt), nil
 	})
 	items, _ := value.([]StarterPrompt)
 	if len(items) == 0 {
@@ -129,26 +124,21 @@ func (s *Service) StarterPrompts(ctx context.Context, req StarterPromptsRequest)
 	return StarterPromptsResult{Hash: hash, Items: items}, nil
 }
 
-// starterPromptModelID is the bot owner's title model, or "" when none is
-// configured or the account cannot be read; either way no set can be written.
-func (s *Service) starterPromptModelID(ctx context.Context, botID, ownerUserID string) string {
+// generateStarterPrompts runs the title model on prompt. Every failure, from
+// a missing title model to unparsable output, yields nil: the caller treats
+// that as "no suggestions this time".
+func (s *Service) generateStarterPrompts(ctx context.Context, botID, ownerUserID, prompt string) []StarterPrompt {
+	logger := s.logger.With(slog.String("bot_id", botID))
 	account, err := s.accountService.Get(ctx, ownerUserID)
 	if err != nil {
-		s.logger.WarnContext(ctx, "starter prompts: load owner account failed", slog.String("bot_id", botID), slog.Any("error", err))
-		return ""
+		logger.WarnContext(ctx, "starter prompts: load owner account failed", slog.Any("error", err))
+		return nil
 	}
 	modelID := strings.TrimSpace(account.TitleModelID)
 	if modelID == "" {
-		s.logger.DebugContext(ctx, "starter prompts: no title model configured", slog.String("bot_id", botID))
+		logger.DebugContext(ctx, "starter prompts: no title model configured")
+		return nil
 	}
-	return modelID
-}
-
-// generateStarterPrompts runs the title model on prompt. Every failure, from
-// an unusable model to unparsable output, yields nil: the caller treats that
-// as "no suggestions this time".
-func (s *Service) generateStarterPrompts(ctx context.Context, botID, ownerUserID, modelID, prompt string) []StarterPrompt {
-	logger := s.logger.With(slog.String("bot_id", botID))
 	model, provider, err := s.fetchChatModel(ctx, modelID)
 	if err != nil {
 		logger.WarnContext(ctx, "starter prompts: resolve title model failed", slog.Any("error", err))
@@ -287,8 +277,8 @@ func buildStarterPromptsPrompt(material starterPromptMaterial) (string, error) {
 	return starterPromptsPrompt + string(encoded), nil
 }
 
-func starterPromptsHash(modelID, prompt string) string {
-	sum := sha256.Sum256([]byte(modelID + "\x00" + prompt))
+func starterPromptsHash(prompt string) string {
+	sum := sha256.Sum256([]byte(prompt))
 	return hex.EncodeToString(sum[:8])
 }
 
