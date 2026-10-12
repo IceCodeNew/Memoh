@@ -27,6 +27,7 @@ const (
 	starterPromptTitleMaxRunes   = 40
 	starterPromptTextMaxRunes    = 500
 	starterPromptDefaultLocale   = "en"
+	starterPromptAvoidLimit      = 10
 )
 
 // starterPromptsPrompt asks the title model for the new-chat suggestions. The
@@ -57,11 +58,15 @@ type StarterPrompt struct {
 
 // StarterPromptsRequest identifies whose suggestions to produce. KnownHash is
 // the hash of the set the client already holds, empty when it holds none.
+// Refresh asks for a different set even when the held one is current; Avoid
+// lists the prompts already on screen, which the new set must not repeat.
 type StarterPromptsRequest struct {
 	BotID     string
 	UserID    string
 	Locale    string
 	KnownHash string
+	Refresh   bool
+	Avoid     []string
 }
 
 // StarterPromptsResult is either Unchanged (the client's set still matches
@@ -94,9 +99,11 @@ type starterPromptApp struct {
 // recent session titles, the bot's installed Apps, its name, and the locale.
 // Every call reads the material and hashes the prompt built from it. When the
 // hash equals req.KnownHash the client's set is still current; otherwise a new
-// set is generated on the spot. Nothing is stored server-side: the client
-// keeps the set and its hash. Concurrent calls for the same material share
-// one generation, which outlives a caller that goes away.
+// set is generated on the spot. A refresh always generates, steering away
+// from req.Avoid; the hash still describes the material, so the refreshed set
+// is as current as the one it replaces. Nothing is stored server-side: the
+// client keeps the set and its hash. Concurrent calls for the same material
+// share one generation, which outlives a caller that goes away.
 //
 // The caller must have authorized req.UserID to chat with the bot.
 func (s *Service) StarterPrompts(ctx context.Context, req StarterPromptsRequest) (StarterPromptsResult, error) {
@@ -109,11 +116,16 @@ func (s *Service) StarterPrompts(ctx context.Context, req StarterPromptsRequest)
 		return StarterPromptsResult{}, err
 	}
 	hash := starterPromptsHash(prompt)
-	if hash == strings.TrimSpace(req.KnownHash) {
+	if !req.Refresh && hash == strings.TrimSpace(req.KnownHash) {
 		return StarterPromptsResult{Unchanged: true, Hash: hash, Items: []StarterPrompt{}}, nil
 	}
 
 	key := req.BotID + "\x00" + req.UserID + "\x00" + hash
+	if req.Refresh {
+		avoid := starterPromptAvoidList(req.Avoid)
+		prompt += starterPromptsAvoidSection(avoid)
+		key += "\x00refresh\x00" + strings.Join(avoid, "\x00")
+	}
 	value, _, _ := s.starterPromptFlights.Do(key, func() (any, error) {
 		return s.generateStarterPrompts(context.WithoutCancel(ctx), req.BotID, ownerUserID, prompt), nil
 	})
@@ -275,6 +287,34 @@ func buildStarterPromptsPrompt(material starterPromptMaterial) (string, error) {
 		return "", errs.Wrap(err, "encode starter prompt material")
 	}
 	return starterPromptsPrompt + string(encoded), nil
+}
+
+// starterPromptAvoidList keeps the non-empty prompts of an avoid list,
+// trimmed to what a suggestion can hold and capped in number.
+func starterPromptAvoidList(prompts []string) []string {
+	avoid := make([]string, 0, min(len(prompts), starterPromptAvoidLimit))
+	for _, prompt := range prompts {
+		if prompt = truncate(strings.TrimSpace(prompt), starterPromptTextMaxRunes); prompt != "" {
+			avoid = append(avoid, prompt)
+		}
+		if len(avoid) == starterPromptAvoidLimit {
+			break
+		}
+	}
+	return avoid
+}
+
+// starterPromptsAvoidSection is appended to the prompt of a refresh. It is not
+// part of the hash: it changes what is written, not what the set is about.
+func starterPromptsAvoidSection(avoid []string) string {
+	if len(avoid) == 0 {
+		return ""
+	}
+	encoded, err := json.Marshal(avoid)
+	if err != nil {
+		return ""
+	}
+	return "\n\nThe user asked for different suggestions. These are already on screen; do not repeat them or their topics:\n" + string(encoded)
 }
 
 func starterPromptsHash(prompt string) string {

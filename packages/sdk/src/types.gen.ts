@@ -2414,6 +2414,17 @@ export type HandlersStarterPrompt = {
     title: string;
 };
 
+export type HandlersStarterPromptsRefreshRequest = {
+    /**
+     * Avoid lists the prompts currently shown, which the new set must not repeat.
+     */
+    avoid?: Array<string>;
+    /**
+     * Locale is the BCP 47 language tag the suggestions are written in. Defaults to en.
+     */
+    locale?: string;
+};
+
 export type HandlersStarterPromptsResponse = {
     hash: string;
     items: Array<HandlersStarterPrompt>;
@@ -12651,6 +12662,47 @@ export type GetBotsByBotIdStarterPromptsResponses = {
 };
 
 export type GetBotsByBotIdStarterPromptsResponse = GetBotsByBotIdStarterPromptsResponses[keyof GetBotsByBotIdStarterPromptsResponses];
+
+export type PostBotsByBotIdStarterPromptsRefreshData = {
+    /**
+     * Locale and the prompts on screen
+     */
+    body: HandlersStarterPromptsRefreshRequest;
+    path: {
+        /**
+         * Bot ID
+         */
+        bot_id: string;
+    };
+    query?: never;
+    url: '/bots/{bot_id}/starter-prompts/refresh';
+};
+
+export type PostBotsByBotIdStarterPromptsRefreshErrors = {
+    /**
+     * Bad Request
+     */
+    400: ServerProblem;
+    /**
+     * Forbidden
+     */
+    403: ServerProblem;
+    /**
+     * Internal Server Error
+     */
+    500: ServerProblem;
+};
+
+export type PostBotsByBotIdStarterPromptsRefreshError = PostBotsByBotIdStarterPromptsRefreshErrors[keyof PostBotsByBotIdStarterPromptsRefreshErrors];
+
+export type PostBotsByBotIdStarterPromptsRefreshResponses = {
+    /**
+     * OK
+     */
+    200: HandlersStarterPromptsResponse;
+};
+
+export type PostBotsByBotIdStarterPromptsRefreshResponse = PostBotsByBotIdStarterPromptsRefreshResponses[keyof PostBotsByBotIdStarterPromptsRefreshResponses];
 
 export type GetBotsByBotIdTokenUsageData = {
     body?: never;

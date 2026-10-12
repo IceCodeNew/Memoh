@@ -7,6 +7,7 @@ import (
 
 	"github.com/felinics/memoh/internal/accounts"
 	"github.com/felinics/memoh/internal/agent/application"
+	"github.com/felinics/memoh/internal/apperror"
 	"github.com/felinics/memoh/internal/bots"
 	"github.com/felinics/memoh/internal/errs"
 	"github.com/felinics/memoh/internal/httpx"
@@ -27,6 +28,15 @@ func NewStarterPromptsHandler(agentService *application.Service, botService *bot
 
 func (h *StarterPromptsHandler) Register(e *echo.Echo) {
 	e.GET("/bots/:bot_id/starter-prompts", h.Get)
+	e.POST("/bots/:bot_id/starter-prompts/refresh", h.Refresh)
+}
+
+// StarterPromptsRefreshRequest asks for a different set than the one on screen.
+type StarterPromptsRefreshRequest struct {
+	// Locale is the BCP 47 language tag the suggestions are written in. Defaults to en.
+	Locale string `json:"locale"`
+	// Avoid lists the prompts currently shown, which the new set must not repeat.
+	Avoid []string `json:"avoid"`
 }
 
 // StarterPrompt is one suggested message for the new-chat screen.
@@ -57,6 +67,46 @@ type StarterPromptsResponse struct {
 // @Failure 500 {object} server.Problem
 // @Router /bots/{bot_id}/starter-prompts [get].
 func (h *StarterPromptsHandler) Get(c echo.Context) error {
+	return h.respond(c, func(botID, userID string) application.StarterPromptsRequest {
+		return application.StarterPromptsRequest{
+			BotID:     botID,
+			UserID:    userID,
+			Locale:    c.QueryParam("locale"),
+			KnownHash: c.QueryParam("known_hash"),
+		}
+	})
+}
+
+// Refresh godoc
+// @Summary Generate a different set of new-chat starter prompts
+// @Description Generates a new set for the current user's new chat with a bot, steering away from the prompts already on screen. The returned hash is the same one Get reports for the current material, so later Get calls answer unchanged for the refreshed set.
+// @Tags bots
+// @Param bot_id path string true "Bot ID"
+// @Param payload body StarterPromptsRefreshRequest true "Locale and the prompts on screen"
+// @Success 200 {object} StarterPromptsResponse
+// @Failure 400 {object} server.Problem
+// @Failure 403 {object} server.Problem
+// @Failure 500 {object} server.Problem
+// @Router /bots/{bot_id}/starter-prompts/refresh [post].
+func (h *StarterPromptsHandler) Refresh(c echo.Context) error {
+	var body StarterPromptsRefreshRequest
+	if err := c.Bind(&body); err != nil {
+		return apperror.FieldInvalid("body", err)
+	}
+	return h.respond(c, func(botID, userID string) application.StarterPromptsRequest {
+		return application.StarterPromptsRequest{
+			BotID:   botID,
+			UserID:  userID,
+			Locale:  body.Locale,
+			Refresh: true,
+			Avoid:   body.Avoid,
+		}
+	})
+}
+
+// respond authorizes the caller to chat with the bot, runs the request the
+// build function makes for it, and writes the response.
+func (h *StarterPromptsHandler) respond(c echo.Context, build func(botID, userID string) application.StarterPromptsRequest) error {
 	userID, err := RequireChannelIdentityID(c)
 	if err != nil {
 		return err
@@ -69,12 +119,7 @@ func (h *StarterPromptsHandler) Get(c echo.Context) error {
 	if _, err := AuthorizeBotAccessWithPermission(ctx, h.botService, h.accountService, userID, botID, bots.PermissionChat); err != nil {
 		return err
 	}
-	result, err := h.agentService.StarterPrompts(ctx, application.StarterPromptsRequest{
-		BotID:     botID,
-		UserID:    userID,
-		Locale:    c.QueryParam("locale"),
-		KnownHash: c.QueryParam("known_hash"),
-	})
+	result, err := h.agentService.StarterPrompts(ctx, build(botID, userID))
 	if err != nil {
 		return errs.Wrap(err, "starter prompts")
 	}

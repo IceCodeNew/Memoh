@@ -174,6 +174,47 @@ func TestStarterPromptsHashFollowsMaterial(t *testing.T) {
 	}
 }
 
+func TestStarterPromptsRefreshGeneratesEvenForTheKnownHash(t *testing.T) {
+	t.Parallel()
+	svc, _ := newStarterPromptService(t, "")
+	material, _, err := svc.collectStarterPromptMaterial(context.Background(), starterRequest(""))
+	if err != nil {
+		t.Fatal(err)
+	}
+	prompt, err := buildStarterPromptsPrompt(material)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req := starterRequest(starterPromptsHash(prompt))
+	req.Refresh = true
+
+	got, err := svc.StarterPrompts(context.Background(), req)
+	if err != nil {
+		t.Fatalf("StarterPrompts() error = %v", err)
+	}
+	if got.Unchanged {
+		t.Fatalf("StarterPrompts() with Refresh = %+v, want a generation attempt instead of unchanged", got)
+	}
+}
+
+func TestStarterPromptAvoidList(t *testing.T) {
+	t.Parallel()
+	prompts := []string{" a ", "", "   "}
+	for i := range 20 {
+		prompts = append(prompts, strings.Repeat("x", i+1))
+	}
+	avoid := starterPromptAvoidList(prompts)
+	if len(avoid) != starterPromptAvoidLimit || avoid[0] != "a" {
+		t.Fatalf("starterPromptAvoidList() = %q, want %d trimmed non-empty prompts", avoid, starterPromptAvoidLimit)
+	}
+	if section := starterPromptsAvoidSection(nil); section != "" {
+		t.Fatalf("starterPromptsAvoidSection(nil) = %q, want empty", section)
+	}
+	if section := starterPromptsAvoidSection([]string{"Plan a \"route\""}); !strings.Contains(section, `"Plan a \"route\""`) {
+		t.Fatalf("starterPromptsAvoidSection() = %q, want the prompts JSON-encoded", section)
+	}
+}
+
 func TestStarterPromptAppFromUsesReleaseName(t *testing.T) {
 	t.Parallel()
 	app, ok := starterPromptAppFrom(sqlc.BotAppInstallation{
