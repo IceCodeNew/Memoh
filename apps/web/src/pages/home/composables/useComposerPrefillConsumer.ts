@@ -1,4 +1,4 @@
-import { watch } from 'vue'
+import { readonly, ref, watch } from 'vue'
 import { useComposerPrefillStore, type ComposerPrefillRequest } from '@/store/composer-prefill'
 
 export interface ComposerPrefillConsumerDeps {
@@ -25,21 +25,32 @@ export interface ComposerPrefillConsumerDeps {
  * writable pane of the requested bot. Requests queued before the pane mounted
  * are picked up immediately, so a freshly opened draft chat receives them.
  *
- * Unsent text is never overwritten silently: when the composer holds
- * something other than whitespace (and not already the same prompt), the
- * user confirms first. Declining keeps their text and settles the request as
- * cancelled, so the caller of prefillComposer learns the outcome.
+ * Only the user's own unsent text is protected: the composer may be
+ * replaced without asking when it is blank, already holds the requested
+ * prompt, or still holds exactly what this pane last prefilled (so picking
+ * one suggestion after another just swaps them). Anything else is text the
+ * user wrote or edited, and they confirm first. Declining keeps their text
+ * and settles the request as cancelled, so the caller of prefillComposer
+ * learns the outcome.
+ *
+ * Returns `lastPrefilled`, the text this pane last wrote, so the pane can
+ * tell when its composer still holds no text of the user's own.
  */
 export function useComposerPrefillConsumer(deps: ComposerPrefillConsumerDeps) {
   const store = useComposerPrefillStore()
+  const lastPrefilled = ref<string | null>(null)
+
+  function holdsUserText(current: string, request: ComposerPrefillRequest) {
+    return current.trim() !== '' && current !== request.text && current !== lastPrefilled.value
+  }
 
   async function consume(request: ComposerPrefillRequest) {
-    const current = deps.currentText()
-    if (current.trim() && current !== request.text && !(await deps.confirmReplace())) {
+    if (holdsUserText(deps.currentText(), request) && !(await deps.confirmReplace())) {
       request.settle('cancelled')
       return
     }
     deps.apply(request.text)
+    lastPrefilled.value = request.text
     request.settle('applied')
   }
 
@@ -52,4 +63,6 @@ export function useComposerPrefillConsumer(deps: ComposerPrefillConsumerDeps) {
     },
     { immediate: true },
   )
+
+  return { lastPrefilled: readonly(lastPrefilled) }
 }

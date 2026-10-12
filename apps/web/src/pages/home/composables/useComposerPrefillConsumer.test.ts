@@ -87,6 +87,29 @@ describe('useComposerPrefillConsumer', () => {
     await expect(outcome).resolves.toBe('applied')
   })
 
+  it('replaces a prompt it prefilled itself without asking while the user has not edited it', async () => {
+    const pane = mountPane()
+    void useComposerPrefillStore().request('bot-a', 'first prompt')
+    await settle()
+    const outcome = useComposerPrefillStore().request('bot-a', 'second prompt')
+    await settle()
+    expect(pane.confirmReplace).not.toHaveBeenCalled()
+    expect(pane.text.value).toBe('second prompt')
+    await expect(outcome).resolves.toBe('applied')
+  })
+
+  it('asks again once the user has edited the prefilled prompt', async () => {
+    const pane = mountPane({ confirm: false })
+    void useComposerPrefillStore().request('bot-a', 'first prompt')
+    await settle()
+    pane.text.value = 'first prompt, with my changes'
+    const outcome = useComposerPrefillStore().request('bot-a', 'second prompt')
+    await settle()
+    expect(pane.confirmReplace).toHaveBeenCalledOnce()
+    expect(pane.text.value).toBe('first prompt, with my changes')
+    await expect(outcome).resolves.toBe('cancelled')
+  })
+
   it('applies a request that was queued before the pane mounted', async () => {
     void useComposerPrefillStore().request('bot-a', 'hello')
     const pane = mountPane()

@@ -22,7 +22,11 @@ export interface StarterPromptRow {
  * revealed "Use" hint, the prompt brightening) lives in style.css under
  * [data-starter-prompt]. `rows === null` renders the skeleton of three rows.
  */
-const props = defineProps<{ rows: StarterPromptRow[] | null }>()
+const props = defineProps<{
+  rows: StarterPromptRow[] | null
+  /** Show the "↵ Use" hint on the active row: only when Enter would pick it. */
+  enterHint?: boolean
+}>()
 
 const emit = defineEmits<{
   select: [row: StarterPromptRow]
@@ -81,7 +85,7 @@ function moveFocus(event: KeyboardEvent) {
           {{ row.badge }}
         </Badge>
         <span
-          v-else
+          v-else-if="props.enterHint"
           data-starter-prompt-hint
           aria-hidden="true"
           class="hidden items-center gap-1.5 text-caption text-muted-foreground @lg:inline-flex"

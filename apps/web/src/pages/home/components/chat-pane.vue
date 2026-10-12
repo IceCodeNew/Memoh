@@ -633,8 +633,8 @@
                   rows="1"
                   :placeholder="composerPreviewShown ? '' : composerPlaceholder"
                   :disabled="!currentBotId || activeChatReadOnly || loadingMessages"
-                  class="order-none max-h-52 w-full basis-full field-sizing-content resize-none break-words bg-transparent pl-2 pr-1 pt-2 pb-1.5 text-base leading-[var(--chat-leading)] text-foreground outline-none placeholder:text-[var(--field-placeholder)] disabled:cursor-not-allowed"
-                  :class="isWelcome ? 'min-h-12' : 'min-h-10'"
+                  class="order-none max-h-52 w-full basis-full field-sizing-content resize-none break-words bg-transparent pl-2 pr-1 pt-2 pb-1.5 text-base leading-[var(--chat-leading)] outline-none placeholder:text-[var(--field-placeholder)] disabled:cursor-not-allowed"
+                  :class="[isWelcome ? 'min-h-12' : 'min-h-10', composerPreviewShown ? 'text-transparent' : 'text-foreground']"
                   @keydown="handleComposerKeydown"
                   @paste="handlePaste"
                 />
@@ -1255,7 +1255,7 @@
             v-if="isWelcome && currentBotId"
             v-model:preview="composerPreview"
             :bot-id="currentBotId"
-            :preview-shown="composerPreviewShown"
+            :composer-replaceable="composerReplaceable"
           />
         </div>
       </div>
@@ -3699,7 +3699,7 @@ const { inputDraftKey, saveInputDraft, clearAllDrafts } = useComposerDrafts({
 // Registered after useComposerDrafts so its draft restore runs first and
 // cannot overwrite a prefilled prompt (usage examples, App "Try it").
 const replaceDraftConfirm = useAsyncConfirm()
-useComposerPrefillConsumer({
+const { lastPrefilled } = useComposerPrefillConsumer({
   botId: () => paneTarget.value.botId,
   active: () => isActive.value,
   writable: () => !activeChatReadOnly.value,
@@ -3718,11 +3718,16 @@ useComposerPrefillConsumer({
   },
 })
 
-// A welcome suggestion previews its prompt in the empty composer while it is
-// hovered or focused (chat-example-suggestions.vue owns the value).
+// The welcome composer holds no text of the user's own: it is empty, or still
+// exactly what a prefill last wrote. Only then may a suggestion preview into it
+// and Enter pick one, since replacing it loses nothing.
+const composerReplaceable = computed(() =>
+  isWelcome.value && voiceInputState.value === 'idle'
+  && (inputText.value === '' || inputText.value === lastPrefilled.value))
+// A welcome suggestion previews its prompt in the composer while it is hovered
+// or focused (chat-example-suggestions.vue owns the value).
 const composerPreview = ref<ComposerPreview | null>(null)
-const composerPreviewShown = computed(() =>
-  !!composerPreview.value && isWelcome.value && voiceInputState.value === 'idle' && inputText.value === '')
+const composerPreviewShown = computed(() => !!composerPreview.value && composerReplaceable.value)
 const composerPreviewBox = useComposerPreviewBox(textareaEl, () => composerPreviewShown.value)
 
 // The dock owns ALL geometry/visibility orchestration (box-slot mutex,

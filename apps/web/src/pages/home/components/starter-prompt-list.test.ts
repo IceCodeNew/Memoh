@@ -47,12 +47,12 @@ describe('StarterPromptList', () => {
     root = undefined
   })
 
-  function mount(list: StarterPromptRow[] | null) {
+  function mount(list: StarterPromptRow[] | null, enterHint = true) {
     const select = vi.fn()
     const preview = vi.fn()
     root = document.createElement('div')
     document.body.append(root)
-    app = createApp({ render: () => h(StarterPromptList, { rows: list, onSelect: select, onPreview: preview }) })
+    app = createApp({ render: () => h(StarterPromptList, { rows: list, enterHint, onSelect: select, onPreview: preview }) })
     app.config.globalProperties.$t = (key: string) => key
     app.mount(root)
     const buttons = () => [...root!.querySelectorAll<HTMLButtonElement>('button[data-starter-prompt]')]
@@ -89,6 +89,11 @@ describe('StarterPromptList', () => {
     expect(buttons()[2]!.textContent).toContain('Needs web search')
     expect(buttons()[2]!.querySelector('[data-starter-prompt-hint]')).toBeNull()
     expect(buttons()[0]!.querySelector('[data-starter-prompt-hint]')).not.toBeNull()
+  })
+
+  it('hides the use hint when Enter would not pick a row', () => {
+    const { buttons } = mount(rows, false)
+    expect(buttons()[0]!.querySelector('[data-starter-prompt-hint]')).toBeNull()
   })
 
   it('selects the clicked row', () => {
