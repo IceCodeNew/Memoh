@@ -75,7 +75,7 @@ func starterRequest(knownHash string) StarterPromptsRequest {
 
 func TestStarterPromptsReportsUnchangedForKnownHash(t *testing.T) {
 	t.Parallel()
-	svc, _ := newStarterPromptService(t, "")
+	svc, _ := newStarterPromptService(t, "title-model")
 	material, _, err := svc.collectStarterPromptMaterial(context.Background(), starterRequest(""))
 	if err != nil {
 		t.Fatal(err)
@@ -84,7 +84,7 @@ func TestStarterPromptsReportsUnchangedForKnownHash(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	known := starterPromptsHash(prompt)
+	known := starterPromptsHash("title-model", prompt)
 
 	got, err := svc.StarterPrompts(context.Background(), starterRequest(known))
 	if err != nil {
@@ -143,7 +143,7 @@ func TestStarterPromptsHashFollowsMaterial(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		return starterPromptsHash(prompt)
+		return starterPromptsHash("title-model", prompt)
 	}
 
 	base := hashOf(func(*starterPromptQueries, *StarterPromptsRequest) {})
@@ -171,6 +171,13 @@ func TestStarterPromptsHashFollowsMaterial(t *testing.T) {
 		q.installations = []sqlc.BotAppInstallation{{AppID: "web-search", Status: "failed"}}
 	}); got != base {
 		t.Errorf("a failed installation changed the hash; only usable Apps are material")
+	}
+}
+
+func TestStarterPromptsHashFollowsTitleModel(t *testing.T) {
+	t.Parallel()
+	if starterPromptsHash("mock", "prompt") == starterPromptsHash("deepseek", "prompt") {
+		t.Fatal("switching the title model kept the hash; the held set would never be rewritten by the new model")
 	}
 }
 
