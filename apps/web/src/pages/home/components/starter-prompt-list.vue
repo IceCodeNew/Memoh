@@ -1,14 +1,10 @@
 <script setup lang="ts">
-import { Badge, Item, ItemGroup, Kbd, Skeleton } from '@felinic/ui'
+import { Item, ItemGroup, Kbd, Skeleton } from '@felinic/ui'
 
 export interface StarterPromptRow {
   key: string
   title: string
   prompt: string
-  /** Shown in place of the "Use" hint and kept visible, e.g. a missing capability. */
-  badge?: string
-  /** Whether hovering or focusing the row previews its prompt in the composer. */
-  previewable: boolean
 }
 
 /**
@@ -34,7 +30,7 @@ const emit = defineEmits<{
 }>()
 
 function previewRow(row: StarterPromptRow, active: boolean) {
-  if (row.previewable) emit('preview', active ? row.prompt : null)
+  emit('preview', active ? row.prompt : null)
 }
 
 /** Arrow keys, Home and End move focus between rows, wrapping at the ends. */
@@ -76,16 +72,8 @@ function moveFocus(event: KeyboardEvent) {
           data-starter-prompt-text
           class="text-body @lg:text-label"
         >{{ row.prompt }}</span>
-        <Badge
-          v-if="row.badge"
-          variant="secondary"
-          size="sm"
-          class="justify-self-start @lg:justify-self-end"
-        >
-          {{ row.badge }}
-        </Badge>
         <span
-          v-else-if="props.enterHint"
+          v-if="props.enterHint"
           data-starter-prompt-hint
           aria-hidden="true"
           class="hidden items-center gap-1.5 text-caption text-muted-foreground @lg:inline-flex"

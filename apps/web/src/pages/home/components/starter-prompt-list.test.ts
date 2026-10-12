@@ -19,7 +19,6 @@ const uiStubs = vi.hoisted(() => {
       },
     },
     ItemGroup: element('div'),
-    Badge: element('span'),
     Kbd: element('kbd'),
     Skeleton: element('span'),
   }
@@ -31,9 +30,9 @@ vi.mock('@felinic/ui', () => uiStubs)
 import StarterPromptList, { type StarterPromptRow } from './starter-prompt-list.vue'
 
 const rows: StarterPromptRow[] = [
-  { key: 'a', title: 'Shrine route', prompt: 'Plan a shrine route', previewable: true },
-  { key: 'b', title: 'New releases', prompt: 'List this week\'s releases', previewable: true },
-  { key: 'c', title: 'Web search', prompt: 'Search the web', previewable: false, badge: 'Needs web search' },
+  { key: 'a', title: 'Shrine route', prompt: 'Plan a shrine route' },
+  { key: 'b', title: 'New releases', prompt: 'List this week\'s releases' },
+  { key: 'c', title: 'Version events', prompt: 'Remind me of the next version events' },
 ]
 
 describe('StarterPromptList', () => {
@@ -77,18 +76,9 @@ describe('StarterPromptList', () => {
     expect(preview.mock.calls).toEqual([['Plan a shrine route'], [null], ['Plan a shrine route'], [null]])
   })
 
-  it('never previews a row that cannot be prefilled', () => {
-    const { preview, buttons } = mount(rows)
-    buttons()[2]!.dispatchEvent(new MouseEvent('mouseenter'))
-    buttons()[2]!.dispatchEvent(new FocusEvent('focus'))
-    expect(preview).not.toHaveBeenCalled()
-  })
-
-  it('shows the badge instead of the use hint on a row that has one', () => {
+  it('shows the use hint on every row while Enter would pick it', () => {
     const { buttons } = mount(rows)
-    expect(buttons()[2]!.textContent).toContain('Needs web search')
-    expect(buttons()[2]!.querySelector('[data-starter-prompt-hint]')).toBeNull()
-    expect(buttons()[0]!.querySelector('[data-starter-prompt-hint]')).not.toBeNull()
+    expect(buttons().every(row => row.querySelector('[data-starter-prompt-hint]'))).toBe(true)
   })
 
   it('hides the use hint when Enter would not pick a row', () => {
