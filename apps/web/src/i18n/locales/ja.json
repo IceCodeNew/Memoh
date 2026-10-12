@@ -1748,6 +1748,7 @@
     "galleryTitle": "Memoh でできること",
     "galleryDescription": "例を選ぶと入力欄に入ります。送信前に編集できます。",
     "viewAll": "もっと見る",
+    "fillIn": "入力",
     "dismiss": "おすすめを非表示",
     "replaceDraft": {
       "title": "未送信のメッセージを置き換えますか？",

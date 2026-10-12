@@ -1,31 +1,46 @@
 <script setup lang="ts">
 import { computed } from 'vue'
-import { Sparkles, X } from 'lucide-vue-next'
-import { ActionCard, Button, Skeleton, TextButton } from '@felinic/ui'
-import ChatExampleCard from '@/components/chat-examples/chat-example-card.vue'
+import { useI18n } from 'vue-i18n'
+import { usePreferredReducedMotion } from '@vueuse/core'
+import { X } from 'lucide-vue-next'
+import { Button, TextButton } from '@felinic/ui'
 import { useChatExampleAction, useChatExampleEntries } from '@/components/chat-examples/use-chat-example-action'
 import { useChatExamplesUi } from '@/components/chat-examples/use-chat-examples-ui'
 import { useStarterPromptsQuery } from '@/composables/api/useStarterPrompts'
 import { useComposerPrefill } from '@/composables/useComposerPrefill'
+import { localizeText } from '@/lib/chat-examples/select'
+import { COMPOSER_PREVIEW_LANDING_MS, type ComposerPreview } from '../composables/useComposerPreview'
+import StarterPromptList, { type StarterPromptRow } from './starter-prompt-list.vue'
 
 /**
  * Three suggestions under the welcome composer, with "See all" opening the
  * full gallery. They are the bot's own starter prompts for this user; until
- * the first set arrives the row shows skeleton cards, and when the bot has no
- * set (no title model, or generation failed) it shows three built-in examples
- * drawn at random instead. Hiding the row is remembered on this device; while
- * hidden, the composer's context row shows the entry that brings it back.
- * Hidden by the welcome column's height tiers (style.css) before anything
- * else yields.
+ * the first set arrives the rows show a skeleton, and when the bot has no set
+ * (no title model, or generation failed) three built-in examples drawn at
+ * random take their place. Hiding the section is remembered on this device;
+ * while hidden, the composer's context row shows the entry that brings it
+ * back. Hidden by the welcome column's height tiers (style.css) before
+ * anything else yields.
+ *
+ * Hovering or focusing a row previews its prompt in the composer through the
+ * `preview` model. Picking the row that is being previewed first "lands" the
+ * preview (it inks into the real text) and then prefills, so the text never
+ * blinks out and back in.
  */
-const props = defineProps<{ botId: string }>()
+const props = defineProps<{
+  botId: string
+  /** Whether the composer is currently showing the preview (it is empty). */
+  previewShown: boolean
+}>()
 
+const preview = defineModel<ComposerPreview | null>('preview', { default: null })
+
+const { locale, t } = useI18n()
 const { welcomeDismissed, openGallery } = useChatExamplesUi()
 const { prefillComposer } = useComposerPrefill()
+const reducedMotion = usePreferredReducedMotion()
 
 const { data: starterSet, status: starterStatus } = useStarterPromptsQuery(() => props.botId)
-const starterPrompts = computed(() => starterSet.value?.items ?? [])
-const awaitingFirstSet = computed(() => !starterSet.value && starterStatus.value === 'pending')
 
 // A new seed per mounted welcome view: every new chat draws a different three,
 // while this one stays put through re-renders and the capability probe.
@@ -33,20 +48,69 @@ const seed = Math.random()
 const entries = useChatExampleEntries(() => props.botId, { surface: 'welcome', limit: 3, spreadCategories: true, seed })
 const { run } = useChatExampleAction(() => props.botId)
 
-const visible = computed(() =>
-  !welcomeDismissed.value && (starterPrompts.value.length > 0 || awaitingFirstSet.value || !!entries.value?.length))
+/**
+ * The rows to show: the generated set, null while the first set is pending
+ * (skeleton), or the built-in examples. An example the bot lacks a capability
+ * for carries a badge and opens settings instead of prefilling, so it is not
+ * previewable.
+ */
+const rows = computed<StarterPromptRow[] | null>(() => {
+  const generated = starterSet.value?.items ?? []
+  if (generated.length) {
+    return generated.map((item, index) => ({ key: `starter:${index}`, title: item.title, prompt: item.prompt, previewable: true }))
+  }
+  if (!starterSet.value && starterStatus.value === 'pending') return null
+  return (entries.value ?? []).map(({ example, missing }) => ({
+    key: `example:${example.id}`,
+    title: localizeText(example.title, locale.value),
+    prompt: localizeText(example.prompt, locale.value),
+    badge: missing[0] ? t('chatExamples.needs', { capability: t(`chatExamples.capability.${missing[0]}`) }) : undefined,
+    previewable: missing.length === 0,
+  }))
+})
+
+const visible = computed(() => !welcomeDismissed.value && (rows.value === null || rows.value.length > 0))
+
+function setPreview(prompt: string | null) {
+  if (preview.value?.landing) return
+  preview.value = prompt ? { text: prompt, landing: false } : null
+}
+
+async function select(row: StarterPromptRow) {
+  if (row.key.startsWith('example:')) {
+    const entry = entries.value?.find(({ example }) => `example:${example.id}` === row.key)
+    if (!entry) return
+    if (entry.missing.length) {
+      await run(entry.example, entry.missing)
+      return
+    }
+  }
+  if (props.previewShown && preview.value?.text === row.prompt && reducedMotion.value !== 'reduce') {
+    preview.value = { text: row.prompt, landing: true }
+    await new Promise(resolve => setTimeout(resolve, COMPOSER_PREVIEW_LANDING_MS))
+  }
+  try {
+    await prefillComposer(row.prompt, { botId: props.botId })
+  }
+  finally {
+    preview.value = null
+  }
+}
 </script>
 
 <template>
   <section
     v-if="visible"
     data-welcome-suggestions
-    class="@container pointer-events-auto mx-auto w-full max-w-[44rem] px-4 sm:px-6 lg:px-10 md:-translate-x-0.5"
+    class="@container pointer-events-auto mx-auto w-full max-w-[44rem] px-4 pb-8 sm:px-6 lg:px-10 md:-translate-x-0.5"
     :aria-label="$t('chatExamples.tryThese')"
   >
-    <!-- Same box model as the cards below (1px edge + px-4), so the label
-         starts on the cards' icon column and the close glyph ends on their
-         chevron column. The section shares the composer's 2px optical nudge.
+    <!-- pb-8 keeps the welcome column's 2rem rhythm below the last row: in a
+         short pane the anchor spacer shrinks first, so the rows stop a gap
+         short of the pane edge instead of resting on it. -->
+    <!-- Same box model as the rows below (1px edge + px-4), so the label
+         starts on the rows' text column and the close glyph ends on their
+         trailing column. The section shares the composer's 2px optical nudge.
          The label follows the section-title standard (text-label, medium). -->
     <div class="mb-1 flex items-center justify-between gap-2 border border-transparent px-4">
       <h2 class="text-label font-medium text-muted-foreground">
@@ -75,59 +139,10 @@ const visible = computed(() =>
         </Button>
       </div>
     </div>
-    <!-- Narrow panes scroll one row sideways instead of stacking, so the
-         strip keeps a single card's height under the composer. -->
-    <div
-      class="flex snap-x snap-mandatory gap-2 overflow-x-auto scrollbar-none @xl:grid @xl:grid-cols-3 @xl:overflow-visible"
-      :aria-busy="awaitingFirstSet || undefined"
-    >
-      <template v-if="starterPrompts.length">
-        <ActionCard
-          v-for="(item, index) in starterPrompts"
-          :key="`${index}:${item.title}`"
-          as="button"
-          type="button"
-          bordered
-          class="w-4/5 shrink-0 snap-start @xl:w-full"
-          :title="item.title"
-          :description="item.prompt"
-          @click="prefillComposer(item.prompt, { botId })"
-        >
-          <template #icon>
-            <Sparkles />
-          </template>
-        </ActionCard>
-      </template>
-      <template v-else-if="awaitingFirstSet">
-        <!-- Mirrors a bordered ActionCard with a description (px-4 py-3.5,
-             a 20px title line, mt-0.5 and an 16px description line) so the
-             swap to real cards keeps the row's height. -->
-        <div
-          v-for="i in 3"
-          :key="i"
-          class="flex w-4/5 shrink-0 snap-start items-center gap-3 rounded-menu-shell border border-border bg-card px-4 py-3.5 @xl:w-full"
-        >
-          <Skeleton class="size-4 shrink-0 rounded-sm" />
-          <div class="min-w-0 flex-1">
-            <div class="flex h-5 items-center">
-              <Skeleton class="h-3.5 w-1/2" />
-            </div>
-            <div class="mt-0.5 flex h-4 items-center">
-              <Skeleton class="h-3 w-4/5" />
-            </div>
-          </div>
-        </div>
-      </template>
-      <template v-else>
-        <ChatExampleCard
-          v-for="entry in entries"
-          :key="entry.example.id"
-          class="w-4/5 shrink-0 snap-start @xl:w-full"
-          :example="entry.example"
-          :missing="entry.missing"
-          @select="run(entry.example, entry.missing)"
-        />
-      </template>
-    </div>
+    <StarterPromptList
+      :rows="rows"
+      @select="select"
+      @preview="setPreview"
+    />
   </section>
 </template>
