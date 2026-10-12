@@ -1,0 +1,506 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>工作报告：#1470 与最大输出 Token</title>
+<style>
+  :root {
+    --page:        #f9f9f7;
+    --surface-1:   #fcfcfb;
+    --text-primary:#0b0b0b;
+    --text-secondary:#52514e;
+    --muted:       #898781;
+    --grid:        #e1e0d9;
+    --baseline:    #c3c2b7;
+    --border:      rgba(11,11,11,0.10);
+    --series-true: #2a78d6;
+    --series-false:#e34948;
+    --absent:      #c3c2b7;
+    --good:        #0ca30c;
+    --critical:    #d03b3b;
+    --code-bg:     #f2f1ed;
+    --ok-bg:       rgba(12,163,12,0.08);
+    --bad-bg:      rgba(208,59,59,0.07);
+    color-scheme: light;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:where(:not([data-theme="light"])) {
+      --page:#0d0d0d; --surface-1:#1a1a19;
+      --text-primary:#ffffff; --text-secondary:#c3c2b7; --muted:#898781;
+      --grid:#2c2c2a; --baseline:#383835; --border:rgba(255,255,255,0.10);
+      --series-true:#3987e5; --series-false:#e66767; --absent:#383835;
+      --good:#0ca30c; --critical:#d03b3b; --code-bg:#232322;
+      --ok-bg:rgba(12,163,12,0.12); --bad-bg:rgba(208,59,59,0.12);
+      color-scheme: dark;
+    }
+  }
+  :root[data-theme="dark"] {
+    --page:#0d0d0d; --surface-1:#1a1a19;
+    --text-primary:#ffffff; --text-secondary:#c3c2b7; --muted:#898781;
+    --grid:#2c2c2a; --baseline:#383835; --border:rgba(255,255,255,0.10);
+    --series-true:#3987e5; --series-false:#e66767; --absent:#383835;
+    --good:#0ca30c; --critical:#d03b3b; --code-bg:#232322;
+    --ok-bg:rgba(12,163,12,0.12); --bad-bg:rgba(208,59,59,0.12);
+    color-scheme: dark;
+  }
+
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--page); color: var(--text-primary);
+    font-family: system-ui, -apple-system, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+    font-size: 15px; line-height: 1.7;
+  }
+  .wrap { max-width: 940px; margin: 0 auto; padding: 56px 24px 96px; }
+
+  h1 { font-size: 30px; line-height: 1.3; margin: 0 0 10px; letter-spacing: -0.01em; }
+  .lede { color: var(--text-secondary); font-size: 16px; margin: 0 0 8px; }
+  .meta { color: var(--muted); font-size: 13px; margin: 0 0 44px; }
+
+  h2 {
+    font-size: 21px; margin: 56px 0 6px; padding-top: 26px;
+    border-top: 1px solid var(--grid); letter-spacing: -0.01em;
+  }
+  h2 .num {
+    display: inline-block; min-width: 26px; height: 26px; line-height: 26px;
+    text-align: center; background: var(--text-primary); color: var(--page);
+    border-radius: 6px; font-size: 14px; margin-right: 10px;
+    vertical-align: 1px; font-variant-numeric: tabular-nums;
+  }
+  h3 { font-size: 16px; margin: 32px 0 10px; color: var(--text-primary); }
+  p { margin: 12px 0; }
+  .sub { color: var(--text-secondary); }
+
+  code {
+    font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
+    font-size: 0.885em; background: var(--code-bg); padding: 1.5px 5px;
+    border-radius: 4px;
+  }
+  pre {
+    background: var(--code-bg); border: 1px solid var(--border); border-radius: 10px;
+    padding: 15px 17px; overflow-x: auto; margin: 14px 0; font-size: 13px; line-height: 1.6;
+  }
+  pre code { background: none; padding: 0; font-size: inherit; }
+  .c-bad  { color: var(--critical); font-weight: 600; }
+  .c-good { color: var(--good); font-weight: 600; }
+  .c-dim  { color: var(--muted); }
+
+  .card {
+    background: var(--surface-1); border: 1px solid var(--border);
+    border-radius: 12px; padding: 20px 22px; margin: 18px 0;
+  }
+  .card.bad  { background: var(--bad-bg); }
+  .card.ok   { background: var(--ok-bg); }
+
+  /* ---- flow diagram ---- */
+  .flow { margin: 20px 0; }
+  .node {
+    background: var(--surface-1); border: 1px solid var(--border); border-radius: 9px;
+    padding: 11px 15px; font-size: 13.5px; line-height: 1.55;
+  }
+  .node .label { color: var(--muted); font-size: 11.5px; text-transform: uppercase;
+    letter-spacing: 0.06em; display: block; margin-bottom: 3px; }
+  .node.mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+  .node.step { border-color: var(--text-primary); border-width: 1.5px; }
+  .arrow { text-align: center; color: var(--muted); font-size: 15px; line-height: 1;
+    padding: 7px 0; }
+  .split { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+  .verdict { display: inline-block; padding: 2px 9px; border-radius: 5px; font-size: 12px;
+    font-weight: 600; letter-spacing: 0.02em; }
+  .v-bad  { background: var(--bad-bg);  color: var(--critical); border: 1px solid var(--critical); }
+  .v-good { background: var(--ok-bg);   color: var(--good);     border: 1px solid var(--good); }
+
+  /* ---- tables ---- */
+  table { border-collapse: collapse; width: 100%; margin: 16px 0; font-size: 14px; }
+  th, td { text-align: left; padding: 8px 12px; border-bottom: 1px solid var(--grid);
+    vertical-align: top; }
+  th { color: var(--text-secondary); font-weight: 600; font-size: 12.5px;
+    text-transform: uppercase; letter-spacing: 0.05em; }
+  td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
+  tr:last-child td { border-bottom: none; }
+
+  /* ---- chart ---- */
+  .chart { background: var(--surface-1); border: 1px solid var(--border);
+    border-radius: 12px; padding: 22px 24px 18px; margin: 22px 0; position: relative; }
+  .chart h4 { margin: 0 0 4px; font-size: 15px; }
+  .chart .cap { color: var(--text-secondary); font-size: 13px; margin: 0 0 20px; }
+  .legend { display: flex; flex-wrap: wrap; gap: 18px; margin: 0 0 18px;
+    font-size: 12.5px; color: var(--text-secondary); }
+  .legend span { display: flex; align-items: center; gap: 7px; }
+  .swatch { width: 11px; height: 11px; border-radius: 3px; flex: none; }
+  svg { display: block; width: 100%; height: auto; overflow: visible; }
+  .rowlabel { fill: var(--text-secondary); font-size: 12px; }
+  .numlabel { fill: var(--text-primary); font-size: 11px; font-variant-numeric: tabular-nums; }
+  .numlabel.mut { fill: var(--muted); }
+  .axis { fill: var(--muted); font-size: 11px; font-variant-numeric: tabular-nums; }
+  .seg { cursor: default; }
+  #tip {
+    position: fixed; pointer-events: none; z-index: 20; opacity: 0;
+    background: var(--text-primary); color: var(--page);
+    padding: 6px 10px; border-radius: 7px; font-size: 12px; line-height: 1.45;
+    transition: opacity .1s; white-space: nowrap;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .kv { display: grid; grid-template-columns: max-content 1fr; gap: 6px 18px;
+    font-size: 14px; margin: 14px 0; }
+  .kv dt { color: var(--text-secondary); }
+  .kv dd { margin: 0; }
+
+  ul { margin: 12px 0; padding-left: 22px; }
+  li { margin: 7px 0; }
+
+  .foot { margin-top: 64px; padding-top: 22px; border-top: 1px solid var(--grid);
+    color: var(--muted); font-size: 13px; }
+
+  @media (max-width: 640px) {
+    .split { grid-template-columns: 1fr; }
+    .wrap { padding: 36px 16px 64px; }
+    h1 { font-size: 24px; }
+  }
+
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--page); color: var(--text-primary);
+    font: 15px/1.65 -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC",
+          "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+  .wrap { max-width: 940px; margin: 0 auto; padding: 56px 24px 96px; }
+  h1 { font-size: 30px; line-height: 1.3; margin: 0 0 14px; letter-spacing: -0.01em; }
+  .lede { font-size: 16.5px; color: var(--text-secondary); margin: 0 0 10px; max-width: 74ch; }
+  .meta { font-size: 13px; color: var(--muted); margin: 0 0 34px; }
+  .meta code { font-size: 12px; }
+  h2 {
+    font-size: 20px; margin: 52px 0 14px; padding-top: 20px;
+    border-top: 1px solid var(--border); letter-spacing: -0.01em;
+  }
+  h2 .num {
+    display: inline-block; min-width: 1.7em; color: var(--muted);
+    font-variant-numeric: tabular-nums; font-weight: 400;
+  }
+  h3 { font-size: 15.5px; margin: 26px 0 8px; }
+  p { margin: 0 0 13px; max-width: 76ch; }
+  code {
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 12.5px; background: var(--code-bg); padding: 1.5px 5px;
+    border-radius: 4px;
+  }
+  .sub { font-size: 13px; color: var(--muted); }
+  .note {
+    font-size: 13.5px; color: var(--text-secondary); background: var(--surface-1);
+    border: 1px solid var(--border); border-left: 3px solid var(--series-true);
+    border-radius: 8px; padding: 12px 16px; margin: 18px 0; max-width: 78ch;
+  }
+  .stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin: 26px 0 6px; }
+  .stat { background: var(--surface-1); border: 1px solid var(--border); border-radius: 10px; padding: 14px 16px; }
+  .stat b { display: block; font-size: 25px; line-height: 1.15; font-variant-numeric: tabular-nums; }
+  .stat span { color: var(--text-secondary); font-size: 12.5px; }
+  table { border-collapse: collapse; width: 100%; margin: 14px 0; font-size: 13.5px; }
+  th, td { text-align: left; padding: 9px 12px; border-bottom: 1px solid var(--border); vertical-align: top; }
+  th { font-weight: 600; color: var(--text-secondary); font-size: 12.5px; }
+  td code { font-size: 12px; }
+  .verdict { font-size: 12px; font-weight: 600; padding: 2px 8px; border-radius: 999px; white-space: nowrap; }
+  .v-good { background: var(--ok-bg); color: var(--good); }
+  .v-bad  { background: var(--bad-bg); color: var(--critical); }
+  .legend { font-size: 12.5px; color: var(--muted); margin: -4px 0 18px; }
+
+  /* ---------- hand-drawn UI ---------- */
+  .uiwrap { margin: 20px 0 8px; }
+  .uicap { font-size: 12.5px; color: var(--muted); margin: 0 0 9px; }
+  .dialog {
+    background: var(--surface-1); border: 1px solid var(--border);
+    border-radius: 14px; padding: 22px 24px 20px; max-width: 460px;
+    box-shadow: 0 1px 2px rgba(0,0,0,.04), 0 8px 28px rgba(0,0,0,.05);
+  }
+  .dlg-title { font-size: 16px; font-weight: 600; margin: 0 0 4px; }
+  .dlg-sub { font-size: 12.5px; color: var(--muted); margin: 0 0 18px; }
+  .fld { margin-bottom: 15px; }
+  .fld-label { font-size: 13px; font-weight: 500; margin-bottom: 6px; }
+  .fld-label .opt { color: var(--muted); font-weight: 400; font-size: 12px; margin-left: 3px; }
+  .ctl {
+    border: 1px solid var(--border); border-radius: 8px; background: var(--page);
+    padding: 8px 12px; font-size: 13.5px; color: var(--text-primary);
+    min-height: 36px; display: flex; align-items: center;
+  }
+  .ctl.ph { color: var(--muted); }
+  .ctl.multi { flex-wrap: wrap; gap: 6px; padding: 7px 9px; }
+  .sel {
+    border: 1px solid var(--border); border-radius: 8px; background: var(--page);
+    padding: 8px 12px; font-size: 13.5px; display: flex; align-items: center;
+    justify-content: space-between; min-height: 36px;
+  }
+  .sel .caret { color: var(--muted); font-size: 11px; }
+  .chip {
+    font-size: 12px; padding: 2.5px 8px; border-radius: 6px;
+    background: var(--code-bg); border: 1px solid var(--border); white-space: nowrap;
+  }
+  .chip.new { background: var(--ok-bg); border-color: rgba(12,163,12,.3); color: var(--good); font-weight: 600; }
+  .cbs { display: flex; flex-wrap: wrap; gap: 7px 16px; }
+  .cb { display: flex; align-items: center; gap: 6px; font-size: 13px; }
+  .bx {
+    width: 15px; height: 15px; border: 1.5px solid var(--baseline); border-radius: 4px;
+    display: inline-flex; align-items: center; justify-content: center;
+    font-size: 10px; color: #fff; flex: none;
+  }
+  .bx.on { background: var(--series-true); border-color: var(--series-true); }
+  .dlg-foot {
+    display: flex; justify-content: flex-end; gap: 9px;
+    margin-top: 20px; padding-top: 16px; border-top: 1px solid var(--border);
+  }
+  .btn {
+    font-size: 13px; padding: 7px 15px; border-radius: 8px;
+    border: 1px solid var(--border); background: var(--surface-1); color: var(--text-primary);
+  }
+  .btn.pri { background: var(--text-primary); color: var(--page); border-color: var(--text-primary); font-weight: 500; }
+  .hi { outline: 2px solid var(--series-true); outline-offset: 2px; border-radius: 8px; }
+
+  /* reasoning flyout */
+  .fly {
+    background: var(--surface-1); border: 1px solid var(--border); border-radius: 10px;
+    padding: 5px; max-width: 250px; box-shadow: 0 8px 26px rgba(0,0,0,.07);
+  }
+  .fly-item {
+    display: flex; align-items: center; gap: 9px; padding: 7px 10px;
+    border-radius: 7px; font-size: 13.5px;
+  }
+  .fly-item.cur { background: var(--code-bg); }
+  .fly-item .tick { margin-left: auto; color: var(--series-true); font-size: 12px; }
+  .flyrow { display: flex; gap: 12px; align-items: flex-start; flex-wrap: wrap; }
+  .flyrow .fly { min-width: 170px; }
+  .lamp { display: inline-flex; flex: none; }
+  .lamp svg { display: block; }
+
+  /* two-up comparison */
+  .two { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; margin: 18px 0; }
+  .two .box { background: var(--surface-1); border: 1px solid var(--border); border-radius: 10px; padding: 14px 16px; }
+  .two .box h4 { margin: 0 0 9px; font-size: 13.5px; }
+  .two .box.bad h4 { color: var(--critical); }
+  .two .box.good h4 { color: var(--good); }
+  .two ul { margin: 0; padding-left: 18px; font-size: 13px; color: var(--text-secondary); }
+  .two li { margin-bottom: 4px; }
+
+  /* commit ladder */
+  .lad { margin: 16px 0; }
+  .lad-row {
+    display: grid; grid-template-columns: 78px 1fr; gap: 14px;
+    padding: 11px 0; border-bottom: 1px solid var(--border); align-items: baseline;
+  }
+  .lad-row:first-child { border-top: 1px solid var(--border); }
+  .lad-hash { font-family: ui-monospace, Menlo, monospace; font-size: 12px; color: var(--muted); }
+  .lad-t { font-size: 13.5px; }
+  .lad-d { font-size: 12.5px; color: var(--muted); display: block; margin-top: 2px; }
+
+  /* pipeline diagram */
+  .pipe { display: flex; align-items: stretch; gap: 0; margin: 20px 0; flex-wrap: wrap; }
+  .pstep {
+    flex: 1 1 0; min-width: 120px; background: var(--surface-1);
+    border: 1px solid var(--border); padding: 12px 13px; border-radius: 0;
+  }
+  .pstep:first-child { border-radius: 10px 0 0 10px; }
+  .pstep:last-child { border-radius: 0 10px 10px 0; }
+  .pstep + .pstep { border-left: none; }
+  .pstep b { display: block; font-size: 13px; margin-bottom: 3px; }
+  .pstep span { font-size: 11.5px; color: var(--muted); line-height: 1.45; }
+  .pstep.hl { background: var(--ok-bg); }
+  .pstep.dim { background: var(--code-bg); }
+  .pstep.dim b { color: var(--muted); }
+  .who { font-size: 11px; color: var(--series-true); font-weight: 600; }
+
+  @media (max-width: 720px) {
+    .stats { grid-template-columns: repeat(2, 1fr); }
+    .two { grid-template-columns: 1fr; }
+    .pipe { flex-direction: column; }
+    .pstep, .pstep:first-child, .pstep:last-child { border-radius: 8px; border-left: 1px solid var(--border); }
+    .pstep + .pstep { border-left: 1px solid var(--border); margin-top: -1px; }
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<h1>工作报告：#1470 与最大输出 Token</h1>
+<p class="lede">#1470 修的是推理档位的取值来源；最大输出 Token 补上用户此前无法设置的输出上限。两项合成一条线性栈，已推远程。</p>
+<p class="meta">2026-10-12 · 仓库 <code>felinics/Memoh</code> · 分支 <code>integ/1470-fixes</code>（栈底 <code>origin/main</code> <code>84e857110</code>）</p>
+
+<div class="stats">
+  <div class="stat"><b>5</b><span>线性提交</span></div>
+  <div class="stat"><b>57</b><span>个文件（+1032 / −260）</span></div>
+  <div class="stat"><b>1</b><span>条迁移（0166）</span></div>
+  <div class="stat"><b>全绿</b><span>build / vet / go test / lint / 迁移集成测试</span></div>
+</div>
+
+<h2><span class="num">1</span>两个问题，一个根因</h2>
+
+<h3>#1470 与输出上限</h3>
+<table>
+  <thead><tr><th>问题</th><th>原因</th></tr></thead>
+  <tbody>
+    <tr><td>DeepSeek 等模型在 OpenAI 形状的 client 上选不到 <code>max</code></td><td>档位要与一条按 <code>client_type</code> 写的规则取交集，<code>openai-completions</code> / <code>openai-responses</code> 上去掉 max，发请求时再改写成 xhigh</td></tr>
+    <tr><td>输出上限用户无法设置</td><td>请求侧只用 <code>generation_limits.go</code> 的常量（预留 8192，思考时 32000）；回复被截断时按正常完成处理</td></tr>
+  </tbody>
+</table>
+
+<div class="two">
+  <div class="box bad">
+    <h4>改之前：档位被线格式筛</h4>
+    <ul>
+      <li><code>openai-completions</code> 上档位去掉 <code>max</code></li>
+      <li>发请求时 <code>max → xhigh</code> 改写</li>
+      <li>DeepSeek / OpenRouter 上的 Claude 因此选不到 max</li>
+      <li>已存的 max 在回退中落到 low，并被写回设置</li>
+    </ul>
+  </div>
+  <div class="box good">
+    <h4>改之后：只认模型声明</h4>
+    <ul>
+      <li>档位只来自<a href="#fn1">模型声明的列表</a></li>
+      <li>思考机制（adaptive / budget / toggle / always）只来自声明</li>
+      <li>同一种请求体上，上限为 xhigh 与为 max 的模型都能选到各自的最高档</li>
+    </ul>
+  </div>
+</div>
+
+<div class="note">档位不能用来推断思考机制：Opus 4.5 有 effort 档位，却只接受 <code>budget_tokens</code>；Opus 4.6 有 max 没有 xhigh，却是 adaptive。因此机制只读模型声明，未声明的 Claude 模型仍按 Anthropic 文档的代际规则判定。</div>
+
+<h2><span class="num">2</span>改动前后：推理选择器</h2>
+
+<p>下面是同一个 bot、同一个模型、同一份存档配置，分别在 <code>origin/main</code> 与本分支上的实际界面。存档里 <code>reasoning_efforts</code> 一直是 <code>[disable, low, high, max]</code>，两边都没改过。</p>
+
+<div class="ba">
+  <figure>
+    <img src="before-picker.png" alt="main：只有 关闭/低/高">
+    <figcaption><b>origin/main</b> · 关闭 / 低 / 高，<code>max</code> 不可选</figcaption>
+  </figure>
+  <figure>
+    <img src="after-picker.png" alt="本分支：关闭/低/高/最大">
+    <figcaption><b>本分支</b> · 关闭 / 低 / 高 / <b>最大</b>，最高档可达</figcaption>
+  </figure>
+</div>
+
+<p>同一时刻服务端 <code>GET /providers/:id/models</code> 返回的解析结果：</p>
+
+<table>
+  <thead><tr><th>分支</th><th>存档档位</th><th>解析后的 <code>efforts</code></th></tr></thead>
+  <tbody>
+    <tr><td><code>origin/main</code></td><td><code>[disable, low, high, max]</code></td><td><code>[low, high]</code>，max 被去掉</td></tr>
+    <tr><td>本分支</td><td><code>[disable, low, high, max]</code></td><td><code>[low, high, max]</code></td></tr>
+  </tbody>
+</table>
+
+<h2><span class="num">3</span>输出上限字段</h2>
+
+<p>模型编辑对话框新增「最大输出 Token」，与「上下文窗口」并列，均为可选。截断发生时，回复里带出提示而不是当作正常完成。</p>
+
+<div class="uiwrap">
+  <div class="uicap">编辑模型 · 实际截图</div>
+  <img src="after-edit.png" alt="编辑模型对话框，含最大输出 Token 字段">
+</div>
+
+<table>
+  <thead><tr><th>字段</th><th>出现条件</th></tr></thead>
+  <tbody>
+    <tr><td>向量维度</td><td>类型为 Embedding</td></tr>
+    <tr><td>兼容性</td><td>类型为 Chat</td></tr>
+    <tr><td>支持的推理强度</td><td>Chat、勾选「推理」，且模型不是 <code>always</code></td></tr>
+    <tr><td>上下文窗口 / 最大输出 Token</td><td>类型为 Chat，均可选、须大于 0</td></tr>
+    <tr><td>显示名称 / 模型说明</td><td>始终显示，标「（可选）」</td></tr>
+  </tbody>
+</table>
+
+<h2><span class="num">4</span>为什么不能从档位反推机制</h2>
+
+<p>档位列表与「哪条线路承载思考控制」是两个独立事实。同一个列表可以对应不同的线路，同一代际的模型也可以有不同的档位。</p>
+
+<table>
+  <thead><tr><th>模型</th><th>声明的档位</th><th>实际线路</th></tr></thead>
+  <tbody>
+    <tr><td><code>claude-opus-4-5</code></td><td><code>[low, medium, high]</code></td><td><code>budget_tokens</code>（不接受 effort 字段）</td></tr>
+    <tr><td><code>claude-opus-4-6</code></td><td><code>[low, medium, high, max]</code></td><td>adaptive + effort</td></tr>
+    <tr><td><code>gemini-2.5-pro</code></td><td><code>[low, medium, high]</code></td><td><code>thinkingBudget</code>（token 数）</td></tr>
+    <tr><td><code>gemini-3.1-pro</code></td><td><code>[low, medium, high]</code></td><td><code>thinkingLevel</code>（具名档位）</td></tr>
+  </tbody>
+</table>
+
+<div class="note">Gemini 2.5 与 3.1 的档位列表相同，线路互斥（同时发两个字段是 400）。因此机制只读模型显式声明，未声明的 Claude 模型仍按 Anthropic 文档的代际规则判定。</div>
+
+<h2><span class="num">5</span>迁移 0166 归一化旧拼写</h2>
+
+<p>旧数据里存在两种已废弃的档位拼写，本迁移把它们归一：<code>none</code> → <code>disable</code>；<code>adaptive</code> 在「无法关闭」的模型上 → <code>disable</code>，其余 → <code>medium</code>。</p>
+
+<p>迁移连接不设 <code>memoh.team_id</code>，而 <code>bots</code>、<code>bot_sessions</code>、<code>schedule</code>、<code>models</code> 都在 FORCE RLS 下；不抬起策略就报错中止。四张表都要抬起并在末尾按相反顺序复位。</p>
+
+<div class="note">编号 0166 而非 0165：另有两个未合并的 PR（#1564、#1550）已占用 0165。空档是允许的（main 自身在 101 处就有空档），已在本机实测迁移可从 164 直接应用 0166。</div>
+
+<h2><span class="num">6</span>提交栈</h2>
+
+<div class="lad">
+  <div class="lad-row"><span class="lad-hash">c66eb412e</span><span class="lad-t">feat(models): 模型支持最大输出 token，截断时提示用户<span class="lad-d">对应 #1524，本栈顶端重放 · 42 文件 +529/−51</span></span></div>
+  <div class="lad-row"><span class="lad-hash">68ef6e2c6</span><span class="lad-t">feat(db): 归一化 bots 与相关列的推理档位旧拼写<span class="lad-d">迁移 0166 + 集成测试 · 3 文件 +260</span></span></div>
+  <div class="lad-row"><span class="lad-hash">216e52cd5</span><span class="lad-t">refactor(reasoning): 删除 adaptive 与 only_adaptive 两条遗留分支<span class="lad-d">9 文件 +21/−41</span></span></div>
+  <div class="lad-row"><span class="lad-hash">1c5f85686</span><span class="lad-t">refactor(reasoning): 声明档位与发现档位按同一条规则合并<span class="lad-d">3 文件 +136/−23</span></span></div>
+  <div class="lad-row"><span class="lad-hash">8f4996627</span><span class="lad-t">fix(reasoning): 档位与思考机制只取自模型声明<span class="lad-d">10 文件 +86/−145</span></span></div>
+</div>
+
+<p class="sub">栈内有 10 个文件被两个提交改过。按返工判据（后一提交是否删掉前一提交刚加的行）逐行核对，返工处为 0：重叠的都是「先加字段、后被消费」的正常分层。</p>
+
+<h2><span class="num">7</span>集成过程中修复的三个缺陷</h2>
+
+<table>
+  <thead><tr><th>缺陷</th><th>后果（若不修）</th><th>抓它的东西</th></tr></thead>
+  <tbody>
+    <tr><td>迁移 0166 起初只在 <code>bots</code> 上解除 RLS；<code>bot_sessions</code>、<code>schedule</code>、<code>models</code> 同样处于 FORCE RLS</td><td>受限角色下报 <code>memoh.team_id is not set</code>，整段迁移中止</td><td><code>TestMigrationsDoNotRequireClusterRolePrivileges</code>（受限角色跑全部迁移）；<code>TestReasoningEffortNormalizationMigration</code> 校验四张表迁移后仍为 FORCE RLS</td></tr>
+    <tr><td>重编号时 <code>0165</code> → <code>0166</code> 后，本机 dev 库仍停在 165</td><td>golang-migrate 找不到 165 而中止，<code>migrate up</code> 失败。</td><td>在 dev 库上实跑 <code>migrate up</code></td></tr>
+    <tr><td><code>service_test.go</code> 解冲突时丢了闭合括号</td><td>测试包编译失败，<code>go build</code> 不编译测试文件，到 <code>go test</code> 才暴露</td><td><code>go test</code></td></tr>
+  </tbody>
+</table>
+
+<h2><span class="num">8</span>验证</h2>
+
+<p>全部在最终分支（<code>integ/1470-fixes</code>，栈底 <code>origin/main</code>）上实跑。</p>
+
+<table>
+  <thead><tr><th>检查</th><th>结果</th></tr></thead>
+  <tbody>
+    <tr><td><code>go build ./...</code> / <code>go vet ./...</code></td><td><span class="verdict v-good">通过</span></td></tr>
+    <tr><td><code>go test ./...</code></td><td><span class="verdict v-good">0 个失败包</span></td></tr>
+    <tr><td>DB integration（<code>-tags=integration ./internal/db/</code>，含 0166）</td><td><span class="verdict v-good">通过</span></td></tr>
+    <tr><td><code>golangci-lint run --new-from-rev=origin/main ./...</code></td><td><span class="verdict v-good">本栈 0 项</span></td></tr>
+    <tr><td>UI contract guard（<code>scripts/check-ui-contract.mjs</code>）</td><td><span class="verdict v-good">通过</span></td></tr>
+    <tr><td>dev 栈实跑：迁移从 164 应用到 0166，服务健康</td><td><span class="verdict v-good">通过</span></td></tr>
+    <tr><td>dev 栈实跑：同一存档配置下对照 main 与本分支的选择器</td><td><span class="verdict v-good">见第 2 节</span></td></tr>
+  </tbody>
+</table>
+
+<h2><span class="num">9</span>未覆盖与未决</h2>
+
+<table>
+  <thead><tr><th>项</th><th>说明</th></tr></thead>
+  <tbody>
+    <tr><td>人工 QA</td><td>未做，界面未经人工走查</td></tr>
+    <tr><td>Anthropic 路径</td><td>仅单元测试覆盖，dev 栈未验证</td></tr>
+    <tr><td>#1524 的 base</td><td>#1524 的 base 为 <code>086c3a710</code>，本栈底更新。其提交已在本栈顶端重放，主线若走本栈，该 PR 可关闭</td></tr>
+        <tr><td>UI 缺口</td><td><code>reasoning_dialect</code> / <code>reasoning_off_support</code> / <code>thinking_budget_*</code> 在界面上仍不可见、不可改，只存在于模板与数据层</td></tr>
+  </tbody>
+</table>
+
+<p class="sub" id="fn1">定案与证据：<code>docs/research/RN-2026-10-10-model-catalog-models-dev.md</code>（主仓）。</p>
+
+<h3>相关但不在本栈</h3>
+
+<p>下面三项与模型能力目录（models.dev）有关，属于另一条工作线，本 PR 不含。</p>
+
+<table>
+  <thead><tr><th>项</th><th>说明</th></tr></thead>
+  <tbody>
+    <tr><td>空档位列表仍被兜底</td><td>目录说「只有开关、没有档位」（<code>options: [{"type":"toggle"}]</code>）时，<code>effectiveEfforts</code> 把空列表兜成 <code>[low, medium, high]</code>，界面显示端点并不存在的三个档位</td></tr>
+    <tr><td>模板覆盖目录</td><td>模型在模板里与不在模板里走两条路：在模板里以模板为准，不在模板里才读目录。目录里 9 个 Xiaomi 模型，我们一个模板都没有，用户导入时全部落到兜底</td></tr>
+    <tr><td>provider 与 model 同文件</td><td><code>conf/providers/*.yaml</code> 里 provider 定义与它的模型列表写在同一文件；模型只能手写进模板才会被同步到，目录里新增的模型不会自动出现</td></tr>
+  </tbody>
+</table>
+
+<p class="sub">本报告第 2、3 节的界面为 dev 栈实际截图；其余图示为按真实字段与文案绘制的示意。</p>
+
+</div>
+</body>
+</html>
