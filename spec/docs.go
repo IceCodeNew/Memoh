@@ -21485,6 +21485,9 @@ const docTemplate = `{
         "handlers.AppListResponse": {
             "type": "object",
             "properties": {
+                "dependency_catalog_refreshing": {
+                    "type": "boolean"
+                },
                 "dependency_catalog_stale": {
                     "type": "boolean"
                 },
@@ -24129,6 +24132,10 @@ const docTemplate = `{
             "properties": {
                 "catalog_fetched_at": {
                     "type": "string"
+                },
+                "catalog_refreshing": {
+                    "description": "CatalogRefreshing is set while the catalog is refreshed in the\nbackground; listing again shortly may show a newer catalog.",
+                    "type": "boolean"
                 },
                 "catalog_stale": {
                     "type": "boolean"

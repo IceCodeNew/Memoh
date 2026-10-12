@@ -205,6 +205,9 @@ type Entry struct {
 type ListResult struct {
 	CatalogStale     bool
 	CatalogFetchedAt time.Time
+	// CatalogRefreshing is set while a background refresh of the catalog
+	// runs; listing again shortly may show a newer catalog.
+	CatalogRefreshing bool
 	// Platform is zero when the workspace is not running and was never
 	// probed.
 	Platform Platform
@@ -293,7 +296,7 @@ func (s *Service) list(ctx context.Context, botID string, force bool) (ListResul
 		records[i].LastError = s.errorDetail(ctx, records[i].LastError)
 	}
 	byDep := indexRecords(records)
-	result := ListResult{Workspace: state, CatalogStale: catalogResult.Stale, CatalogFetchedAt: catalogResult.FetchedAt}
+	result := ListResult{Workspace: state, CatalogStale: catalogResult.Stale, CatalogFetchedAt: catalogResult.FetchedAt, CatalogRefreshing: catalogResult.Refreshing}
 	// The data root always belongs to the isolated workspace.
 	if dataRoot, err := s.workspace.DataRoot(ctx, botID); err == nil {
 		result.DataRoot = dataRoot

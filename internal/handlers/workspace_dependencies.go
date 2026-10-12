@@ -195,6 +195,9 @@ type WorkspaceDependencyListResponse struct {
 	// reflect the installation records alone, without workspace facts or
 	// actions; a refresh retries discovery.
 	DiscoveryError string `json:"discovery_error,omitempty"`
+	// CatalogRefreshing is set while the catalog is refreshed in the
+	// background; listing again shortly may show a newer catalog.
+	CatalogRefreshing bool `json:"catalog_refreshing,omitempty"`
 }
 
 // WorkspaceDependencyPreflightRequest names the dependencies an agent needs.
@@ -864,10 +867,11 @@ func workspaceDependencyError(err error) error {
 
 func workspaceDependencyListResponse(result workspacedeps.ListResult) WorkspaceDependencyListResponse {
 	resp := WorkspaceDependencyListResponse{
-		WorkspaceState: string(result.Workspace),
-		Items:          make([]WorkspaceDependencyItem, 0, len(result.Entries)),
-		DiscoveryError: "",
-		CatalogStale:   result.CatalogStale,
+		WorkspaceState:    string(result.Workspace),
+		Items:             make([]WorkspaceDependencyItem, 0, len(result.Entries)),
+		DiscoveryError:    "",
+		CatalogStale:      result.CatalogStale,
+		CatalogRefreshing: result.CatalogRefreshing,
 	}
 	if result.DiscoveryFailed {
 		resp.DiscoveryError = string(apperror.CodeWorkspaceDependencyDiscoveryFailed)
