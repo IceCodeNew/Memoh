@@ -10371,6 +10371,62 @@
                 }
             }
         },
+        "/bots/{bot_id}/starter-prompts": {
+            "get": {
+                "description": "Suggestions for the current user's new chat with a bot, generated from the bot's memory, the user's recent session titles, the bot's installed Apps and its name. The server keeps nothing: pass the hash of the set you hold as known_hash, and the response says unchanged while that set is still current; otherwise a new set is generated, which can take a while.",
+                "tags": [
+                    "bots"
+                ],
+                "summary": "Get new-chat starter prompts",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Bot ID",
+                        "name": "bot_id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "BCP 47 language tag the suggestions are written in. Defaults to en.",
+                        "name": "locale",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Hash of the set the client already holds.",
+                        "name": "known_hash",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.StarterPromptsResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/server.Problem"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "$ref": "#/definitions/server.Problem"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/server.Problem"
+                        }
+                    }
+                }
+            }
+        },
         "/bots/{bot_id}/token-usage": {
             "get": {
                 "description": "Get daily aggregated token usage for a bot, split by chat, discuss, and schedule session types, with optional model filter and per-model breakdown",
@@ -23075,6 +23131,43 @@
                 },
                 "version": {
                     "type": "integer"
+                }
+            }
+        },
+        "handlers.StarterPrompt": {
+            "type": "object",
+            "required": [
+                "prompt",
+                "title"
+            ],
+            "properties": {
+                "prompt": {
+                    "type": "string"
+                },
+                "title": {
+                    "type": "string"
+                }
+            }
+        },
+        "handlers.StarterPromptsResponse": {
+            "type": "object",
+            "required": [
+                "hash",
+                "items",
+                "unchanged"
+            ],
+            "properties": {
+                "hash": {
+                    "type": "string"
+                },
+                "items": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/handlers.StarterPrompt"
+                    }
+                },
+                "unchanged": {
+                    "type": "boolean"
                 }
             }
         },
