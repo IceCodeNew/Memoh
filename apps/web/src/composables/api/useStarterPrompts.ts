@@ -1,7 +1,12 @@
-import { toValue, type MaybeRefOrGetter } from 'vue'
+import { ref, toValue, type MaybeRefOrGetter } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useQuery, useQueryCache } from '@pinia/colada'
-import { getBotsByBotIdStarterPrompts, type HandlersStarterPrompt, type HandlersStarterPromptsResponse } from '@memohai/sdk'
+import {
+  getBotsByBotIdStarterPrompts,
+  postBotsByBotIdStarterPromptsRefresh,
+  type HandlersStarterPrompt,
+  type HandlersStarterPromptsResponse,
+} from '@memohai/sdk'
 
 export type StarterPrompt = HandlersStarterPrompt
 
@@ -34,13 +39,17 @@ export function resolveStarterPromptSet(held: StarterPromptSet | undefined, resp
  * Meanwhile the held set stays on screen. A set the server could not generate
  * keeps the held one; with nothing held the result is an empty set, and the
  * caller shows its generic examples.
+ *
+ * `refresh()` asks for a different set, telling the server which prompts are
+ * on screen, and replaces the held set with it. It resolves false when no new
+ * set came back, leaving the held one in place.
  */
 export function useStarterPromptsQuery(botId: MaybeRefOrGetter<string>) {
   const { locale } = useI18n()
   const queryCache = useQueryCache()
   const key = () => ['starter-prompts', toValue(botId)]
 
-  return useQuery({
+  const query = useQuery({
     key,
     query: async ({ signal }): Promise<StarterPromptSet> => {
       const held = queryCache.getQueryData<StarterPromptSet>(key())
@@ -58,4 +67,30 @@ export function useStarterPromptsQuery(botId: MaybeRefOrGetter<string>) {
     refetchOnWindowFocus: false,
     refetchOnReconnect: false,
   })
+
+  const refreshing = ref(false)
+  async function refresh(): Promise<boolean> {
+    const held = queryCache.getQueryData<StarterPromptSet>(key())
+    refreshing.value = true
+    try {
+      const { data } = await postBotsByBotIdStarterPromptsRefresh({
+        path: { bot_id: toValue(botId) },
+        body: { locale: locale.value, avoid: held?.items.map(item => item.prompt) ?? [] },
+        throwOnError: true,
+      })
+      if (!data.hash || data.items.length === 0) return false
+      // A read still in flight answered for the set being replaced; drop it.
+      queryCache.cancelQueries({ key: key() })
+      queryCache.setQueryData<StarterPromptSet>(key(), { hash: data.hash, items: data.items })
+      return true
+    }
+    catch {
+      return false
+    }
+    finally {
+      refreshing.value = false
+    }
+  }
+
+  return { ...query, refresh, refreshing }
 }

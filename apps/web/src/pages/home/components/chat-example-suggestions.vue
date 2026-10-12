@@ -1,9 +1,9 @@
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { usePreferredReducedMotion } from '@vueuse/core'
 import { X } from 'lucide-vue-next'
-import { Button, TextButton } from '@felinic/ui'
+import { Button, TextButton, toast } from '@felinic/ui'
 import { useChatExampleAction, useChatExampleEntries } from '@/components/chat-examples/use-chat-example-action'
 import { useChatExamplesUi } from '@/components/chat-examples/use-chat-examples-ui'
 import { useStarterPromptsQuery } from '@/composables/api/useStarterPrompts'
@@ -13,11 +13,13 @@ import { COMPOSER_PREVIEW_LANDING_MS, type ComposerPreview } from '../composable
 import StarterPromptList, { type StarterPromptRow } from './starter-prompt-list.vue'
 
 /**
- * Three suggestions under the welcome composer, with "See all" opening the
- * full gallery. They are the bot's own starter prompts for this user; until
- * the first set arrives the rows show a skeleton, and when the bot has no set
- * (no title model, or generation failed) three built-in examples drawn at
- * random take their place. Hiding the section is remembered on this device;
+ * Three suggestions under the welcome composer. They are the bot's own
+ * starter prompts for this user; until the first set arrives the rows show a
+ * skeleton, and when the bot has no set (no title model, or generation
+ * failed) three built-in examples drawn at random take their place.
+ * "Refresh" asks for a different generated set, or draws three other
+ * built-in examples; the gallery of every example lives behind the sidebar
+ * entry instead. Hiding the section is remembered on this device;
  * while hidden, the composer's context row shows the entry that brings it
  * back. Hidden by the welcome column's height tiers (style.css) before
  * anything else yields.
@@ -36,25 +38,27 @@ const props = defineProps<{
 const preview = defineModel<ComposerPreview | null>('preview', { default: null })
 
 const { locale, t } = useI18n()
-const { welcomeDismissed, openGallery } = useChatExamplesUi()
+const { welcomeDismissed } = useChatExamplesUi()
 const { prefillComposer } = useComposerPrefill()
 const reducedMotion = usePreferredReducedMotion()
 
-const { data: starterSet, status: starterStatus } = useStarterPromptsQuery(() => props.botId)
+const { data: starterSet, status: starterStatus, refresh: refreshStarterSet, refreshing } = useStarterPromptsQuery(() => props.botId)
 
 // A new seed per mounted welcome view: every new chat draws a different three,
 // while this one stays put through re-renders and the capability probe.
-const seed = Math.random()
-const entries = useChatExampleEntries(() => props.botId, { surface: 'welcome', limit: 3, spreadCategories: true, seed })
+// Refreshing the built-in examples draws a new seed.
+const seed = ref(Math.random())
+const entries = useChatExampleEntries(() => props.botId, () => ({ surface: 'welcome', limit: 3, spreadCategories: true, seed: seed.value }))
 const { run } = useChatExampleAction(() => props.botId)
 
 /**
- * The rows to show: the generated set, null while the first set is pending
- * (skeleton), or the built-in examples. An example the bot lacks a capability
- * for carries a badge and opens settings instead of prefilling, so it is not
- * previewable.
+ * The rows to show: null while a set is on its way (the first one, or a
+ * refresh; skeleton), the generated set, or the built-in examples. An
+ * example the bot lacks a capability for carries a badge and opens settings
+ * instead of prefilling, so it is not previewable.
  */
 const rows = computed<StarterPromptRow[] | null>(() => {
+  if (refreshing.value) return null
   const generated = starterSet.value?.items ?? []
   if (generated.length) {
     return generated.map((item, index) => ({ key: `starter:${index}`, title: item.title, prompt: item.prompt, previewable: true }))
@@ -70,6 +74,16 @@ const rows = computed<StarterPromptRow[] | null>(() => {
 })
 
 const visible = computed(() => !welcomeDismissed.value && (rows.value === null || rows.value.length > 0))
+const generated = computed(() => (starterSet.value?.items.length ?? 0) > 0)
+
+async function refresh() {
+  preview.value = null
+  if (!generated.value) {
+    seed.value = Math.random()
+    return
+  }
+  if (!(await refreshStarterSet())) toast.error(t('chatExamples.refreshFailed'))
+}
 
 function setPreview(prompt: string | null) {
   if (preview.value?.landing) return
@@ -122,9 +136,10 @@ async function select(row: StarterPromptRow) {
         <TextButton
           type="button"
           class="text-label font-normal"
-          @click="openGallery"
+          :disabled="rows === null"
+          @click="refresh"
         >
-          {{ $t('chatExamples.viewAll') }}
+          {{ $t('chatExamples.refresh') }}
         </TextButton>
         <Button
           type="button"
