@@ -1,4 +1,6 @@
-import { effectScope, nextTick, ref } from 'vue'
+// @vitest-environment jsdom
+
+import { createApp, defineComponent, effectScope, h, KeepAlive, nextTick, ref } from 'vue'
 import { createPinia, setActivePinia } from 'pinia'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { useComposerPrefillStore } from '@/store/composer-prefill'
@@ -154,5 +156,39 @@ describe('useComposerPrefillConsumer', () => {
     await settle()
     expect(foreground.apply).toHaveBeenCalledOnce()
     expect(background.apply).not.toHaveBeenCalled()
+  })
+
+  it('never lets a pane that KeepAlive has deactivated take the request', async () => {
+    // A cached tab keeps its last props, so it still claims to be active.
+    const applied: string[] = []
+    // eslint-disable-next-line vue/one-component-per-file -- a pane and its KeepAlive host
+    const Pane = defineComponent({
+      props: { name: { type: String, required: true } },
+      setup(props) {
+        useComposerPrefillConsumer({
+          botId: () => 'bot-a',
+          active: () => true,
+          writable: () => true,
+          ready: () => true,
+          currentText: () => '',
+          confirmReplace: async () => true,
+          apply: text => applied.push(`${props.name}:${text}`),
+        })
+        return () => h('div', props.name)
+      },
+    })
+    const shown = ref('old')
+    const root = document.createElement('div')
+    // eslint-disable-next-line vue/one-component-per-file -- a pane and its KeepAlive host
+    const app = createApp({
+      render: () => h(KeepAlive, null, [h(Pane, { key: shown.value, name: shown.value })]),
+    })
+    app.mount(root)
+    shown.value = 'new'
+    await settle()
+    void useComposerPrefillStore().request('bot-a', 'hello')
+    await settle()
+    expect(applied).toEqual(['new:hello'])
+    app.unmount()
   })
 })

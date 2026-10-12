@@ -1,4 +1,4 @@
-import { readonly, ref, watch } from 'vue'
+import { getCurrentInstance, onActivated, onDeactivated, readonly, ref, watch } from 'vue'
 import { useComposerPrefillStore, type ComposerPrefillRequest } from '@/store/composer-prefill'
 
 export interface ComposerPrefillConsumerDeps {
@@ -24,6 +24,8 @@ export interface ComposerPrefillConsumerDeps {
  * Let a chat pane consume a pending composer prefill once it is the active,
  * writable pane of the requested bot. Requests queued before the pane mounted
  * are picked up immediately, so a freshly opened draft chat receives them.
+ * A pane that KeepAlive has deactivated never takes one: its props froze at
+ * the moment it was hidden, so it may still believe it is the active pane.
  *
  * Only the user's own unsent text is protected: the composer may be
  * replaced without asking when it is blank, already holds the requested
@@ -39,6 +41,11 @@ export interface ComposerPrefillConsumerDeps {
 export function useComposerPrefillConsumer(deps: ComposerPrefillConsumerDeps) {
   const store = useComposerPrefillStore()
   const lastPrefilled = ref<string | null>(null)
+  const attached = ref(true)
+  if (getCurrentInstance()) {
+    onActivated(() => { attached.value = true })
+    onDeactivated(() => { attached.value = false })
+  }
 
   function holdsUserText(current: string, request: ComposerPrefillRequest) {
     return current.trim() !== '' && current !== request.text && current !== lastPrefilled.value
@@ -55,9 +62,9 @@ export function useComposerPrefillConsumer(deps: ComposerPrefillConsumerDeps) {
   }
 
   watch(
-    () => [store.pending?.id, deps.active(), deps.writable(), deps.ready(), deps.botId()] as const,
+    () => [store.pending?.id, attached.value, deps.active(), deps.writable(), deps.ready(), deps.botId()] as const,
     () => {
-      if (!deps.active() || !deps.writable() || !deps.ready()) return
+      if (!attached.value || !deps.active() || !deps.writable() || !deps.ready()) return
       const request = store.take(deps.botId())
       if (request) void consume(request)
     },
