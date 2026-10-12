@@ -2201,6 +2201,8 @@ definitions:
     - read_media
     - renderer_prune
     - mid_stream_retry
+    - current_input_omitted
+    - current_input_images_omitted
     - run_abort_observed
     type: string
     x-enum-varnames:
@@ -2216,6 +2218,8 @@ definitions:
     - MutationReadMedia
     - MutationRendererPrune
     - MutationMidStreamRetry
+    - MutationCurrentInputOmitted
+    - MutationCurrentInputImagesOmitted
     - MutationRunAbortObserved
   contextfrag.MutationRecord:
     properties:
@@ -3134,6 +3138,8 @@ definitions:
         items:
           $ref: '#/definitions/handlers.AppItem'
         type: array
+      update_checks_incomplete:
+        type: boolean
       workspace_state:
         enum:
         - running
@@ -3819,6 +3825,8 @@ definitions:
         type: boolean
       namespace:
         type: string
+      removal:
+        $ref: '#/definitions/handlers.WorkspaceRemovalResponse'
       runtime_backend:
         type: string
       status:
@@ -4990,6 +4998,11 @@ definitions:
         type: array
       platform:
         $ref: '#/definitions/handlers.WorkspaceDependencyPlatform'
+      update_checks_incomplete:
+        description: |-
+          UpdateChecksIncomplete is set by check-updates when some checks did not
+          finish in time; those keep their last result.
+        type: boolean
       workspace_state:
         enum:
         - running
@@ -5142,6 +5155,18 @@ definitions:
       description:
         type: string
       name:
+        type: string
+    type: object
+  handlers.WorkspaceRemovalResponse:
+    properties:
+      preserve_data:
+        type: boolean
+      state:
+        enum:
+        - removing
+        - failed
+        type: string
+      updated_at:
         type: string
     type: object
   handlers.acpRuntimeCreateRequest:
@@ -9202,7 +9227,9 @@ paths:
   /bots/{bot_id}/apps/check-updates:
     post:
       description: Compares every installed App with the registry's current release,
-        runs the dependency update checks, and returns the refreshed list.
+        runs the dependency update checks, and returns the refreshed list. The checks
+        are bounded in time; update_checks_incomplete marks a list where some did
+        not finish and keep their last result.
       parameters:
       - description: Bot ID
         in: path
@@ -9728,6 +9755,8 @@ paths:
       - connectors
   /bots/{bot_id}/container:
     delete:
+      description: Records the removal and answers at once. The workspace is gone
+        when GET answers 404; until then GET reports the removal's state.
       parameters:
       - description: Bot ID
         in: path
@@ -9739,8 +9768,8 @@ paths:
         name: preserve_data
         type: boolean
       responses:
-        "204":
-          description: No Content
+        "202":
+          description: Accepted
         "404":
           description: Not Found
           schema:
@@ -10561,6 +10590,26 @@ paths:
       summary: Update workspace metrics settings for bot
       tags:
       - containerd
+  /bots/{bot_id}/container/removal/cancel:
+    post:
+      description: Keeps the workspace after its removal failed. Does nothing when
+        no removal has failed; one still in progress cannot be withdrawn.
+      parameters:
+      - description: Bot ID
+        in: path
+        name: bot_id
+        required: true
+        type: string
+      responses:
+        "204":
+          description: No Content
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/server.Problem'
+      summary: Withdraw a failed workspace removal
+      tags:
+      - containerd
   /bots/{bot_id}/container/skills:
     delete:
       parameters:
@@ -11235,7 +11284,9 @@ paths:
   /bots/{bot_id}/dependencies/check-updates:
     post:
       description: Re-discovers the workspace and runs the upstream update check of
-        every installed tool dependency, then returns the refreshed list.
+        every installed tool dependency, then returns the refreshed list. The checks
+        are bounded in time; update_checks_incomplete marks a list where some did
+        not finish and keep their last result.
       parameters:
       - description: Bot ID
         in: path

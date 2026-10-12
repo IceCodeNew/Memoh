@@ -285,7 +285,7 @@
       "native_managed": "組み込みの取得プロバイダーは Memoh が管理しており、この方法では変更できません。",
       "not_found": "この取得プロバイダーは存在しなくなりました。一覧を更新して選び直してください。"
     },
-    "group_chat_acp_unsupported": "グループチャットではチャットモードの外部Agent Sessionを作成できません。/new codex または /new discuss codex を使用してください。",
+    "group_chat_acp_unsupported": "グループチャットではチャットモードの外部Agent Sessionを作成できません。/new <Agent名> または /new discuss <Agent名> を使用してください。",
     "history": {
       "delete_failed": "会話履歴を削除できませんでした。もう一度お試しください。"
     },
@@ -1157,7 +1157,7 @@
     "pdfUnsupportedByModel": "現在のモデルは PDF の読み取りに対応していません。ファイルはワークスペースにパスとして保存され、モデルは内容を閲覧できません。",
     "send": "送信",
     "sendFailed": "メッセージの送信に失敗しました",
-    "sendConfirmTimeout": "サーバーがこのメッセージを時間内に確認しませんでした。もう一度送信してください。",
+    "sendOutcomeUnknown": "サーバーがこのメッセージを確認できていません。すでに受け付けられている可能性があるため、再送する前に会話一覧を確認してください。",
     "sendWorkdirUnsupported": "選択したフォルダでこのチャットを開始できませんでした。サーバーを更新するか、フォルダを外して送信してください。",
     "forkFailed": "セッションのフォークに失敗しました",
     "forkedFrom": "{session} からフォーク",
@@ -1517,7 +1517,7 @@
       "accountUnbound": "この IM アカウントはまだ Memoh アカウントと連携されていないため、この Bot のワークスペースを利用できません。あなたが所有者の場合は、Memoh の Web 画面で「プロフィール → 連携済みアカウント」からリンクコードを取得し、ここで {link} <コード> を送信してください。",
       "runtimeOwnerMissing": "この外部Agent Sessionには実行所有者がありません。新しいSessionを開始してください。",
       "discussUnsupported": "この外部Agentはディスカッションモードでは実行できません。",
-      "groupChatUnsupported": "グループチャットではチャットモードの外部Agent Sessionを作成できません。/new codex または /new discuss codex を使用してください。",
+      "groupChatUnsupported": "グループチャットではチャットモードの外部Agent Sessionを作成できません。/new <Agent名> または /new discuss <Agent名> を使用してください。",
       "projectModeInvalid": "外部Agentのプロジェクトモードが無効です。",
       "projectPathInvalid": "外部Agentのプロジェクトパスは絶対パスである必要があります。",
       "displayArgsInvalid": "外部Agentの表示引数が無効です。",
@@ -3108,6 +3108,17 @@
       "stopSuccess": "Workspace を停止しました",
       "deleteSuccess": "Workspace を削除しました",
       "deletePreserveSuccess": "Workspace を削除し、データを保存しました",
+      "removal": {
+        "removingTitle": "Workspace を削除しています",
+        "removingHint": "このページを離れても、戻ったときに結果を確認できます。",
+        "removingKeepHint": "先にデータをバックアップしてから Workspace を削除します。このページを離れても、戻ったときに結果を確認できます。",
+        "failedTitle": "Workspace の削除に失敗しました",
+        "failedHint": "Workspace は削除されていません（{time} に失敗）。もう一度試すか、削除をキャンセルして使い続けられます。",
+        "retry": "再試行",
+        "cancel": "削除をキャンセル",
+        "cancelSuccess": "削除をキャンセルしました",
+        "recreateStopped": "古い Workspace を削除できなかったため、再構築は行われませんでした。"
+      },
       "snapshotSuccess": "スナップショットが作成されました",
       "restoreSuccess": "データが復元されました",
       "rollbackSuccess": "スナップショットがロールバックされました",
@@ -4137,6 +4148,8 @@
     "checkUpdates": "更新を確認",
     "checkUpdatesDone": "更新の確認が完了しました",
     "checkUpdatesFailed": "更新を確認できませんでした",
+    "checkUpdatesIncomplete": "一部の確認が時間内に完了しなかったため、前回の結果を表示しています。しばらくしてから再試行してください。",
+    "checkUpdatesTimedOut": "確認がタイムアウトしました。結果が不完全な可能性があります。しばらくしてから再試行してください。",
     "browse": "マーケットプレイスを見る",
     "emptyTitle": "アプリはまだインストールされていません",
     "emptyDescription": "スキル、依存関係、コネクターはマーケットプレイスからアプリとしてインストールします。",

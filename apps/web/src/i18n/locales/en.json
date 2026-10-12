@@ -288,7 +288,7 @@
       "native_managed": "The built-in fetch provider is managed by Memoh and cannot be changed this way.",
       "not_found": "This fetch provider no longer exists. Refresh the list and choose another one."
     },
-    "group_chat_acp_unsupported": "Group chats cannot create a chat-mode external-agent session. Use /new codex or /new discuss codex.",
+    "group_chat_acp_unsupported": "Group chats cannot create a chat-mode external-agent session. Use /new <agent name> or /new discuss <agent name>.",
     "history": {
       "delete_failed": "The conversation history could not be deleted. Please try again."
     },
@@ -1176,7 +1176,7 @@
     "pdfUnsupportedByModel": "The current model can't read PDFs natively. The file will be saved to the workspace as a path, but the model won't be able to view its content.",
     "send": "Send",
     "sendFailed": "Message failed to send",
-    "sendConfirmTimeout": "The server didn't confirm this message in time. Try sending it again.",
+    "sendOutcomeUnknown": "The server hasn't confirmed this message, so it may already have been received. Check the conversation list before sending it again.",
     "sendWorkdirUnsupported": "The server couldn't start this chat in the selected folder. Update the server, or send without a folder.",
     "forkFailed": "Failed to fork session",
     "forkedFrom": "Forked from {session}",
@@ -1539,7 +1539,7 @@
       "accountUnbound": "Your IM account isn't linked to a Memoh account yet, so you can't use this bot's workspace. If you're its owner, open Profile → Connected Accounts in Memoh on the web, get a link code, and send {link} <code> here.",
       "runtimeOwnerMissing": "This external-agent session has no runtime owner. Start a new session to continue.",
       "discussUnsupported": "This external agent cannot run in discuss mode.",
-      "groupChatUnsupported": "Group chats cannot create a chat-mode external-agent session. Use /new codex or /new discuss codex.",
+      "groupChatUnsupported": "Group chats cannot create a chat-mode external-agent session. Use /new <agent name> or /new discuss <agent name>.",
       "projectModeInvalid": "The external agent project mode is invalid.",
       "projectPathInvalid": "The external agent project path must be absolute.",
       "displayArgsInvalid": "The external agent display arguments are invalid.",
@@ -3069,6 +3069,17 @@
       "stopSuccess": "Workspace stopped",
       "deleteSuccess": "Workspace deleted",
       "deletePreserveSuccess": "Workspace deleted and data preserved",
+      "removal": {
+        "removingTitle": "Deleting workspace",
+        "removingHint": "You can leave this page. The result will be here when you come back.",
+        "removingKeepHint": "Your data is backed up first, then the workspace is deleted. You can leave this page; the result will be here when you come back.",
+        "failedTitle": "Workspace deletion failed",
+        "failedHint": "The workspace was not deleted (failed {time}). Try again, or cancel the deletion to keep using it.",
+        "retry": "Try again",
+        "cancel": "Cancel deletion",
+        "cancelSuccess": "Deletion cancelled",
+        "recreateStopped": "The old workspace could not be deleted, so it was not rebuilt."
+      },
       "snapshotSuccess": "Snapshot created",
       "restoreSuccess": "Data restored",
       "rollbackSuccess": "Snapshot rolled back",
@@ -4143,6 +4154,8 @@
     "checkUpdates": "Check for updates",
     "checkUpdatesDone": "Update check finished",
     "checkUpdatesFailed": "Couldn't check for updates",
+    "checkUpdatesIncomplete": "Some checks didn't finish in time and keep their last result. Try again later.",
+    "checkUpdatesTimedOut": "The check took too long and the results may be incomplete. Try again later.",
     "browse": "Browse Supermarket",
     "emptyTitle": "No Apps installed yet",
     "emptyDescription": "Install Skills, dependencies and connectors as Apps from the Supermarket.",

@@ -34,9 +34,14 @@ func (m *Manager) Provision(ctx context.Context, botID, image string, progress f
 	return m.provisionWorkspace(ctx, botID, image, emit)
 }
 
-// Teardown implements botworkspace.Backend.
+// Teardown implements botworkspace.Backend. An export that cannot succeed is
+// not retried, so the failure reaches the user at once.
 func (m *Manager) Teardown(ctx context.Context, botID string, preserve bool) error {
-	return m.CleanupBotContainer(ctx, botID, preserve)
+	err := m.CleanupBotContainer(ctx, botID, preserve)
+	if errors.Is(err, errPreserveData) {
+		return stepError(botworkspace.PhaseTeardown, err, isTransient(err))
+	}
+	return err
 }
 
 // Inspect implements botworkspace.Backend.
@@ -111,8 +116,9 @@ func (m *Manager) provisionWorkspace(ctx context.Context, botID, imageOverride s
 		return stepError(botworkspace.PhaseBridge, err, true)
 	}
 	if err := m.InitializeNativeWorkspace(ctx, botID); err != nil {
-		// A template that cannot be written will not fix itself.
-		return stepError(botworkspace.PhaseBootstrap, err, !errors.Is(err, ErrWorkspaceTemplateBootstrapFailed))
+		// The bridge is already ready. Auxiliary templates must not turn a
+		// usable runtime into a failed provisioning job.
+		m.recordReconcileSetupFailure(ctx, botID, "auxiliary_bootstrap", err)
 	}
 	if err := m.RememberWorkspaceImage(ctx, botID, image); err != nil {
 		record := errlog.Event(ctx, "workspace.provision", errs.Wrap(err, "remember workspace image", slog.String("image", image)), errlog.Options{})

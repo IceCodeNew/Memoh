@@ -2497,7 +2497,7 @@ const docTemplate = `{
         },
         "/bots/{bot_id}/apps/check-updates": {
             "post": {
-                "description": "Compares every installed App with the registry's current release, runs the dependency update checks, and returns the refreshed list.",
+                "description": "Compares every installed App with the registry's current release, runs the dependency update checks, and returns the refreshed list. The checks are bounded in time; update_checks_incomplete marks a list where some did not finish and keep their last result.",
                 "produces": [
                     "application/json"
                 ],
@@ -3731,6 +3731,7 @@ const docTemplate = `{
                 }
             },
             "delete": {
+                "description": "Records the removal and answers at once. The workspace is gone when GET answers 404; until then GET reports the removal's state.",
                 "tags": [
                     "containerd"
                 ],
@@ -3751,8 +3752,8 @@ const docTemplate = `{
                     }
                 ],
                 "responses": {
-                    "204": {
-                        "description": "No Content"
+                    "202": {
+                        "description": "Accepted"
                     },
                     "404": {
                         "description": "Not Found",
@@ -4905,6 +4906,35 @@ const docTemplate = `{
                 }
             }
         },
+        "/bots/{bot_id}/container/removal/cancel": {
+            "post": {
+                "description": "Keeps the workspace after its removal failed. Does nothing when no removal has failed; one still in progress cannot be withdrawn.",
+                "tags": [
+                    "containerd"
+                ],
+                "summary": "Withdraw a failed workspace removal",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Bot ID",
+                        "name": "bot_id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "204": {
+                        "description": "No Content"
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/server.Problem"
+                        }
+                    }
+                }
+            }
+        },
         "/bots/{bot_id}/container/skills": {
             "get": {
                 "tags": [
@@ -5507,7 +5537,7 @@ const docTemplate = `{
         },
         "/bots/{bot_id}/dependencies/check-updates": {
             "post": {
-                "description": "Re-discovers the workspace and runs the upstream update check of every installed tool dependency, then returns the refreshed list.",
+                "description": "Re-discovers the workspace and runs the upstream update check of every installed tool dependency, then returns the refreshed list. The checks are bounded in time; update_checks_incomplete marks a list where some did not finish and keep their last result.",
                 "produces": [
                     "application/json"
                 ],
@@ -20180,6 +20210,8 @@ const docTemplate = `{
                 "read_media",
                 "renderer_prune",
                 "mid_stream_retry",
+                "current_input_omitted",
+                "current_input_images_omitted",
                 "run_abort_observed"
             ],
             "x-enum-varnames": [
@@ -20195,6 +20227,8 @@ const docTemplate = `{
                 "MutationReadMedia",
                 "MutationRendererPrune",
                 "MutationMidStreamRetry",
+                "MutationCurrentInputOmitted",
+                "MutationCurrentInputImagesOmitted",
                 "MutationRunAbortObserved"
             ]
         },
@@ -21497,6 +21531,9 @@ const docTemplate = `{
                         "$ref": "#/definitions/handlers.AppItem"
                     }
                 },
+                "update_checks_incomplete": {
+                    "type": "boolean"
+                },
                 "workspace_state": {
                     "type": "string",
                     "enum": [
@@ -22507,6 +22544,9 @@ const docTemplate = `{
                 },
                 "namespace": {
                     "type": "string"
+                },
+                "removal": {
+                    "$ref": "#/definitions/handlers.WorkspaceRemovalResponse"
                 },
                 "runtime_backend": {
                     "type": "string"
@@ -24153,6 +24193,10 @@ const docTemplate = `{
                 "platform": {
                     "$ref": "#/definitions/handlers.WorkspaceDependencyPlatform"
                 },
+                "update_checks_incomplete": {
+                    "description": "UpdateChecksIncomplete is set by check-updates when some checks did not\nfinish in time; those keep their last result.",
+                    "type": "boolean"
+                },
                 "workspace_state": {
                     "type": "string",
                     "enum": [
@@ -24377,6 +24421,24 @@ const docTemplate = `{
                     "type": "string"
                 },
                 "name": {
+                    "type": "string"
+                }
+            }
+        },
+        "handlers.WorkspaceRemovalResponse": {
+            "type": "object",
+            "properties": {
+                "preserve_data": {
+                    "type": "boolean"
+                },
+                "state": {
+                    "type": "string",
+                    "enum": [
+                        "removing",
+                        "failed"
+                    ]
+                },
+                "updated_at": {
                     "type": "string"
                 }
             }

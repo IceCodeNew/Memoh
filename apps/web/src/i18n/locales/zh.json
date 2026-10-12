@@ -288,7 +288,7 @@
       "native_managed": "内置抓取服务由 Memoh 管理，无法这样修改。",
       "not_found": "这个抓取服务已不存在，请刷新列表后重新选择。"
     },
-    "group_chat_acp_unsupported": "群聊不能创建对话模式的外部 Agent 会话。请使用 /new codex 或 /new discuss codex。",
+    "group_chat_acp_unsupported": "群聊不能创建对话模式的外部 Agent 会话。请使用 /new <Agent 名称> 或 /new discuss <Agent 名称>。",
     "history": {
       "delete_failed": "会话历史删除失败，请重试。"
     },
@@ -1188,7 +1188,7 @@
     "pdfUnsupportedByModel": "当前模型不支持读取 PDF,文件将以路径形式存入工作区,模型无法直接查看其内容。",
     "send": "发送",
     "sendFailed": "消息发送失败",
-    "sendConfirmTimeout": "服务端长时间没有确认这条消息，请重新发送。",
+    "sendOutcomeUnknown": "服务端尚未确认这条消息，它可能已被受理。重发前请先在会话列表中查看。",
     "sendWorkdirUnsupported": "服务端无法在所选文件夹中开始这个对话。请升级服务端，或取消文件夹后再发送。",
     "forkFailed": "分叉会话失败",
     "forkedFrom": "分叉自 {session}",
@@ -1551,7 +1551,7 @@
       "accountUnbound": "你的 IM 账号还没关联到 Memoh 账号，暂时无法使用该 Bot 的工作区。如果你是它的所有者，请在 Memoh 网页端「个人资料 → 关联账号」获取关联码，再在这里发送 {link} <关联码>。",
       "runtimeOwnerMissing": "这个外部 Agent 会话没有运行时所有者。请重新开始一个会话。",
       "discussUnsupported": "这个外部 Agent 无法在讨论模式中运行。",
-      "groupChatUnsupported": "群聊不能创建对话模式的外部 Agent 会话。请使用 /new codex 或 /new discuss codex。",
+      "groupChatUnsupported": "群聊不能创建对话模式的外部 Agent 会话。请使用 /new <Agent 名称> 或 /new discuss <Agent 名称>。",
       "projectModeInvalid": "外部 Agent 的项目模式无效。",
       "projectPathInvalid": "外部 Agent 的项目路径必须是绝对路径。",
       "displayArgsInvalid": "外部 Agent 的显示参数无效。",
@@ -3069,6 +3069,17 @@
       "stopSuccess": "工作区停止成功",
       "deleteSuccess": "工作区删除成功",
       "deletePreserveSuccess": "工作区已删除，数据已保留",
+      "removal": {
+        "removingTitle": "正在删除工作区",
+        "removingHint": "可以先离开此页面，回来仍能看到结果。",
+        "removingKeepHint": "会先备份数据，备份完成后再删除工作区。可以先离开此页面，回来仍能看到结果。",
+        "failedTitle": "工作区删除失败",
+        "failedHint": "工作区没有被删除（失败于 {time}）。可以重试，或取消删除继续使用。",
+        "retry": "重试",
+        "cancel": "取消删除",
+        "cancelSuccess": "已取消删除",
+        "recreateStopped": "旧工作区没有删除成功，未进行重建。"
+      },
       "snapshotSuccess": "快照创建成功",
       "restoreSuccess": "数据恢复成功",
       "rollbackSuccess": "快照回滚成功",
@@ -4143,6 +4154,8 @@
     "checkUpdates": "检查更新",
     "checkUpdatesDone": "更新检查完成",
     "checkUpdatesFailed": "无法检查更新",
+    "checkUpdatesIncomplete": "部分项目未能及时完成检查，仍显示上次的结果，请稍后重试。",
+    "checkUpdatesTimedOut": "检查超时，结果可能不完整，请稍后重试。",
     "browse": "浏览市场",
     "emptyTitle": "尚未安装应用",
     "emptyDescription": "为 Bot 安装应用，增加新的能力。",

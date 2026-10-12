@@ -61,8 +61,12 @@ func (a *Agent) runStream(ctx context.Context, cfg RunConfig, ch chan<- StreamEv
 		eventGate.close()
 	}()
 	aborted := false
+	recompose := false
 	turnError := ""
 	defer func() {
+		if recompose {
+			return
+		}
 		event := hooks.EventTurnEnd
 		if aborted || strings.TrimSpace(turnError) != "" {
 			event = hooks.EventTurnError
@@ -112,6 +116,11 @@ func (a *Agent) runStream(ctx context.Context, cfg RunConfig, ch chan<- StreamEv
 	var contextViewErr error
 	cfg, contextViewErr = a.applyContextView(streamCtx, cfg)
 	if contextViewErr != nil {
+		if errors.Is(contextViewErr, ErrContextRecompose) {
+			recompose = true
+			sendEvent(ctx, ch, StreamEvent{Type: EventContextRecompose})
+			return
+		}
 		failure := contextViewStreamError(contextViewErr)
 		turnError = turnHookError(failure)
 		sendEvent(ctx, ch, failure)
@@ -147,7 +156,6 @@ func (a *Agent) runStream(ctx context.Context, cfg RunConfig, ch chan<- StreamEv
 	// live InjectCh messages and read-media carriers.
 	dynamic := newLoopDynamicInputs(cfg.StepIndexOffset)
 	cfg.dynamicInputs = dynamic
-	prepareStep := a.wrapPrepareStepWithModelHook(streamCtx, cfg, nil)
 	var err error
 	cfg, err = a.applyBeforeModelCallHook(streamCtx, cfg, 0)
 	if err != nil {
@@ -156,6 +164,7 @@ func (a *Agent) runStream(ctx context.Context, cfg RunConfig, ch chan<- StreamEv
 		sendEvent(ctx, ch, failure)
 		return
 	}
+	prepareStep := a.wrapPrepareStepWithModelHook(streamCtx, cfg, nil)
 	installContextStepFailureHandler(&cfg, cancel)
 	dispatch, dispatchErr := a.buildGenerateDispatch(streamCtx, cfg, sdkTools, approvalTools, prepareStep)
 	if dispatchErr != nil {

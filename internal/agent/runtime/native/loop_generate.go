@@ -38,6 +38,9 @@ func (a *Agent) runGenerate(ctx context.Context, cfg RunConfig) (_ *GenerateResu
 	// steer, so the observer here exists for the spans alone.
 	cfg.Model = modelWithProviderCallObserver(cfg.Model, nil, nil)
 	defer func() {
+		if errors.Is(retErr, ErrContextRecompose) {
+			return
+		}
 		event := hooks.EventTurnEnd
 		errMsg := ""
 		if retErr != nil {
@@ -107,11 +110,11 @@ func (a *Agent) runGenerate(ctx context.Context, cfg RunConfig) (_ *GenerateResu
 	// (read-media carriers here; the stream loop adds live injections).
 	dynamic := newLoopDynamicInputs(cfg.StepIndexOffset)
 	cfg.dynamicInputs = dynamic
-	prepareStep := a.wrapPrepareStepWithModelHook(genCtx, cfg, nil)
 	cfg, err := a.applyBeforeModelCallHook(genCtx, cfg, 0)
 	if err != nil {
 		return nil, err
 	}
+	prepareStep := a.wrapPrepareStepWithModelHook(genCtx, cfg, nil)
 	// The generate loop surfaces context-preparation failures as returned
 	// errors at the next dispatch boundary; the run context is no longer
 	// cancelled with the failure cause.

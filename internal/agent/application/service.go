@@ -51,6 +51,7 @@ import (
 	"github.com/felinics/memoh/internal/reasoning"
 	"github.com/felinics/memoh/internal/settings"
 	"github.com/felinics/memoh/internal/workspace"
+	"github.com/felinics/memoh/internal/workspace/bridge"
 )
 
 const (
@@ -372,17 +373,19 @@ func (s *Service) Pipeline() *timeline.Pipeline {
 
 // InlineImageAttachments resolves image content hashes to sdk.ImagePart values
 // using the configured asset loader. Intended for the discuss driver to inline
-// images from new RC segments before calling the LLM.
-func (s *Service) InlineImageAttachments(ctx context.Context, botID string, refs []timeline.ImageAttachmentRef) []sdk.ImagePart {
+// images from new RC segments before calling the LLM. The result holds what
+// each reference contributes, in order, under one turn-wide vision budget; a
+// duplicate or unusable reference contributes nothing.
+func (s *Service) InlineImageAttachments(ctx context.Context, botID string, refs []timeline.ImageAttachmentRef) [][]sdk.ImagePart {
 	if s == nil || s.assetLoader == nil || len(refs) == 0 {
 		return nil
 	}
 	ctx, cancel := context.WithTimeout(ctx, attachmentPreparationTimeout)
 	defer cancel()
-	var parts []sdk.ImagePart
+	parts := make([][]sdk.ImagePart, len(refs))
 	var budget visionBudget
 	seen := make(map[string]bool, len(refs))
-	for _, ref := range refs {
+	for i, ref := range refs {
 		contentHash := strings.TrimSpace(ref.ContentHash)
 		if contentHash == "" || seen[contentHash] {
 			continue
@@ -396,7 +399,7 @@ func (s *Service) InlineImageAttachments(ctx context.Context, botID string, refs
 			s.logImageInputRejected(err, botID, contentHash)
 			continue
 		}
-		parts = append(parts, budget.take(framed)...)
+		parts[i] = budget.take(framed)
 	}
 	return parts
 }
@@ -411,6 +414,7 @@ type resolvedContext struct {
 	estimatedTokens             int // estimated input token count for compaction
 	compactableTokens           int // raw history eligible for compaction
 	compactableTokensKnown      bool
+	historyPressureTokens       int
 	contextTokenBudget          int // token budget used to clamp compaction triggers
 }
 
@@ -567,16 +571,17 @@ func (s *Service) resolveWithHTTPClient(ctx context.Context, req ChatRequest, mo
 	var historyRecords []historyfrag.HistoryRecord
 	var estimatedTokens int
 	var compactableTokens int
+	var historyPressureTokens int
 	var compactableTokensKnown bool
 	var currentMessageIndex *int
 	if usePipeline {
-		messages, compactableTokens = s.buildMessagesFromPipeline(ctx, req, contextTokenBudget)
+		messages, compactableTokens, historyPressureTokens = s.buildMessagesFromPipeline(ctx, req, contextTokenBudget)
 		compactableTokensKnown = true
 		// Pre-turn synchronous compaction backstop (CM-CMP-001), gated per
 		// CM-CMP-003. Mirrors the legacy path below: only a pass that
 		// actually produced a summary triggers recomposition; a noop keeps
 		// this turn's (already trimmed) context untouched.
-		if mode := s.effectiveSyncCompactionMode(); mode != syncCompactionModeOff && syncCompactionShouldRun(compactableTokens, contextTokenBudget) {
+		if mode := s.effectiveSyncCompactionMode(); mode != syncCompactionModeOff && syncCompactionShouldRun(historyPressureTokens, contextTokenBudget) {
 			threshold := hardCompactionThreshold(contextTokenBudget)
 			if mode == syncCompactionModeShadow {
 				s.logger.InfoContext(ctx, "sync_compaction_backstop",
@@ -589,7 +594,7 @@ func (s *Service) resolveWithHTTPClient(ctx context.Context, req ChatRequest, mo
 					slog.Int("threshold_tokens", threshold))
 			} else {
 				start := time.Now()
-				res := s.runCompactionSync(ctx, req, compactableTokens, contextTokenBudget, chatModel.ID)
+				res := s.runCompactionSync(ctx, req, historyPressureTokens, contextTokenBudget, chatModel.ID)
 				s.logger.InfoContext(ctx, "sync_compaction_backstop",
 					slog.String("path", "pipeline_chat"),
 					slog.String("mode", "active"),
@@ -600,7 +605,7 @@ func (s *Service) resolveWithHTTPClient(ctx context.Context, req ChatRequest, mo
 					slog.Int("pressure_tokens", compactableTokens),
 					slog.Int("threshold_tokens", threshold))
 				if res.Status == compaction.StatusOK {
-					messages, compactableTokens = s.buildMessagesFromPipeline(ctx, req, contextTokenBudget)
+					messages, compactableTokens, historyPressureTokens = s.buildMessagesFromPipeline(ctx, req, contextTokenBudget)
 				}
 			}
 		}
@@ -620,11 +625,9 @@ func (s *Service) resolveWithHTTPClient(ctx context.Context, req ChatRequest, mo
 		historyRecords = prepared.records
 		estimatedTokens = prepared.estimatedTokens
 		compactableTokens = prepared.compactableTokens
+		historyPressureTokens = prepared.pressureTokens
 		compactableTokensKnown = true
-		// The trigger only counts raw (compactable) rows: active summaries can
-		// never be compacted away, so including them would make the trigger
-		// self-sustaining once accumulated summaries cross the threshold.
-		if syncCompactionShouldRun(compactableTokens, contextTokenBudget) {
+		if syncCompactionShouldRun(historyPressureTokens, contextTokenBudget) {
 			compactionThreshold := hardCompactionThreshold(contextTokenBudget)
 			s.logger.WarnContext(ctx, "resolve: context reached compaction threshold, running synchronous compaction",
 				slog.String("bot_id", req.BotID),
@@ -637,7 +640,7 @@ func (s *Service) resolveWithHTTPClient(ctx context.Context, req ChatRequest, mo
 			// summary. A noop (cooldown, in-flight, nothing markable) keeps
 			// this turn's context untouched — possibly still above the
 			// threshold — and the next turn re-evaluates.
-			if res := s.runCompactionSync(ctx, req, compactableTokens, contextTokenBudget, chatModel.ID); res.Status == compaction.StatusOK {
+			if res := s.runCompactionSync(ctx, req, historyPressureTokens, contextTokenBudget, chatModel.ID); res.Status == compaction.StatusOK {
 				prepared, loadErr = s.prepareHistoryContext(ctx, req, historyFallback, contextTokenBudget)
 				if loadErr != nil {
 					s.logger.ErrorContext(ctx, "resolve: prepare history context failed",
@@ -651,6 +654,7 @@ func (s *Service) resolveWithHTTPClient(ctx context.Context, req ChatRequest, mo
 				historyRecords = prepared.records
 				estimatedTokens = prepared.estimatedTokens
 				compactableTokens = prepared.compactableTokens
+				historyPressureTokens = prepared.pressureTokens
 				// Remove tool messages from the recent context — they are large
 				// and unnecessary when we already have a summary. Keep only
 				// user/assistant conversation turns.
@@ -658,10 +662,12 @@ func (s *Service) resolveWithHTTPClient(ctx context.Context, req ChatRequest, mo
 			}
 		}
 	}
+	forkMessageCount := 0
 	if forkContext := s.subagentForkContextModelMessages(ctx, req); len(forkContext) > 0 {
 		// The inherited parent snapshot precedes the thread's own transcript,
 		// exactly as parent-driven subagent tasks assemble it.
 		messages, currentMessageIndex = prependContextMessages(forkContext, messages, currentMessageIndex)
+		forkMessageCount = normalizedContextPrefixLength(messages, len(forkContext))
 	}
 	historyMessageCount := len(messages)
 	if notice := s.currentWorkspaceContextMessage(ctx, req); notice != nil {
@@ -740,6 +746,11 @@ func (s *Service) resolveWithHTTPClient(ctx context.Context, req ChatRequest, mo
 	runCfg.InlineAttachments = extractNativeAttachmentParts(mergedAttachments)
 	runCfg.ContextScope = buildContextFragScope(req, displayName, runCfg.Identity)
 	runCfg = runCfg.RefreshContextFrag()
+	historyLayout := chatHistoryLayout{forkCount: min(forkMessageCount, runCfg.ContextTrimmableMessages), historyCount: runCfg.ContextTrimmableMessages, pressureTokens: historyPressureTokens, usePipeline: usePipeline}
+	if index := runCfg.ContextCurrentUserMessageIndex; index != nil && *index >= historyLayout.forkCount && *index < historyLayout.historyCount {
+		historyLayout.pressureTokens = max(0, historyLayout.pressureTokens-estimateMessageTokens(messages[*index]))
+	}
+	runCfg.RecoverContextBudget = s.chatBudgetRecovery(req, historyLayout)
 
 	var injectedRecords *[]InjectedMessageRecord
 	if req.InjectCh != nil {
@@ -783,6 +794,7 @@ func (s *Service) resolveWithHTTPClient(ctx context.Context, req ChatRequest, mo
 		injectedRecords:             injectedRecords,
 		estimatedTokens:             estimatedTokens,
 		compactableTokens:           compactableTokens,
+		historyPressureTokens:       historyPressureTokens,
 		compactableTokensKnown:      compactableTokensKnown,
 		contextTokenBudget:          contextTokenBudget,
 	}, req, nil
@@ -975,23 +987,6 @@ func (s *Service) buildBaseRunConfig(ctx context.Context, p baseRunConfigParams)
 		ContextWindow:         contextBudgetFromChatModel(chatModel),
 	})
 
-	var agentSkills []native.SkillEntry
-	if s.skillLoader != nil {
-		entries, skillErr := s.skillLoader.LoadSkills(ctx, p.BotID)
-		if skillErr != nil {
-			s.logger.WarnContext(ctx, "failed to load skills", slog.String("bot_id", p.BotID), slog.Any("error", skillErr))
-		} else {
-			for _, e := range entries {
-				if skill, ok := normalizeGatewaySkill(e); ok {
-					agentSkills = append(agentSkills, skill)
-				}
-			}
-		}
-	}
-	if agentSkills == nil {
-		agentSkills = []native.SkillEntry{}
-	}
-
 	cfg := native.RunConfig{
 		Model:                    sdkModel,
 		CurrentModelUUID:         chatModel.ID,
@@ -1020,11 +1015,12 @@ func (s *Service) buildBaseRunConfig(ctx context.Context, p baseRunConfigParams)
 			TimezoneLocation:  userClockLocation,
 			SessionToken:      p.SessionToken,
 		},
-		Bot:               botInfo,
-		Skills:            agentSkills,
-		LoopDetection:     native.LoopDetectionConfig{Enabled: loopDetectionEnabled},
-		BackgroundManager: s.bgManager,
-		ContextLifecycle:  contextfrag.NewLifecycleHolder(),
+		Bot:                  botInfo,
+		Skills:               []native.SkillEntry{},
+		WorkspaceUnavailable: bridge.WorkspaceUnavailableFromContext(ctx),
+		LoopDetection:        native.LoopDetectionConfig{Enabled: loopDetectionEnabled},
+		BackgroundManager:    s.bgManager,
+		ContextLifecycle:     contextfrag.NewLifecycleHolder(),
 		ContextScope: contextfrag.Scope{
 			BotID:             p.BotID,
 			ChatID:            chatID,
@@ -1046,15 +1042,51 @@ func (s *Service) buildBaseRunConfig(ctx context.Context, p baseRunConfigParams)
 		// including its error path when the target is unreachable.
 		ctx = workspace.WithWorkspaceTarget(ctx, bound.TargetID)
 	}
-	if s.workspaceTargets != nil {
-		if target, targetErr := s.workspaceTargets.ResolveWorkspaceTarget(ctx, p.BotID, ""); targetErr == nil {
-			cfg.Identity.WorkspaceTargetID = strings.TrimSpace(target.TargetID)
-			cfg.Identity.WorkspaceTargetKind = strings.TrimSpace(target.Kind)
-			cfg.Identity.WorkspaceTargetName = strings.TrimSpace(target.Name)
-		} else if workspace.WorkspaceTargetFromContext(ctx) != "" {
-			return native.RunConfig{}, models.GetResponse{}, sqlc.Provider{}, targetErr
+	if target, prepared := ctx.Value(preparedWorkspaceTargetKey{}).(workspace.ResolvedWorkspaceTarget); prepared {
+		cfg.Identity.WorkspaceTargetID, cfg.Identity.WorkspaceTargetKind, cfg.Identity.WorkspaceTargetName = target.TargetID, target.Kind, target.Name
+	} else if s.workspaceTargets != nil {
+		target, targetErr := s.resolveChatWorkspaceTarget(ctx, p.BotID, "")
+		if targetErr != nil {
+			if !errors.Is(targetErr, workspace.ErrCapabilityUnavailable) || target.TargetID == "" {
+				return native.RunConfig{}, models.GetResponse{}, sqlc.Provider{}, targetErr
+			}
+			cfg.WorkspaceUnavailable = true
+		}
+		cfg.Identity.WorkspaceTargetID, cfg.Identity.WorkspaceTargetKind, cfg.Identity.WorkspaceTargetName = target.TargetID, target.Kind, target.Name
+	}
+	if cfg.WorkspaceUnavailable {
+		cfg.SupportsToolCall = false
+		cfg.LoadNotices = append(cfg.LoadNotices, "The selected workspace or its approval configuration is unavailable for this turn. Continue with a text-only conversation. Workspace actions and tools are unavailable; the selected target and fixed working directory have not changed.")
+	}
+
+	ctx = workspace.WithWorkspaceTarget(ctx, cfg.Identity.WorkspaceTargetID)
+	var agentSkills []native.SkillEntry
+	if s.skillLoader != nil {
+		skillCtx, cancel := context.WithTimeout(ctx, 1200*time.Millisecond)
+		var entries []SkillEntry
+		var skillErr error
+		if cfg.WorkspaceUnavailable {
+			skillErr = bridge.ErrUnavailable
+		} else {
+			entries, skillErr = s.skillLoader.LoadSkills(skillCtx, p.BotID)
+		}
+		cancel()
+		if skillErr != nil {
+			s.logger.WarnContext(ctx, "failed to load skills", slog.String("bot_id", p.BotID), slog.Any("error", skillErr))
+			cfg.LoadNotices = append(cfg.LoadNotices, "Skills discovery could not be completed for this turn. The installed skills are unknown or incomplete; do not infer that none are installed. Only successfully loaded skills are available.")
+		}
+		for _, e := range entries {
+			if skill, ok := normalizeGatewaySkill(e); ok {
+				agentSkills = append(agentSkills, skill)
+			}
 		}
 	}
+
+	if agentSkills == nil {
+		agentSkills = []native.SkillEntry{}
+	}
+
+	cfg.Skills = agentSkills
 
 	return cfg, chatModel, provider, nil
 }
@@ -1365,6 +1397,7 @@ func buildModelSelectionRequest(p baseRunConfigParams, chatID string) ChatReques
 // The caller is responsible for filling RunConfig.Messages.
 // Used by discuss turns to reuse the service's model, tools, and prompt pipeline.
 func (s *Service) ResolveRunConfig(ctx context.Context, botID, sessionID, channelIdentityID, currentPlatform, replyTarget, conversationType, chatToken string) (ResolveRunConfigResult, error) {
+	ctx = hooks.WithLoadState(ctx)
 	if strings.TrimSpace(botID) == "" {
 		return ResolveRunConfigResult{}, errors.New("bot id is required")
 	}
@@ -1427,6 +1460,12 @@ func (s *Service) ResolveRunConfig(ctx context.Context, botID, sessionID, channe
 
 // prepareRunConfig generates the system prompt and appends the user message.
 func (s *Service) prepareRunConfig(ctx context.Context, cfg native.RunConfig) native.RunConfig {
+	if cfg.Identity.WorkspaceTargetID != "" {
+		ctx = workspace.WithWorkspaceTarget(ctx, cfg.Identity.WorkspaceTargetID)
+	}
+	if cfg.WorkspaceUnavailable {
+		ctx = bridge.WithWorkspaceUnavailable(ctx)
+	}
 	cfg.ContextHookText = ""
 	beforePromptResult := s.runPromptHook(ctx, agentRunConfigView{
 		BotID:        cfg.Identity.BotID,
@@ -1467,6 +1506,8 @@ func (s *Service) prepareRunConfig(ctx context.Context, cfg native.RunConfig) na
 		Bot:                       cfg.Bot,
 		Skills:                    cfg.Skills,
 		Files:                     files,
+		LoadNotices:               cfg.LoadNotices,
+		HooksLoadNotice:           hooks.LoadNotice(ctx),
 		MaxFilesBytes:             limits.SystemFilesMaxBytes,
 		Timezone:                  cfg.Identity.Timezone,
 		PlatformIdentitiesSection: platformIdentitiesSection,
@@ -1494,6 +1535,9 @@ func (s *Service) prepareRunConfig(ctx context.Context, cfg native.RunConfig) na
 		promptHookTexts = append(promptHookTexts, text)
 	}
 	cfg.ContextHookText = strings.Join(promptHookTexts, "\n\n")
+	systemParams.HooksLoadNotice = hooks.LoadNotice(ctx)
+	cfg.HooksLoadNotice = systemParams.HooksLoadNotice
+	cfg.System = native.GenerateSystemPrompt(systemParams)
 
 	if cfg.Query != "" {
 		var extra []sdk.MessagePart
@@ -1511,7 +1555,7 @@ func (s *Service) prepareRunConfig(ctx context.Context, cfg native.RunConfig) na
 	} else if len(cfg.InlineImages) > 0 || len(cfg.InlineAttachments) > 0 {
 		// Pipeline path: the user query is already embedded in the RC messages,
 		// but media parts are not rendered by the pipeline renderer. Inject the
-		// inline media into the last user message so the model receives them.
+		// inline media into the identified current input.
 		imageParts := make([]sdk.MessagePart, 0, len(cfg.InlineImages)+len(cfg.InlineAttachments))
 		for _, img := range cfg.InlineImages {
 			if strings.TrimSpace(img.Image) != "" {
@@ -1525,18 +1569,13 @@ func (s *Service) prepareRunConfig(ctx context.Context, cfg native.RunConfig) na
 				cfg.ContextCurrentUserMessageIndex,
 				cfg.ContextMemoryMessageIndex,
 			)
-			injected := false
-			for i := len(cfg.Messages) - 1; i >= 0; i-- {
-				if cfg.Messages[i].Role == sdk.MessageRoleUser {
-					cfg.Messages[i].Content = append(cfg.Messages[i].Content, imageParts...)
-					if i < len(cfg.ForkContextSourceMessageIDs) {
-						cfg.ForkContextSourceMessageIDs[i] = ""
-					}
-					injected = true
-					break
+			if currentIndex != nil {
+				i := *currentIndex
+				cfg.Messages[i].Content = append(cfg.Messages[i].Content, imageParts...)
+				if i < len(cfg.ForkContextSourceMessageIDs) {
+					cfg.ForkContextSourceMessageIDs[i] = ""
 				}
-			}
-			if !injected {
+			} else {
 				cfg.Messages = append(cfg.Messages, sdk.UserMessage("", imageParts...))
 				cfg.ForkContextSourceMessageIDs = append(cfg.ForkContextSourceMessageIDs, "")
 				index := len(cfg.Messages) - 1
@@ -1619,6 +1658,18 @@ func remapContextMessageIndex(messages []ModelMessage, index *int, stripTools bo
 }
 
 func latestModelUserMessageIndex(messages []ModelMessage) *int {
+	known := false
+	for i, message := range messages {
+		if message.ContextSource != nil {
+			known = true
+			if message.ContextSource.Current {
+				return intPointer(i)
+			}
+		}
+	}
+	if known {
+		return nil
+	}
 	for i := len(messages) - 1; i >= 0; i-- {
 		if strings.EqualFold(strings.TrimSpace(messages[i].Role), "user") {
 			return intPointer(i)
