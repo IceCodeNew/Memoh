@@ -2201,6 +2201,8 @@ definitions:
     - read_media
     - renderer_prune
     - mid_stream_retry
+    - current_input_omitted
+    - current_input_images_omitted
     - run_abort_observed
     type: string
     x-enum-varnames:
@@ -2216,6 +2218,8 @@ definitions:
     - MutationReadMedia
     - MutationRendererPrune
     - MutationMidStreamRetry
+    - MutationCurrentInputOmitted
+    - MutationCurrentInputImagesOmitted
     - MutationRunAbortObserved
   contextfrag.MutationRecord:
     properties:
@@ -3126,12 +3130,16 @@ definitions:
     type: object
   handlers.AppListResponse:
     properties:
+      dependency_catalog_refreshing:
+        type: boolean
       dependency_catalog_stale:
         type: boolean
       items:
         items:
           $ref: '#/definitions/handlers.AppItem'
         type: array
+      update_checks_incomplete:
+        type: boolean
       workspace_state:
         enum:
         - running
@@ -3817,6 +3825,8 @@ definitions:
         type: boolean
       namespace:
         type: string
+      removal:
+        $ref: '#/definitions/handlers.WorkspaceRemovalResponse'
       runtime_backend:
         type: string
       status:
@@ -4925,8 +4935,14 @@ definitions:
       last_checked_at:
         type: string
       last_error:
+        description: |-
+          LastError is text recorded by earlier servers, including the script
+          output they used to keep. A failure recorded now carries LastErrorCode.
         type: string
       last_error_code:
+        description: |-
+          LastErrorCode is the catalog code of a recorded failure, which clients
+          render as errors.<code>.
         type: string
       latest_version:
         description: |-
@@ -5000,6 +5016,11 @@ definitions:
     properties:
       catalog_fetched_at:
         type: string
+      catalog_refreshing:
+        description: |-
+          CatalogRefreshing is set while the catalog is refreshed in the
+          background; listing again shortly may show a newer catalog.
+        type: boolean
       catalog_stale:
         type: boolean
       discovery_error:
@@ -5015,6 +5036,11 @@ definitions:
         type: array
       platform:
         $ref: '#/definitions/handlers.WorkspaceDependencyPlatform'
+      update_checks_incomplete:
+        description: |-
+          UpdateChecksIncomplete is set by check-updates when some checks did not
+          finish in time; those keep their last result.
+        type: boolean
       workspace_state:
         enum:
         - running
@@ -5167,6 +5193,18 @@ definitions:
       description:
         type: string
       name:
+        type: string
+    type: object
+  handlers.WorkspaceRemovalResponse:
+    properties:
+      preserve_data:
+        type: boolean
+      state:
+        enum:
+        - removing
+        - failed
+        type: string
+      updated_at:
         type: string
     type: object
   handlers.acpRuntimeCreateRequest:
@@ -5969,6 +6007,12 @@ definitions:
         type: string
       dimensions:
         type: integer
+      max_output_tokens:
+        description: |-
+          MaxOutputTokens is the most output tokens the model can produce in one
+          response; nil means unknown. When set, every turn requests an explicit
+          limit within it.
+        type: integer
       reasoning_default_on:
         description: |-
           ReasoningDefaultOn reports whether omitting the thinking field leaves the
@@ -6460,7 +6504,12 @@ definitions:
         type: string
       completed_at:
         type: string
+      error_code:
+        type: string
       error_message:
+        description: |-
+          ErrorMessage is the text an earlier server stored; new failures set
+          ErrorCode and leave it empty.
         type: string
       id:
         type: string
@@ -9227,7 +9276,9 @@ paths:
   /bots/{bot_id}/apps/check-updates:
     post:
       description: Compares every installed App with the registry's current release,
-        runs the dependency update checks, and returns the refreshed list.
+        runs the dependency update checks, and returns the refreshed list. The checks
+        are bounded in time; update_checks_incomplete marks a list where some did
+        not finish and keep their last result.
       parameters:
       - description: Bot ID
         in: path
@@ -9753,6 +9804,8 @@ paths:
       - connectors
   /bots/{bot_id}/container:
     delete:
+      description: Records the removal and answers at once. The workspace is gone
+        when GET answers 404; until then GET reports the removal's state.
       parameters:
       - description: Bot ID
         in: path
@@ -9764,8 +9817,8 @@ paths:
         name: preserve_data
         type: boolean
       responses:
-        "204":
-          description: No Content
+        "202":
+          description: Accepted
         "404":
           description: Not Found
           schema:
@@ -10586,6 +10639,26 @@ paths:
       summary: Update workspace metrics settings for bot
       tags:
       - containerd
+  /bots/{bot_id}/container/removal/cancel:
+    post:
+      description: Keeps the workspace after its removal failed. Does nothing when
+        no removal has failed; one still in progress cannot be withdrawn.
+      parameters:
+      - description: Bot ID
+        in: path
+        name: bot_id
+        required: true
+        type: string
+      responses:
+        "204":
+          description: No Content
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/server.Problem'
+      summary: Withdraw a failed workspace removal
+      tags:
+      - containerd
   /bots/{bot_id}/container/skills:
     delete:
       parameters:
@@ -11260,7 +11333,9 @@ paths:
   /bots/{bot_id}/dependencies/check-updates:
     post:
       description: Re-discovers the workspace and runs the upstream update check of
-        every installed tool dependency, then returns the refreshed list.
+        every installed tool dependency, then returns the refreshed list. The checks
+        are bounded in time; update_checks_incomplete marks a list where some did
+        not finish and keep their last result.
       parameters:
       - description: Bot ID
         in: path

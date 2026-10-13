@@ -103,9 +103,11 @@ const missingBotName = ref('')
 const isChatRoute = () => CHAT_ROUTE_NAMES.has(route.name as string)
 
 // Home remains mounted behind settings, so the route gates the browser title.
+// A first send's session is titled like the draft it came from until the
+// server confirms the send (see isSessionTentative).
 useTitle(() => {
   const session = activeSession.value
-  if (!isChatRoute() || !currentBotId.value || !session) return 'Memoh'
+  if (!isChatRoute() || !currentBotId.value || !session || chatStore.isSessionTentative(session.id)) return 'Memoh'
   const title = (session.title ?? '').trim() || routeConversationLabel(session) || t('chat.untitledSession')
   return `Memoh · ${title}`
 }, { restoreOnUnmount: () => 'Memoh' })

@@ -22,6 +22,15 @@ export function sendFailedMessage() {
   return localizedMessages().chat.sendFailed
 }
 
+// A first send that ended without the server's answer: it may have been taken.
+export function sendOutcomeUnknownMessage() {
+  return localizedMessages().chat.sendOutcomeUnknown
+}
+
+export function workdirMismatchMessage() {
+  return localizedMessages().chat.sendWorkdirUnsupported
+}
+
 // The copy for a command error the client raises itself, by its catalog code.
 export function commandErrorMessage(code: string) {
   return commandActionErrorMessage({ code })
