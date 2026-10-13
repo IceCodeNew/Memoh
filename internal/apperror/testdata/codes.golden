@@ -160,6 +160,7 @@ native_history_lost	503
 network.provider_not_configured	409
 no_workspace_exec	403
 oauth.state_invalid	400
+output_truncated	422
 profile.request_invalid	400
 profile.title_model_invalid	400
 profile.update_failed	500
@@ -283,6 +284,9 @@ workdir.not_found	404
 workdir.remote_unsupported_for_agent	400
 workspace.archive_invalid	400
 workspace.display_prepare_failed	500
+workspace.image_not_found	400
+workspace.image_registry_unavailable	503
+workspace.teardown_failed	500
 workspace.template_bootstrap_failed	500
 workspace.unreachable	503
 workspace_create_failed	500

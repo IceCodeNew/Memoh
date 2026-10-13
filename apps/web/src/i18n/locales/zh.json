@@ -288,7 +288,7 @@
       "native_managed": "内置抓取服务由 Memoh 管理，无法这样修改。",
       "not_found": "这个抓取服务已不存在，请刷新列表后重新选择。"
     },
-    "group_chat_acp_unsupported": "群聊不能创建对话模式的外部 Agent 会话。请使用 /new codex 或 /new discuss codex。",
+    "group_chat_acp_unsupported": "群聊不能创建对话模式的外部 Agent 会话。请使用 /new <Agent 名称> 或 /new discuss <Agent 名称>。",
     "history": {
       "delete_failed": "会话历史删除失败，请重试。"
     },
@@ -342,6 +342,7 @@
     "oauth": {
       "state_invalid": "本次授权已过期或已失效，请重新发起授权。"
     },
+    "output_truncated": "回复达到模型的输出上限，内容被截断。可以让它继续，或把请求拆成更小的部分。",
     "profile": {
       "request_invalid": "个人资料更新请求无效。",
       "title_model_invalid": "所选标题模型不可用或不是聊天模型。",
@@ -520,6 +521,9 @@
     "workspace": {
       "archive_invalid": "无法解压该文件，请使用有效的 .zip、.tar.gz 或 .tgz 文件。",
       "display_prepare_failed": "显示环境准备失败，请稍后重试。",
+      "image_not_found": "工作区镜像不存在、需要镜像仓库凭据，或名称无效，请检查镜像名称后重试。",
+      "image_registry_unavailable": "暂时无法连接镜像仓库，请稍后重试。",
+      "teardown_failed": "移除工作区失败。请重试删除 bot。",
       "template_bootstrap_failed": "工作区文件初始化失败，请尝试重建工作区。",
       "unreachable": "暂时无法连接工作区，请稍后重试。"
     },
@@ -1188,7 +1192,7 @@
     "pdfUnsupportedByModel": "当前模型不支持读取 PDF,文件将以路径形式存入工作区,模型无法直接查看其内容。",
     "send": "发送",
     "sendFailed": "消息发送失败",
-    "sendConfirmTimeout": "服务端长时间没有确认这条消息，请重新发送。",
+    "sendOutcomeUnknown": "服务端尚未确认这条消息，它可能已被受理。重发前请先在会话列表中查看。",
     "sendWorkdirUnsupported": "服务端无法在所选文件夹中开始这个对话。请升级服务端，或取消文件夹后再发送。",
     "forkFailed": "分叉会话失败",
     "forkedFrom": "分叉自 {session}",
@@ -1488,7 +1492,6 @@
     "reasoningEffort": "推理",
     "reasoningOn": "开启",
     "reasoningOff": "关闭",
-    "reasoningAdaptive": "自适应",
     "reasoningMinimal": "极简",
     "reasoningLow": "低",
     "reasoningMedium": "中",
@@ -1551,7 +1554,7 @@
       "accountUnbound": "你的 IM 账号还没关联到 Memoh 账号，暂时无法使用该 Bot 的工作区。如果你是它的所有者，请在 Memoh 网页端「个人资料 → 关联账号」获取关联码，再在这里发送 {link} <关联码>。",
       "runtimeOwnerMissing": "这个外部 Agent 会话没有运行时所有者。请重新开始一个会话。",
       "discussUnsupported": "这个外部 Agent 无法在讨论模式中运行。",
-      "groupChatUnsupported": "群聊不能创建对话模式的外部 Agent 会话。请使用 /new codex 或 /new discuss codex。",
+      "groupChatUnsupported": "群聊不能创建对话模式的外部 Agent 会话。请使用 /new <Agent 名称> 或 /new discuss <Agent 名称>。",
       "projectModeInvalid": "外部 Agent 的项目模式无效。",
       "projectPathInvalid": "外部 Agent 的项目路径必须是绝对路径。",
       "displayArgsInvalid": "外部 Agent 的显示参数无效。",
@@ -1824,6 +1827,37 @@
       }
     }
   },
+  "chatExamples": {
+    "noBot": "请先创建一个 Bot 再试试。",
+    "createBot": "创建 Bot",
+    "tryThese": "试试这些",
+    "needs": "需要{capability}",
+    "capability": {
+      "web_search": "网页搜索",
+      "memory": "长期记忆",
+      "email": "邮件",
+      "workspace": "工作区",
+      "browser": "浏览器",
+      "schedule": "定时任务",
+      "channel": "渠道"
+    },
+    "sidebarEntry": "看看 Memoh 能做什么",
+    "galleryTitle": "看看 Memoh 能做什么",
+    "galleryDescription": "选一个示例填进输入框，发送前可以修改。",
+    "refresh": "换一批",
+    "refreshFailed": "没能换一批，请稍后再试。",
+    "fillIn": "填入",
+    "dismiss": "隐藏推荐",
+    "replaceDraft": {
+      "title": "替换输入框里的内容？",
+      "description": "输入框里有还没发送的内容，替换成这条提示词后，原内容会被丢弃。",
+      "confirm": "替换"
+    },
+    "share": {
+      "prompt": "你用 Memoh 做过什么？带上 #Memoh，把你的使用案例分享到 X。",
+      "action": "分享到 X"
+    }
+  },
   "models": {
     "title": "模型",
     "searchPlaceholder": "搜索服务商…",
@@ -1862,6 +1896,9 @@
     "reasoningEfforts": "支持的推理强度",
     "reasoningEffortsPlaceholder": "选择推理强度",
     "contextWindowMin": "上下文窗口需大于 0",
+    "maxOutputTokens": "最大输出 Token",
+    "maxOutputTokensPlaceholder": "例如 8192",
+    "maxOutputTokensMin": "最大输出 Token 需大于 0",
     "testModel": "测试模型",
     "enable": "启用模型",
     "toggleFailed": "更新模型失败",
@@ -2865,9 +2902,7 @@
         "removed": "已卸载 {name}",
         "failed": "{name} 操作失败"
       },
-      "busy": "此工作区还有其他依赖操作在进行中。",
-      "catalogStaleTitle": "正在显示缓存的依赖",
-      "catalogStaleDescription": "暂时无法连接 Supermarket，可重试获取最新目录。"
+      "busy": "此工作区还有其他依赖操作在进行中。"
     },
     "folders": {
       "create": "新建文件夹",
@@ -3071,6 +3106,17 @@
       "stopSuccess": "工作区停止成功",
       "deleteSuccess": "工作区删除成功",
       "deletePreserveSuccess": "工作区已删除，数据已保留",
+      "removal": {
+        "removingTitle": "正在删除工作区",
+        "removingHint": "可以先离开此页面，回来仍能看到结果。",
+        "removingKeepHint": "会先备份数据，备份完成后再删除工作区。可以先离开此页面，回来仍能看到结果。",
+        "failedTitle": "工作区删除失败",
+        "failedHint": "工作区没有被删除（失败于 {time}）。可以重试，或取消删除继续使用。",
+        "retry": "重试",
+        "cancel": "取消删除",
+        "cancelSuccess": "已取消删除",
+        "recreateStopped": "旧工作区没有删除成功，未进行重建。"
+      },
       "snapshotSuccess": "快照创建成功",
       "restoreSuccess": "数据恢复成功",
       "rollbackSuccess": "快照回滚成功",
@@ -4106,23 +4152,10 @@
       "title": "一切就绪",
       "subtitle": "进入 Memoh，开始你的第一段对话",
       "action": "打开 Memoh",
-      "cards": {
-        "im": {
-          "title": "IM 接入",
-          "desc": "把 Bot 部署到 Telegram 等渠道"
-        },
-        "voice": {
-          "title": "语音对话",
-          "desc": "语音合成与转写让 Bot 开口"
-        },
-        "search": {
-          "title": "网络搜索",
-          "desc": "接入搜索引擎，让 Bot 获取实时信息"
-        }
-      },
       "saveFailed": "保存失败，请重试",
       "navigationFailed": "无法打开 Bot，请重试。",
-      "noModelWarning": "尚未为 Bot 选择模型，Bot 将无法回复消息。你可以稍后在 Bot 设置中配置。"
+      "noModelWarning": "尚未为 Bot 选择模型，Bot 将无法回复消息。你可以稍后在 Bot 设置中配置。",
+      "examplesHint": "也可以从一个示例开始"
     }
   },
   "deviceCode": {
@@ -4145,6 +4178,8 @@
     "checkUpdates": "检查更新",
     "checkUpdatesDone": "更新检查完成",
     "checkUpdatesFailed": "无法检查更新",
+    "checkUpdatesIncomplete": "部分项目未能及时完成检查，仍显示上次的结果，请稍后重试。",
+    "checkUpdatesTimedOut": "检查超时，结果可能不完整，请稍后重试。",
     "browse": "浏览市场",
     "emptyTitle": "尚未安装应用",
     "emptyDescription": "为 Bot 安装应用，增加新的能力。",
@@ -4161,7 +4196,8 @@
       "update": "更新",
       "remove": "卸载",
       "viewProgress": "查看进度",
-      "open": "在市场中查看"
+      "open": "在市场中查看",
+      "tryIt": "试用一下"
     },
     "section": {
       "skills": "{count} 个 Skill",
@@ -4257,6 +4293,9 @@
       "release": "应用发布",
       "confirm": "更新 {count} 项",
       "none": "没有可更新的项目。"
+    },
+    "tryIt": {
+      "prompt": "帮我测试 {name} App，演示一下它的功能怎么用，再简单介绍一下它都能做什么。"
     }
   },
   "runtime": {

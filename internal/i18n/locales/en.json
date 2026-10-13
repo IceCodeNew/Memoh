@@ -29,6 +29,8 @@
     "modeDiscussion": "discussion",
     "modeWithRuntime": "{mode} with {runtime}",
     "usage": "Couldn't read that — use /new for a chat, or /new discuss for a discussion.",
+    "agentNotFound": "No agent has that name. Use /new <name> with one of these:\n{agents}",
+    "noAgents": "No agent has that name, and this bot has no agents available yet.",
     "confirmTitle": "⚠️ Confirm /new",
     "confirmBody": "This starts a fresh {mode} session and discards the current conversation history.",
     "action": {
@@ -161,7 +163,7 @@
       "top": {
         "help": "show this help",
         "start": "show the welcome message",
-        "new": "start a new conversation",
+        "new": "start a new conversation, optionally with an agent name",
         "stop": "stop the current reply",
         "approve": "approve the latest or specified pending tool call",
         "reject": "reject the latest or specified pending tool call"
@@ -659,7 +661,7 @@
       "native_managed": "The built-in fetch provider is managed by Memoh and cannot be changed this way.",
       "not_found": "This fetch provider no longer exists. Refresh the list and choose another one."
     },
-    "group_chat_acp_unsupported": "Group chats cannot create a chat-mode external-agent session. Use /new codex or /new discuss codex.",
+    "group_chat_acp_unsupported": "Group chats cannot create a chat-mode external-agent session. Use /new <agent name> or /new discuss <agent name>.",
     "history": {
       "delete_failed": "The conversation history could not be deleted. Please try again."
     },
@@ -713,6 +715,7 @@
     "oauth": {
       "state_invalid": "This authorization has expired or is no longer valid. Start the authorization again."
     },
+    "output_truncated": "The reply reached the model's output limit and was cut off. Ask it to continue, or split the request into smaller parts.",
     "profile": {
       "request_invalid": "The profile update request is invalid.",
       "title_model_invalid": "The selected title model is unavailable or is not a chat model.",
@@ -891,6 +894,9 @@
     "workspace": {
       "archive_invalid": "The archive cannot be extracted. Use a valid .zip, .tar.gz or .tgz file.",
       "display_prepare_failed": "Display preparation failed.",
+      "image_not_found": "The workspace image does not exist, needs registry credentials, or its name is invalid. Check the image name and try again.",
+      "image_registry_unavailable": "The image registry could not be reached. Please try again later.",
+      "teardown_failed": "Workspace removal failed. Retry deleting the bot.",
       "template_bootstrap_failed": "The workspace files could not be initialized. Please try rebuilding the workspace.",
       "unreachable": "The workspace could not be reached."
     },

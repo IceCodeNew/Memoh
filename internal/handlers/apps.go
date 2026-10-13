@@ -145,11 +145,17 @@ type AppItem struct {
 	UpdatedAt     *time.Time                                  `json:"updated_at,omitempty"`
 }
 
-// AppListResponse is the App view of one bot workspace.
+// AppListResponse is the App view of one bot workspace. Check-updates sets
+// UpdateChecksIncomplete when some App or dependency checks did not finish in
+// time; those keep their last result. DependencyCatalogRefreshing is set while
+// the dependency catalog is refreshed in the background; listing again shortly
+// may show a newer catalog.
 type AppListResponse struct {
-	WorkspaceState         string    `json:"workspace_state,omitempty" enums:"running,not_running,missing"`
-	DependencyCatalogStale bool      `json:"dependency_catalog_stale"`
-	Items                  []AppItem `json:"items"`
+	WorkspaceState              string    `json:"workspace_state,omitempty" enums:"running,not_running,missing"`
+	DependencyCatalogStale      bool      `json:"dependency_catalog_stale"`
+	DependencyCatalogRefreshing bool      `json:"dependency_catalog_refreshing,omitempty"`
+	UpdateChecksIncomplete      bool      `json:"update_checks_incomplete,omitempty"`
+	Items                       []AppItem `json:"items"`
 }
 
 // AppInstallRequest names one immutable App release to install.
@@ -297,7 +303,7 @@ func (h *AppsHandler) Get(c echo.Context) error {
 
 // CheckUpdates godoc
 // @Summary Check installed Apps for newer releases
-// @Description Compares every installed App with the registry's current release, runs the dependency update checks, and returns the refreshed list.
+// @Description Compares every installed App with the registry's current release, runs the dependency update checks, and returns the refreshed list. The checks are bounded in time; update_checks_incomplete marks a list where some did not finish and keep their last result.
 // @Tags apps
 // @Produce json
 // @Param bot_id path string true "Bot ID"
@@ -663,9 +669,11 @@ func (*AppsHandler) httpError(err error) error {
 
 func appListResponse(result apps.ListResult) AppListResponse {
 	resp := AppListResponse{
-		WorkspaceState:         string(result.Workspace),
-		DependencyCatalogStale: result.DependencyCatalogStale,
-		Items:                  make([]AppItem, 0, len(result.Items)),
+		WorkspaceState:              string(result.Workspace),
+		DependencyCatalogStale:      result.DependencyCatalogStale,
+		DependencyCatalogRefreshing: result.DependencyCatalogRefreshing,
+		UpdateChecksIncomplete:      result.UpdateChecksIncomplete,
+		Items:                       make([]AppItem, 0, len(result.Items)),
 	}
 	for _, item := range result.Items {
 		resp.Items = append(resp.Items, appItem(item, result.DataRoot))

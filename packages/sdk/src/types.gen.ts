@@ -1239,7 +1239,7 @@ export type ContextfragMemoryRecallTrace = {
     retrieval_mode?: string;
 };
 
-export type ContextfragMutationKind = 'before_model_call_hook' | 'background_summary' | 'mid_task_prune' | 'loop_step_reselection' | 'injected_message' | 'context_view_fallback' | 'context_budget_failure' | 'context_budget_disabled' | 'capability_gate' | 'read_media' | 'renderer_prune' | 'mid_stream_retry' | 'run_abort_observed';
+export type ContextfragMutationKind = 'before_model_call_hook' | 'background_summary' | 'mid_task_prune' | 'loop_step_reselection' | 'injected_message' | 'context_view_fallback' | 'context_budget_failure' | 'context_budget_disabled' | 'capability_gate' | 'read_media' | 'renderer_prune' | 'mid_stream_retry' | 'current_input_omitted' | 'current_input_images_omitted' | 'run_abort_observed';
 
 export type ContextfragMutationRecord = {
     detail?: string;
@@ -1746,8 +1746,10 @@ export type HandlersAppItem = {
 };
 
 export type HandlersAppListResponse = {
+    dependency_catalog_refreshing?: boolean;
     dependency_catalog_stale?: boolean;
     items?: Array<HandlersAppItem>;
+    update_checks_incomplete?: boolean;
     workspace_state?: 'running' | 'not_running' | 'missing';
 };
 
@@ -2164,6 +2166,7 @@ export type HandlersGetContainerResponse = {
     image?: string;
     legacy?: boolean;
     namespace?: string;
+    removal?: HandlersWorkspaceRemovalResponse;
     runtime_backend?: string;
     status?: string;
     task_running?: boolean;
@@ -2407,6 +2410,28 @@ export type HandlersSnapshotInfo = {
     source?: string;
     updated_at?: string;
     version?: number;
+};
+
+export type HandlersStarterPrompt = {
+    prompt: string;
+    title: string;
+};
+
+export type HandlersStarterPromptsRefreshRequest = {
+    /**
+     * Avoid lists the prompts currently shown, which the new set must not repeat.
+     */
+    avoid?: Array<string>;
+    /**
+     * Locale is the BCP 47 language tag the suggestions are written in. Defaults to en.
+     */
+    locale?: string;
+};
+
+export type HandlersStarterPromptsResponse = {
+    hash: string;
+    items: Array<HandlersStarterPrompt>;
+    unchanged: boolean;
 };
 
 export type HandlersSupermarketAppCategory = {
@@ -2806,6 +2831,11 @@ export type HandlersWorkspaceDependencyItem = {
 
 export type HandlersWorkspaceDependencyListResponse = {
     catalog_fetched_at?: string;
+    /**
+     * CatalogRefreshing is set while the catalog is refreshed in the
+     * background; listing again shortly may show a newer catalog.
+     */
+    catalog_refreshing?: boolean;
     catalog_stale?: boolean;
     /**
      * DiscoveryError is set when the workspace is running but could not be
@@ -2816,6 +2846,11 @@ export type HandlersWorkspaceDependencyListResponse = {
     discovery_error?: string;
     items?: Array<HandlersWorkspaceDependencyItem>;
     platform?: HandlersWorkspaceDependencyPlatform;
+    /**
+     * UpdateChecksIncomplete is set by check-updates when some checks did not
+     * finish in time; those keep their last result.
+     */
+    update_checks_incomplete?: boolean;
     workspace_state?: 'running' | 'not_running' | 'missing';
 };
 
@@ -2895,6 +2930,12 @@ export type HandlersWorkspaceDependencyStreamEvent = {
 export type HandlersWorkspaceDependencyTranslation = {
     description?: string;
     name?: string;
+};
+
+export type HandlersWorkspaceRemovalResponse = {
+    preserve_data?: boolean;
+    state?: 'removing' | 'failed';
+    updated_at?: string;
 };
 
 export type HandlersAcpRuntimeCreateRequest = {
@@ -3411,6 +3452,12 @@ export type ModelsModelConfig = {
     description?: string;
     dimensions?: number;
     /**
+     * MaxOutputTokens is the most output tokens the model can produce in one
+     * response; nil means unknown. When set, every turn requests an explicit
+     * limit within it.
+     */
+    max_output_tokens?: number;
+    /**
      * ReasoningDefaultOn reports whether omitting the thinking field leaves the
      * model thinking. Separate from off-ability: Claude 4.6 can be turned off *and*
      * defaults to off, while Opus 5 can be turned off but defaults to on, so
@@ -3766,6 +3813,11 @@ export type ScheduleListResponse = {
 export type ScheduleLog = {
     bot_id?: string;
     completed_at?: string;
+    error_code?: string;
+    /**
+     * ErrorMessage is the text an earlier server stored; new failures set
+     * ErrorCode and leave it empty.
+     */
     error_message?: string;
     id?: string;
     result_text?: string;
@@ -7264,9 +7316,9 @@ export type DeleteBotsByBotIdContainerError = DeleteBotsByBotIdContainerErrors[k
 
 export type DeleteBotsByBotIdContainerResponses = {
     /**
-     * No Content
+     * Accepted
      */
-    204: unknown;
+    202: unknown;
 };
 
 export type GetBotsByBotIdContainerData = {
@@ -8257,6 +8309,34 @@ export type PutBotsByBotIdContainerMetricsResponses = {
 };
 
 export type PutBotsByBotIdContainerMetricsResponse = PutBotsByBotIdContainerMetricsResponses[keyof PutBotsByBotIdContainerMetricsResponses];
+
+export type PostBotsByBotIdContainerRemovalCancelData = {
+    body?: never;
+    path: {
+        /**
+         * Bot ID
+         */
+        bot_id: string;
+    };
+    query?: never;
+    url: '/bots/{bot_id}/container/removal/cancel';
+};
+
+export type PostBotsByBotIdContainerRemovalCancelErrors = {
+    /**
+     * Internal Server Error
+     */
+    500: ServerProblem;
+};
+
+export type PostBotsByBotIdContainerRemovalCancelError = PostBotsByBotIdContainerRemovalCancelErrors[keyof PostBotsByBotIdContainerRemovalCancelErrors];
+
+export type PostBotsByBotIdContainerRemovalCancelResponses = {
+    /**
+     * No Content
+     */
+    204: unknown;
+};
 
 export type DeleteBotsByBotIdContainerSkillsData = {
     /**
@@ -12601,6 +12681,94 @@ export type GetBotsByBotIdSkillsCatalogResponses = {
 };
 
 export type GetBotsByBotIdSkillsCatalogResponse = GetBotsByBotIdSkillsCatalogResponses[keyof GetBotsByBotIdSkillsCatalogResponses];
+
+export type GetBotsByBotIdStarterPromptsData = {
+    body?: never;
+    path: {
+        /**
+         * Bot ID
+         */
+        bot_id: string;
+    };
+    query?: {
+        /**
+         * BCP 47 language tag the suggestions are written in. Defaults to en.
+         */
+        locale?: string;
+        /**
+         * Hash of the set the client already holds.
+         */
+        known_hash?: string;
+    };
+    url: '/bots/{bot_id}/starter-prompts';
+};
+
+export type GetBotsByBotIdStarterPromptsErrors = {
+    /**
+     * Bad Request
+     */
+    400: ServerProblem;
+    /**
+     * Forbidden
+     */
+    403: ServerProblem;
+    /**
+     * Internal Server Error
+     */
+    500: ServerProblem;
+};
+
+export type GetBotsByBotIdStarterPromptsError = GetBotsByBotIdStarterPromptsErrors[keyof GetBotsByBotIdStarterPromptsErrors];
+
+export type GetBotsByBotIdStarterPromptsResponses = {
+    /**
+     * OK
+     */
+    200: HandlersStarterPromptsResponse;
+};
+
+export type GetBotsByBotIdStarterPromptsResponse = GetBotsByBotIdStarterPromptsResponses[keyof GetBotsByBotIdStarterPromptsResponses];
+
+export type PostBotsByBotIdStarterPromptsRefreshData = {
+    /**
+     * Locale and the prompts on screen
+     */
+    body: HandlersStarterPromptsRefreshRequest;
+    path: {
+        /**
+         * Bot ID
+         */
+        bot_id: string;
+    };
+    query?: never;
+    url: '/bots/{bot_id}/starter-prompts/refresh';
+};
+
+export type PostBotsByBotIdStarterPromptsRefreshErrors = {
+    /**
+     * Bad Request
+     */
+    400: ServerProblem;
+    /**
+     * Forbidden
+     */
+    403: ServerProblem;
+    /**
+     * Internal Server Error
+     */
+    500: ServerProblem;
+};
+
+export type PostBotsByBotIdStarterPromptsRefreshError = PostBotsByBotIdStarterPromptsRefreshErrors[keyof PostBotsByBotIdStarterPromptsRefreshErrors];
+
+export type PostBotsByBotIdStarterPromptsRefreshResponses = {
+    /**
+     * OK
+     */
+    200: HandlersStarterPromptsResponse;
+};
+
+export type PostBotsByBotIdStarterPromptsRefreshResponse = PostBotsByBotIdStarterPromptsRefreshResponses[keyof PostBotsByBotIdStarterPromptsRefreshResponses];
 
 export type GetBotsByBotIdTokenUsageData = {
     body?: never;

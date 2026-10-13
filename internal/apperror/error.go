@@ -45,6 +45,8 @@ const (
 	CodeWorkspaceUnreachable                     Code = "workspace.unreachable"
 	CodeWorkspaceTemplateBootstrapFailed         Code = "workspace.template_bootstrap_failed"
 	CodeWorkspaceDisplayPrepareFailed            Code = "workspace.display_prepare_failed"
+	CodeWorkspaceImageNotFound                   Code = "workspace.image_not_found"
+	CodeWorkspaceImageRegistryUnavailable        Code = "workspace.image_registry_unavailable"
 	CodeWorkspaceDependencyNotFound              Code = "workspace_dependency.not_found"
 	CodeWorkspaceDependencyRequestInvalid        Code = "workspace_dependency.request_invalid"
 	CodeWorkspaceDependencyActionUnsupported     Code = "workspace_dependency.action_unsupported"
@@ -193,6 +195,7 @@ const (
 	CodeRuntimeNativeHistoryLost   Code = "native_history_lost"
 	CodeRuntimeToolsUnavailable    Code = "tools_unavailable"
 	CodeRuntimeElicitationDeclined Code = "elicitation_declined"
+	CodeRuntimeOutputTruncated     Code = "output_truncated"
 	CodeQueueCapacityExceeded      Code = "queue_capacity_exceeded"
 	CodeQueueSteerUnsupported      Code = "queue.steer_unsupported"
 
@@ -369,6 +372,7 @@ const (
 	CodeWorkspaceResourceLimitsRequired         Code = "workspace_resource_limits_required"
 	CodeWorkspaceResourceLimitsSaveFailed       Code = "workspace_resource_limits_save_failed"
 	CodeWorkspaceDeleteFailed                   Code = "workspace_delete_failed"
+	CodeWorkspaceTeardownFailed                 Code = "workspace.teardown_failed"
 	CodeWorkspaceStartFailed                    Code = "workspace_start_failed"
 	CodeWorkspaceStopFailed                     Code = "workspace_stop_failed"
 	CodeWorkspaceSnapshotsUnsupported           Code = "workspace_snapshots_unsupported"
@@ -588,6 +592,17 @@ var catalog = map[Code]Definition{
 	CodeWorkspaceDisplayPrepareFailed: {
 		HTTPStatus: http.StatusInternalServerError,
 		Detail:     "Display preparation failed.",
+	},
+	// The image name is a setting the user can change; the registry is the
+	// dependency whose outage the user can only wait out.
+	CodeWorkspaceImageNotFound: {
+		HTTPStatus: http.StatusBadRequest,
+		Detail:     "The workspace image does not exist, needs registry credentials, or its name is invalid. Check the image name and try again.",
+	},
+	CodeWorkspaceImageRegistryUnavailable: {
+		HTTPStatus: http.StatusServiceUnavailable,
+		Fault:      FaultDependency,
+		Detail:     "The image registry could not be reached. Try again later.",
 	},
 	// Workspace dependencies (design docs/design/workspace-dependencies.md
 	// §11). The 409 family tells the UI what to offer instead: start or
@@ -1167,6 +1182,10 @@ var catalog = map[Code]Definition{
 		HTTPStatus: http.StatusUnprocessableEntity,
 		Detail:     "A tool requested an interaction that could not be shown. The request was declined.",
 	},
+	CodeRuntimeOutputTruncated: {
+		HTTPStatus: http.StatusUnprocessableEntity,
+		Detail:     "The reply reached the model's output limit and was cut off. Ask it to continue, or split the request into smaller parts.",
+	},
 	CodeQueueNoActiveRun: {
 		HTTPStatus: http.StatusConflict,
 		Detail:     "There is no active run to receive this queued input.",
@@ -1297,7 +1316,7 @@ var catalog = map[Code]Definition{
 	CodeNoWorkspaceExec:          {HTTPStatus: http.StatusForbidden, Detail: "You do not have permission to run workspace commands for this bot."},
 	CodeACPRuntimeOwnerMissing:   {HTTPStatus: http.StatusConflict, Detail: "This external-agent session has no runtime owner. Start a new session to continue."},
 	CodeACPDiscussUnsupported:    {HTTPStatus: http.StatusBadRequest, Detail: "This external agent cannot run in discuss mode."},
-	CodeGroupChatACPUnsupported:  {HTTPStatus: http.StatusBadRequest, Detail: "Group chats cannot create a chat-mode external-agent session. Use /new codex or /new discuss codex."},
+	CodeGroupChatACPUnsupported:  {HTTPStatus: http.StatusBadRequest, Detail: "Group chats cannot create a chat-mode external-agent session. Use /new <agent name> or /new discuss <agent name>."},
 	CodeACPProjectModeInvalid:    {HTTPStatus: http.StatusBadRequest, Detail: "The external agent project mode is invalid."},
 	CodeACPProjectPathInvalid:    {HTTPStatus: http.StatusBadRequest, Detail: "The external agent project path must be absolute."},
 	CodeACPDisplayArgsInvalid:    {HTTPStatus: http.StatusBadRequest, Detail: "The external agent display arguments are invalid."},
@@ -1358,6 +1377,7 @@ var catalog = map[Code]Definition{
 	CodeWorkspaceResourceLimitsRequired:         {HTTPStatus: http.StatusBadRequest, Detail: "Resource limits are required."},
 	CodeWorkspaceResourceLimitsSaveFailed:       {HTTPStatus: http.StatusInternalServerError, Detail: "Failed to save resource limits. Please try again."},
 	CodeWorkspaceDeleteFailed:                   {HTTPStatus: http.StatusInternalServerError, Detail: "Failed to delete the workspace. Please try again."},
+	CodeWorkspaceTeardownFailed:                 {HTTPStatus: http.StatusInternalServerError, Detail: "Workspace removal failed. Retry deleting the bot."},
 	CodeWorkspaceStartFailed:                    {HTTPStatus: http.StatusInternalServerError, Detail: "Failed to start the workspace. Please try again."},
 	CodeWorkspaceStopFailed:                     {HTTPStatus: http.StatusInternalServerError, Detail: "Failed to stop the workspace. Please try again."},
 	CodeWorkspaceSnapshotsUnsupported:           {HTTPStatus: http.StatusNotImplemented, Detail: "Snapshots are not supported by this workspace runtime."},

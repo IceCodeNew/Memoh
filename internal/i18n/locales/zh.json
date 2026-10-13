@@ -29,6 +29,8 @@
     "modeDiscussion": "讨论",
     "modeWithRuntime": "{mode}（{runtime}）",
     "usage": "无法识别参数。用 /new 开始对话，/new discuss 开始讨论。",
+    "agentNotFound": "没有找到这个 Agent。用 /new <名称> 指定下面其中一个：\n{agents}",
+    "noAgents": "没有找到这个 Agent，这个 Bot 还没有可用的 Agent。",
     "confirmTitle": "⚠️ 确认 /new",
     "confirmBody": "将开始全新{mode}会话，当前对话记录会被清除。",
     "action": {
@@ -161,7 +163,7 @@
       "top": {
         "help": "显示帮助",
         "start": "显示欢迎信息",
-        "new": "开始新对话",
+        "new": "开始新对话，后面可跟 Agent 名称",
         "stop": "停止当前回复",
         "approve": "批准待执行的工具调用",
         "reject": "拒绝待执行的工具调用"
@@ -659,7 +661,7 @@
       "native_managed": "内置抓取服务由 Memoh 管理，无法这样修改。",
       "not_found": "这个抓取服务已不存在，请刷新列表后重新选择。"
     },
-    "group_chat_acp_unsupported": "群聊不能创建对话模式的外部 Agent 会话。请使用 /new codex 或 /new discuss codex。",
+    "group_chat_acp_unsupported": "群聊不能创建对话模式的外部 Agent 会话。请使用 /new <Agent 名称> 或 /new discuss <Agent 名称>。",
     "history": {
       "delete_failed": "会话历史删除失败，请重试。"
     },
@@ -713,6 +715,7 @@
     "oauth": {
       "state_invalid": "本次授权已过期或已失效，请重新发起授权。"
     },
+    "output_truncated": "回复达到模型的输出上限，内容被截断。可以让它继续，或把请求拆成更小的部分。",
     "profile": {
       "request_invalid": "个人资料更新请求无效。",
       "title_model_invalid": "所选标题模型不可用或不是聊天模型。",
@@ -891,6 +894,9 @@
     "workspace": {
       "archive_invalid": "无法解压该文件，请使用有效的 .zip、.tar.gz 或 .tgz 文件。",
       "display_prepare_failed": "显示环境准备失败，请稍后重试。",
+      "image_not_found": "工作区镜像不存在、需要镜像仓库凭据，或名称无效，请检查镜像名称后重试。",
+      "image_registry_unavailable": "暂时无法连接镜像仓库，请稍后重试。",
+      "teardown_failed": "移除工作区失败。请重试删除 bot。",
       "template_bootstrap_failed": "工作区文件初始化失败，请尝试重建工作区。",
       "unreachable": "暂时无法连接工作区，请稍后重试。"
     },
