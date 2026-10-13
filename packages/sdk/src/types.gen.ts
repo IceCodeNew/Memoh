@@ -3543,6 +3543,12 @@ export type ModelsUpdateRequest = {
     type?: ModelsModelType;
 };
 
+export type ProvidersCatalogModel = {
+    config?: ModelsModelConfig;
+    model_id?: string;
+    name?: string;
+};
+
 export type ProvidersCountResponse = {
     count?: number;
 };
@@ -3590,6 +3596,7 @@ export type ProvidersGetResponse = {
 
 export type ProvidersImportModelsRequest = {
     default_compatibilities?: Array<string>;
+    models?: Array<ProvidersCatalogModel>;
 };
 
 export type ProvidersImportModelsResponse = {
@@ -15588,7 +15595,7 @@ export type PutProvidersByIdResponse = PutProvidersByIdResponses[keyof PutProvid
 
 export type PostProvidersByIdImportModelsData = {
     /**
-     * Explicit defaults for unknown custom chat models
+     * Explicit defaults for unknown custom chat models, or the catalog models to import
      */
     body?: ProvidersImportModelsRequest;
     path: {

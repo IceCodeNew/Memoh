@@ -225,3 +225,39 @@ func TestMergeDiscoveredConfigLeavesNonReasoningModelsAlone(t *testing.T) {
 		t.Fatal("a managed non-reasoning model changed on a refresh that discovered nothing new")
 	}
 }
+
+func TestRefreshFromCatalogKeepsTheUsersChoices(t *testing.T) {
+	t.Parallel()
+
+	own := "My notes"
+	window := 200000
+	existing := models.ModelConfig{
+		Description: &own,
+		ToolCall:    false,
+		Reasoning:   &models.ModelReasoning{Efforts: []string{"low"}},
+	}
+	catalogDescription := "Catalog text"
+	catalog := models.ModelConfig{
+		Description:   &catalogDescription,
+		ToolCall:      true,
+		ContextWindow: &window,
+		Modalities:    &models.ModelModalities{Input: []models.Modality{models.ModalityText, models.ModalityImage}},
+		Reasoning:     &models.ModelReasoning{Efforts: []string{"low", "high"}, Dialect: reasoning.DialectAdaptive},
+	}
+
+	got, changed := refreshFromCatalog(existing, catalog)
+	if !changed || !got.ToolCall || got.ContextWindow == nil || *got.ContextWindow != window || !got.Accepts(models.ModalityImage) {
+		t.Fatalf("refreshed = %+v, changed %v", got, changed)
+	}
+	if got.Description == nil || *got.Description != own {
+		t.Fatalf("description = %v, want the user's", got.Description)
+	}
+	if _, again := refreshFromCatalog(got, catalog); again {
+		t.Fatal("a second refresh with the same catalog reported a change")
+	}
+
+	empty, _ := refreshFromCatalog(models.ModelConfig{}, catalog)
+	if empty.Description == nil || *empty.Description != catalogDescription {
+		t.Fatalf("description = %v, want the catalog's when the model has none", empty.Description)
+	}
+}

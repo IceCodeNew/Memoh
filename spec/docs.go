@@ -14088,7 +14088,7 @@ const docTemplate = `{
                         "required": true
                     },
                     {
-                        "description": "Explicit defaults for unknown custom chat models",
+                        "description": "Explicit defaults for unknown custom chat models, or the catalog models to import",
                         "name": "request",
                         "in": "body",
                         "schema": {
@@ -25832,6 +25832,20 @@ const docTemplate = `{
                 }
             }
         },
+        "providers.CatalogModel": {
+            "type": "object",
+            "properties": {
+                "config": {
+                    "$ref": "#/definitions/models.ModelConfig"
+                },
+                "model_id": {
+                    "type": "string"
+                },
+                "name": {
+                    "type": "string"
+                }
+            }
+        },
         "providers.CountResponse": {
             "type": "object",
             "properties": {
@@ -25935,6 +25949,12 @@ const docTemplate = `{
                     "type": "array",
                     "items": {
                         "type": "string"
+                    }
+                },
+                "models": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/providers.CatalogModel"
                     }
                 }
             }
