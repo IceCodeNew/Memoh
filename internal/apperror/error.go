@@ -45,6 +45,8 @@ const (
 	CodeWorkspaceUnreachable                     Code = "workspace.unreachable"
 	CodeWorkspaceTemplateBootstrapFailed         Code = "workspace.template_bootstrap_failed"
 	CodeWorkspaceDisplayPrepareFailed            Code = "workspace.display_prepare_failed"
+	CodeWorkspaceImageNotFound                   Code = "workspace.image_not_found"
+	CodeWorkspaceImageRegistryUnavailable        Code = "workspace.image_registry_unavailable"
 	CodeWorkspaceDependencyNotFound              Code = "workspace_dependency.not_found"
 	CodeWorkspaceDependencyRequestInvalid        Code = "workspace_dependency.request_invalid"
 	CodeWorkspaceDependencyActionUnsupported     Code = "workspace_dependency.action_unsupported"
@@ -56,6 +58,7 @@ const (
 	CodeWorkspaceDependencyWorkspaceMissing      Code = "workspace_dependency.workspace_missing"
 	CodeWorkspaceDependencyRollbackUnavailable   Code = "workspace_dependency.rollback_unavailable"
 	CodeWorkspaceDependencyOperationFailed       Code = "workspace_dependency.operation_failed"
+	CodeWorkspaceDependencyOperationInterrupted  Code = "workspace_dependency.operation_interrupted"
 	CodeProviderTemplateNotFound                 Code = "provider_template.not_found"
 	CodeProviderTemplateDomainInvalid            Code = "provider_template.domain_invalid"
 	CodeProviderTemplateDomainMismatch           Code = "provider_template.domain_mismatch"
@@ -69,6 +72,7 @@ const (
 	CodeConnectorNotFound                        Code = "connector.not_found"
 	CodeConnectorConflict                        Code = "connector.conflict"
 	CodeConnectorRequestRejected                 Code = "connector.request_rejected"
+	CodeConnectorOAuthClientNotConfigured        Code = "connector.oauth_client_not_configured"
 	CodeConnectorUpstreamUnavailable             Code = "connector.upstream_unavailable"
 	CodeConnectorOperationFailed                 Code = "connector.operation_failed"
 	CodeSkillBuiltinReadOnly                     Code = "skill.builtin_read_only"
@@ -153,6 +157,7 @@ const (
 	CodeSessionHistoryInconsistent               Code = "session_runtime.history_inconsistent"
 	CodeSessionTurnNotLatest                     Code = "session_runtime.turn_not_latest"
 	CodeSessionTurnIncomplete                    Code = "session_runtime.turn_incomplete"
+	CodeSessionTurnNotFound                      Code = "session_runtime.turn_not_found"
 	CodeSessionResetUnavailable                  Code = "session_runtime.reset_unavailable"
 	CodeSessionResetConflict                     Code = "session_runtime.reset_conflict"
 	CodeHistoryDeleteFailed                      Code = "history.delete_failed"
@@ -169,6 +174,7 @@ const (
 	CodeScheduleModelUnusable                    Code = "schedule.model_unusable"
 	CodeScheduleModelRequired                    Code = "schedule.model_required"
 	CodeScheduleSessionModeUnsupported           Code = "schedule.session_mode_unsupported"
+	CodeScheduleNotFound                         Code = "schedule.not_found"
 	CodeAgentResponseInterrupted                 Code = "agent.response_interrupted"
 	CodeAgentProviderOverloaded                  Code = "agent.provider_overloaded"
 	CodeAgentProviderRateLimited                 Code = "agent.provider_rate_limited"
@@ -189,6 +195,7 @@ const (
 	CodeRuntimeNativeHistoryLost   Code = "native_history_lost"
 	CodeRuntimeToolsUnavailable    Code = "tools_unavailable"
 	CodeRuntimeElicitationDeclined Code = "elicitation_declined"
+	CodeRuntimeOutputTruncated     Code = "output_truncated"
 	CodeQueueCapacityExceeded      Code = "queue_capacity_exceeded"
 	CodeQueueSteerUnsupported      Code = "queue.steer_unsupported"
 
@@ -243,6 +250,33 @@ const (
 	CodeRequestFieldInvalid  Code = "request.field_invalid"
 
 	CodeSessionNotFound Code = "session.not_found"
+
+	// Resources a request named that do not exist (or no longer exist).
+	CodeBotNotFound                   Code = "bot.not_found"
+	CodeBotAccessGrantNotFound        Code = "bot_access.grant_not_found"
+	CodeChannelConfigNotFound         Code = "channel.config_not_found"
+	CodeChannelIdentityConfigNotFound Code = "channel.identity_config_not_found"
+	CodeChannelRouteNotFound          Code = "channel_route.not_found"
+	CodeBrowserSessionNotFound        Code = "browser.session_not_found"
+	CodeDisplaySessionNotFound        Code = "display.session_not_found"
+	CodeFetchProviderNotFound         Code = "fetch_provider.not_found"
+	CodeSearchProviderNotFound        Code = "search_provider.not_found"
+	CodeWorkspaceFileNotFound         Code = "workspace_file.not_found"
+	CodeMCPConnectionNotFound         Code = "mcp.connection_not_found"
+	CodeMediaAssetNotFound            Code = "media.asset_not_found"
+	CodeMessageNotFound               Code = "message.not_found"
+	CodeModelNotFound                 Code = "model.not_found"
+	CodeProviderNotFound              Code = "provider.not_found"
+	CodeTTSProviderNotFound           Code = "tts_provider.not_found"
+	CodeTTSModelNotFound              Code = "tts_model.not_found"
+	CodeTranscriptionModelNotFound    Code = "transcription_model.not_found"
+	CodeVideoProviderNotFound         Code = "video_provider.not_found"
+	CodeVideoModelNotFound            Code = "video_model.not_found"
+	CodeUserNotFound                  Code = "user.not_found"
+	CodeUserRuntimeNotFound           Code = "user_runtime.not_found"
+	CodeWorkdirNotFound               Code = "workdir.not_found"
+	CodeWorkspaceTargetNotFound       Code = "workspace_target.not_found"
+	CodeSupermarketNotFound           Code = "supermarket.not_found"
 
 	// MCP connection codes, and the OAuth state code that MCP shares with
 	// provider sign-in.
@@ -338,6 +372,7 @@ const (
 	CodeWorkspaceResourceLimitsRequired         Code = "workspace_resource_limits_required"
 	CodeWorkspaceResourceLimitsSaveFailed       Code = "workspace_resource_limits_save_failed"
 	CodeWorkspaceDeleteFailed                   Code = "workspace_delete_failed"
+	CodeWorkspaceTeardownFailed                 Code = "workspace.teardown_failed"
 	CodeWorkspaceStartFailed                    Code = "workspace_start_failed"
 	CodeWorkspaceStopFailed                     Code = "workspace_stop_failed"
 	CodeWorkspaceSnapshotsUnsupported           Code = "workspace_snapshots_unsupported"
@@ -558,6 +593,17 @@ var catalog = map[Code]Definition{
 		HTTPStatus: http.StatusInternalServerError,
 		Detail:     "Display preparation failed.",
 	},
+	// The image name is a setting the user can change; the registry is the
+	// dependency whose outage the user can only wait out.
+	CodeWorkspaceImageNotFound: {
+		HTTPStatus: http.StatusBadRequest,
+		Detail:     "The workspace image does not exist, needs registry credentials, or its name is invalid. Check the image name and try again.",
+	},
+	CodeWorkspaceImageRegistryUnavailable: {
+		HTTPStatus: http.StatusServiceUnavailable,
+		Fault:      FaultDependency,
+		Detail:     "The image registry could not be reached. Try again later.",
+	},
 	// Workspace dependencies (design docs/design/workspace-dependencies.md
 	// §11). The 409 family tells the UI what to offer instead: start or
 	// create the workspace, wait for the other operation, bring the remote
@@ -611,6 +657,13 @@ var catalog = map[Code]Definition{
 		HTTPStatus: http.StatusInternalServerError,
 		Detail:     "The dependency operation failed.",
 	},
+	// A Server that stopped, or a workspace that went away, cut the
+	// operation short: its outcome is unknown and the log is gone, so the
+	// user retries rather than reading a diagnosis that no longer exists.
+	CodeWorkspaceDependencyOperationInterrupted: {
+		HTTPStatus: http.StatusInternalServerError,
+		Detail:     "The operation was interrupted before it finished. Try it again.",
+	},
 	CodeProviderTemplateNotFound: {
 		HTTPStatus: http.StatusNotFound,
 		Detail:     "The provider template was not found.",
@@ -662,6 +715,14 @@ var catalog = map[Code]Definition{
 	CodeConnectorRequestRejected: {
 		HTTPStatus: http.StatusBadRequest,
 		Detail:     "Connect-It rejected the connector request.",
+	},
+	// Connect-It has no OAuth App client ID or secret for the connector. Only
+	// a deployment administrator can configure it there, so neither the
+	// request nor a retry can fix it.
+	CodeConnectorOAuthClientNotConfigured: {
+		HTTPStatus: http.StatusServiceUnavailable,
+		Detail:     "Connect-It has no OAuth App configured for this connector.",
+		Fault:      FaultDependency,
 	},
 	CodeConnectorUpstreamUnavailable: {
 		HTTPStatus: http.StatusBadGateway,
@@ -983,6 +1044,10 @@ var catalog = map[Code]Definition{
 	},
 	// The client named a turn that is no longer the latest visible turn (or
 	// was never persisted). Reloading the conversation resolves it.
+	CodeSessionTurnNotFound: {
+		HTTPStatus: http.StatusNotFound,
+		Detail:     "The message was not found in this conversation. Refresh and try again.",
+	},
 	CodeSessionTurnNotLatest: {
 		HTTPStatus: http.StatusConflict,
 		Detail:     "The conversation has newer messages. Refresh and try again.",
@@ -1043,6 +1108,7 @@ var catalog = map[Code]Definition{
 		Detail:      "This bot has no default model, so the schedule needs an explicit model. Choose a model or set a default one.",
 		AllowedArgs: []string{"field"},
 	},
+	CodeScheduleNotFound: {HTTPStatus: http.StatusNotFound, Detail: "This scheduled task no longer exists. Refresh the list and choose another one."},
 	CodeScheduleSessionModeUnsupported: {
 		HTTPStatus: http.StatusConflict,
 		Detail:     "Scheduled runs can only continue chat or schedule sessions. Choose another target session.",
@@ -1116,6 +1182,10 @@ var catalog = map[Code]Definition{
 		HTTPStatus: http.StatusUnprocessableEntity,
 		Detail:     "A tool requested an interaction that could not be shown. The request was declined.",
 	},
+	CodeRuntimeOutputTruncated: {
+		HTTPStatus: http.StatusUnprocessableEntity,
+		Detail:     "The reply reached the model's output limit and was cut off. Ask it to continue, or split the request into smaller parts.",
+	},
 	CodeQueueNoActiveRun: {
 		HTTPStatus: http.StatusConflict,
 		Detail:     "There is no active run to receive this queued input.",
@@ -1167,24 +1237,49 @@ var catalog = map[Code]Definition{
 	// Returned when a failure has no public error of its own.
 	CodeInternal: {HTTPStatus: http.StatusInternalServerError, Detail: "Something went wrong on the server. Please try again."},
 	// 499 is the de facto status for a request the client canceled.
-	CodeCanceled:                 {HTTPStatus: 499, Detail: "The request was canceled."},
-	CodeHTTPBadRequest:           {HTTPStatus: http.StatusBadRequest, Detail: "The request is invalid."},
-	CodeHTTPUnauthorized:         {HTTPStatus: http.StatusUnauthorized, Detail: "Sign in to continue."},
-	CodeHTTPForbidden:            {HTTPStatus: http.StatusForbidden, Detail: "You do not have permission to perform this action."},
-	CodeHTTPNotFound:             {HTTPStatus: http.StatusNotFound, Detail: "The requested resource was not found."},
-	CodeHTTPMethodNotAllowed:     {HTTPStatus: http.StatusMethodNotAllowed, Detail: "This request method is not allowed here."},
-	CodeHTTPConflict:             {HTTPStatus: http.StatusConflict, Detail: "The request conflicts with the current state. Refresh and try again."},
-	CodeHTTPPayloadTooLarge:      {HTTPStatus: http.StatusRequestEntityTooLarge, Detail: "The request is too large."},
-	CodeHTTPUnsupportedMediaType: {HTTPStatus: http.StatusUnsupportedMediaType, Detail: "The request content type is not supported."},
-	CodeHTTPUpgradeRequired:      {HTTPStatus: http.StatusUpgradeRequired, Detail: "This endpoint requires a different protocol."},
-	CodeHTTPTooManyRequests:      {HTTPStatus: http.StatusTooManyRequests, Detail: "Too many requests. Please wait a moment and try again."},
-	CodeHTTPNotImplemented:       {HTTPStatus: http.StatusNotImplemented, Detail: "This operation is not supported by the server."},
-	CodeHTTPBadGateway:           {HTTPStatus: http.StatusBadGateway, Detail: "An upstream service returned an invalid response. Please try again."},
-	CodeHTTPServiceUnavailable:   {HTTPStatus: http.StatusServiceUnavailable, Detail: "The service is temporarily unavailable. Please try again shortly."},
-	CodeHTTPGatewayTimeout:       {HTTPStatus: http.StatusGatewayTimeout, Detail: "An upstream service did not respond in time. Please try again."},
-	CodeRequestFieldRequired:     {HTTPStatus: http.StatusBadRequest, Detail: "A required field is missing.", AllowedArgs: []string{"field"}},
-	CodeRequestFieldInvalid:      {HTTPStatus: http.StatusBadRequest, Detail: "A field has an invalid value.", AllowedArgs: []string{"field"}},
-	CodeSessionNotFound:          {HTTPStatus: http.StatusNotFound, Detail: "The conversation was not found."},
+	CodeCanceled:                      {HTTPStatus: 499, Detail: "The request was canceled."},
+	CodeHTTPBadRequest:                {HTTPStatus: http.StatusBadRequest, Detail: "The request is invalid."},
+	CodeHTTPUnauthorized:              {HTTPStatus: http.StatusUnauthorized, Detail: "Sign in to continue."},
+	CodeHTTPForbidden:                 {HTTPStatus: http.StatusForbidden, Detail: "You do not have permission to perform this action."},
+	CodeHTTPNotFound:                  {HTTPStatus: http.StatusNotFound, Detail: "The requested resource was not found."},
+	CodeHTTPMethodNotAllowed:          {HTTPStatus: http.StatusMethodNotAllowed, Detail: "This request method is not allowed here."},
+	CodeHTTPConflict:                  {HTTPStatus: http.StatusConflict, Detail: "The request conflicts with the current state. Refresh and try again."},
+	CodeHTTPPayloadTooLarge:           {HTTPStatus: http.StatusRequestEntityTooLarge, Detail: "The request is too large."},
+	CodeHTTPUnsupportedMediaType:      {HTTPStatus: http.StatusUnsupportedMediaType, Detail: "The request content type is not supported."},
+	CodeHTTPUpgradeRequired:           {HTTPStatus: http.StatusUpgradeRequired, Detail: "This endpoint requires a different protocol."},
+	CodeHTTPTooManyRequests:           {HTTPStatus: http.StatusTooManyRequests, Detail: "Too many requests. Please wait a moment and try again."},
+	CodeHTTPNotImplemented:            {HTTPStatus: http.StatusNotImplemented, Detail: "This operation is not supported by the server."},
+	CodeHTTPBadGateway:                {HTTPStatus: http.StatusBadGateway, Detail: "An upstream service returned an invalid response. Please try again."},
+	CodeHTTPServiceUnavailable:        {HTTPStatus: http.StatusServiceUnavailable, Detail: "The service is temporarily unavailable. Please try again shortly."},
+	CodeHTTPGatewayTimeout:            {HTTPStatus: http.StatusGatewayTimeout, Detail: "An upstream service did not respond in time. Please try again."},
+	CodeRequestFieldRequired:          {HTTPStatus: http.StatusBadRequest, Detail: "A required field is missing.", AllowedArgs: []string{"field"}},
+	CodeRequestFieldInvalid:           {HTTPStatus: http.StatusBadRequest, Detail: "A field has an invalid value.", AllowedArgs: []string{"field"}},
+	CodeSessionNotFound:               {HTTPStatus: http.StatusNotFound, Detail: "The conversation was not found."},
+	CodeBotNotFound:                   {HTTPStatus: http.StatusNotFound, Detail: "This bot no longer exists. Go back to the bot list and pick another one."},
+	CodeBotAccessGrantNotFound:        {HTTPStatus: http.StatusNotFound, Detail: "This access grant no longer exists. Refresh the member list and try again."},
+	CodeChannelConfigNotFound:         {HTTPStatus: http.StatusNotFound, Detail: "This channel is not configured for the bot. Set it up first, then try again."},
+	CodeChannelIdentityConfigNotFound: {HTTPStatus: http.StatusNotFound, Detail: "You have not set up this channel yet. Set it up first, then try again."},
+	CodeChannelRouteNotFound:          {HTTPStatus: http.StatusNotFound, Detail: "This conversation route no longer exists. Start a new conversation from the channel."},
+	CodeBrowserSessionNotFound:        {HTTPStatus: http.StatusNotFound, Detail: "This browser session has expired or was closed. Open a new one."},
+	CodeDisplaySessionNotFound:        {HTTPStatus: http.StatusNotFound, Detail: "This display session has ended. Open a new one."},
+	CodeFetchProviderNotFound:         {HTTPStatus: http.StatusNotFound, Detail: "This fetch provider no longer exists. Refresh the list and choose another one."},
+	CodeSearchProviderNotFound:        {HTTPStatus: http.StatusNotFound, Detail: "This search provider no longer exists. Refresh the list and choose another one."},
+	CodeWorkspaceFileNotFound:         {HTTPStatus: http.StatusNotFound, Detail: "This file or folder no longer exists in the workspace. Refresh and try again."},
+	CodeMCPConnectionNotFound:         {HTTPStatus: http.StatusNotFound, Detail: "This MCP connection no longer exists or has closed. Refresh the list and reconnect."},
+	CodeMediaAssetNotFound:            {HTTPStatus: http.StatusNotFound, Detail: "This file no longer exists. Upload it again if you still need it."},
+	CodeMessageNotFound:               {HTTPStatus: http.StatusNotFound, Detail: "This message no longer exists. Refresh the conversation and try again."},
+	CodeModelNotFound:                 {HTTPStatus: http.StatusNotFound, Detail: "This model no longer exists. Refresh the list and choose another one."},
+	CodeProviderNotFound:              {HTTPStatus: http.StatusNotFound, Detail: "This provider no longer exists. Refresh the list and choose another one."},
+	CodeTTSProviderNotFound:           {HTTPStatus: http.StatusNotFound, Detail: "This speech provider no longer exists. Refresh the list and choose another one."},
+	CodeTTSModelNotFound:              {HTTPStatus: http.StatusNotFound, Detail: "This speech model no longer exists. Refresh the list and choose another one."},
+	CodeTranscriptionModelNotFound:    {HTTPStatus: http.StatusNotFound, Detail: "This transcription model no longer exists. Refresh the list and choose another one."},
+	CodeVideoProviderNotFound:         {HTTPStatus: http.StatusNotFound, Detail: "This video provider no longer exists. Refresh the list and choose another one."},
+	CodeVideoModelNotFound:            {HTTPStatus: http.StatusNotFound, Detail: "This video model no longer exists. Refresh the list and choose another one."},
+	CodeUserNotFound:                  {HTTPStatus: http.StatusNotFound, Detail: "This user no longer exists. Refresh the member list and try again."},
+	CodeUserRuntimeNotFound:           {HTTPStatus: http.StatusNotFound, Detail: "This runtime is no longer registered to your account. Refresh the list and try again."},
+	CodeWorkdirNotFound:               {HTTPStatus: http.StatusNotFound, Detail: "This working directory no longer exists. Refresh the list and choose another one."},
+	CodeWorkspaceTargetNotFound:       {HTTPStatus: http.StatusNotFound, Detail: "This workspace target is no longer available. Refresh and choose another one."},
+	CodeSupermarketNotFound:           {HTTPStatus: http.StatusNotFound, Detail: "This item is no longer in the Supermarket. Refresh the list and try again."},
 	CodeMCPEndpointInvalid: {
 		HTTPStatus:  http.StatusBadRequest,
 		Detail:      "Specify either a command or a URL for the MCP server, not both and not neither.",
@@ -1221,7 +1316,7 @@ var catalog = map[Code]Definition{
 	CodeNoWorkspaceExec:          {HTTPStatus: http.StatusForbidden, Detail: "You do not have permission to run workspace commands for this bot."},
 	CodeACPRuntimeOwnerMissing:   {HTTPStatus: http.StatusConflict, Detail: "This external-agent session has no runtime owner. Start a new session to continue."},
 	CodeACPDiscussUnsupported:    {HTTPStatus: http.StatusBadRequest, Detail: "This external agent cannot run in discuss mode."},
-	CodeGroupChatACPUnsupported:  {HTTPStatus: http.StatusBadRequest, Detail: "Group chats cannot create a chat-mode external-agent session. Use /new codex or /new discuss codex."},
+	CodeGroupChatACPUnsupported:  {HTTPStatus: http.StatusBadRequest, Detail: "Group chats cannot create a chat-mode external-agent session. Use /new <agent name> or /new discuss <agent name>."},
 	CodeACPProjectModeInvalid:    {HTTPStatus: http.StatusBadRequest, Detail: "The external agent project mode is invalid."},
 	CodeACPProjectPathInvalid:    {HTTPStatus: http.StatusBadRequest, Detail: "The external agent project path must be absolute."},
 	CodeACPDisplayArgsInvalid:    {HTTPStatus: http.StatusBadRequest, Detail: "The external agent display arguments are invalid."},
@@ -1282,6 +1377,7 @@ var catalog = map[Code]Definition{
 	CodeWorkspaceResourceLimitsRequired:         {HTTPStatus: http.StatusBadRequest, Detail: "Resource limits are required."},
 	CodeWorkspaceResourceLimitsSaveFailed:       {HTTPStatus: http.StatusInternalServerError, Detail: "Failed to save resource limits. Please try again."},
 	CodeWorkspaceDeleteFailed:                   {HTTPStatus: http.StatusInternalServerError, Detail: "Failed to delete the workspace. Please try again."},
+	CodeWorkspaceTeardownFailed:                 {HTTPStatus: http.StatusInternalServerError, Detail: "Workspace removal failed. Retry deleting the bot."},
 	CodeWorkspaceStartFailed:                    {HTTPStatus: http.StatusInternalServerError, Detail: "Failed to start the workspace. Please try again."},
 	CodeWorkspaceStopFailed:                     {HTTPStatus: http.StatusInternalServerError, Detail: "Failed to stop the workspace. Please try again."},
 	CodeWorkspaceSnapshotsUnsupported:           {HTTPStatus: http.StatusNotImplemented, Detail: "Snapshots are not supported by this workspace runtime."},

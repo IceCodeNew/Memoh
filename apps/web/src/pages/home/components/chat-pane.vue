@@ -43,9 +43,11 @@
               </div>
 
               <!-- A session with a live run but no messages yet (a subagent
-                   that has not produced output) reads as starting, not empty. -->
+                   that has not produced output) reads as starting, not empty.
+                   A first send waiting on welcome already shows its spinner
+                   on the send button. -->
               <div
-                v-if="messages.length === 0 && !loadingChats && !loadingMessages && streaming"
+                v-if="messages.length === 0 && !loadingChats && !loadingMessages && streaming && !isWelcome"
                 class="flex items-center justify-center min-h-75"
               >
                 <Spinner class="size-3.5" />
@@ -632,7 +634,7 @@
                   v-model="inputText"
                   rows="1"
                   :placeholder="composerPlaceholder"
-                  :disabled="!currentBotId || activeChatReadOnly || loadingMessages"
+                  :disabled="!currentBotId || activeChatReadOnly || loadingMessages || firstSendAwaiting"
                   class="order-none max-h-52 w-full basis-full field-sizing-content resize-none break-words bg-transparent pl-2 pr-1 pt-2 pb-1.5 text-base leading-[var(--chat-leading)] text-foreground outline-none placeholder:text-[var(--field-placeholder)] disabled:cursor-not-allowed"
                   :class="isWelcome ? 'min-h-12' : 'min-h-10'"
                   @keydown="handleComposerKeydown"
@@ -704,10 +706,6 @@
                         <!-- One transformable wrapper for the press squish —
                              same contract as composer-continue-on's pill. -->
                         <span class="composer-pill-content inline-flex min-w-0 items-center gap-2">
-                          <Spinner
-                            v-if="composerSpinnerVisible"
-                            class="size-3.5 shrink-0"
-                          />
                           <span class="min-w-0 truncate text-label text-composer-control-label">{{ modelTriggerLabel }}</span>
                           <ChevronDown
                             class="size-3.5 shrink-0 text-muted-foreground"
@@ -734,7 +732,7 @@
                         :none-label="activeUsesDirectRuntime && composerDefaultModelId && composerDefaultModelId !== 'default' ? composerDefaultModelLabel : undefined"
                         :show-reasoning="!activeUsesDirectRuntime || !!composerReasoningOptions?.length"
                         :loading="composerModelsLoading"
-                        :error="directModelCatalogError"
+                        :error="modelCatalogMenuError"
                         :auth-required="directRuntimeAuthRequired"
                         @update:model-value="onComposerModelValueSelected"
                         @update:reasoning-effort="onComposerReasoningEffortSelected"
@@ -909,6 +907,7 @@
                         :disabled="streaming ? false : (!showSend || !currentBotId || activeChatReadOnly || loadingMessages || composerConfigPending || composerHasNoModel || goalSubmissionBlocked || !!runtimeModeUnavailableReason)"
                         :title="goalSubmissionBlocked ? goalExecutionBlockedReason : undefined"
                         :class="runtimeModeChanging && !streaming && showSend && !!currentBotId && !activeChatReadOnly && !loadingMessages && !composerAgentConfigPending && !composerHasNoModel ? 'disabled:opacity-100' : undefined"
+                        :aria-busy="firstSendAwaiting || undefined"
                         :aria-label="streaming && showSend ? $t(composerQueueCommand?.mode === 'steer' ? 'chat.queue.enqueueSteer' : 'chat.queue.enqueueFollowUp') : (streaming ? 'Stop generating response' : 'Send message')"
                         class="size-full"
                         @click="handleSendButton"
@@ -917,24 +916,18 @@
                           class="grid size-[18px] max-md:size-5 shrink-0 place-items-center"
                           aria-hidden="true"
                         >
-                          <svg
-                            viewBox="0 0 24 24"
-                            fill="none"
-                            stroke="currentColor"
-                            stroke-width="2.5"
-                            stroke-linecap="round"
-                            stroke-linejoin="round"
+                          <!-- The arrow, which bends into the busy ring while a
+                               first send waits for the server. -->
+                          <SendMorphIcon
+                            :busy="firstSendAwaiting"
                             class="col-start-1 row-start-1 size-[18px] max-md:size-5 transition-opacity duration-200 ease-out motion-reduce:transition-none"
-                            :class="streaming ? 'opacity-0' : 'opacity-100'"
-                          >
-                            <path d="M12 19 V5.75" />
-                            <path d="M6.5 10.5 L12 5 L17.5 10.5" />
-                          </svg>
+                            :class="streaming && !firstSendAwaiting ? 'opacity-0' : 'opacity-100'"
+                          />
                           <svg
                             viewBox="0 0 24 24"
                             fill="currentColor"
                             class="col-start-1 row-start-1 size-4 max-md:size-4.5 transition-opacity duration-200 ease-out motion-reduce:transition-none"
-                            :class="streaming ? 'opacity-100' : 'opacity-0'"
+                            :class="streaming && !firstSendAwaiting ? 'opacity-100' : 'opacity-0'"
                           >
                             <rect
                               x="4"
@@ -988,7 +981,7 @@
                     :bot-id="currentBotId || ''"
                     :project="runtimeProject"
                     :projects="selectableFolders"
-                    :editable="!hasRenderedSession"
+                    :editable="draftSetupEditable"
                     :locked="computerSwitchLocked || composerConfigPending || !canWorkspaceRead"
                     :visible="isVisible && canWorkspaceRead"
                     :streaming="streaming"
@@ -1263,7 +1256,7 @@ import { Memoh as MemohIcon, MemohColor } from '@memohai/icon'
 import { AddIcon, UploadIcon } from '@memohai/icon/ui'
 
 import { EXTERNAL_AGENT_DEFAULT_PROJECT_MODE, EXTERNAL_AGENT_DEFAULT_PROJECT_PATH, normalizeAgentID } from '@/utils/external-agent'
-import { ref, reactive, computed, onBeforeUnmount, useTemplateRef, watch, onWatcherCleanup, nextTick, onActivated, onDeactivated, type Ref } from 'vue'
+import { ref, reactive, computed, onBeforeUnmount, useTemplateRef, watch, onWatcherCleanup, nextTick, onActivated, onDeactivated } from 'vue'
 import {
   ImagePlus,
   ChevronDown,
@@ -1340,6 +1333,7 @@ import { enqueueSteerQueue, enqueueFollowUpQueue, fetchSafeSkillCatalog, fetchSe
 import { parseSessionQueueCommand, SessionQueueSubmissionGate } from './session-queue-submission'
 import { localizeRuntimeControls, localizeRuntimeCommandResult } from '@/utils/runtime-control-presentation'
 import { commandResultPresentation, isCommandResultItemVisible, resolveCommandResultSelection } from './slash-command-result'
+import SendMorphIcon from './send-morph-icon.vue'
 import { captureChatPaneSendContext, clearComposerPairDraft, composerRestoreForSendResult, composerHasNoModel as hasNoComposerModel, matchesChatPaneSendContext, pinnedSubagentModelId as resolvePinnedSubagentModelId, shouldRefreshACPComposerConfig, welcomeSendConsumedDraft } from './chat-pane-send'
 import { onAuthSessionCleared } from '@/lib/auth-session'
 import { useACPRuntime } from '@/composables/useACPRuntime'
@@ -1463,25 +1457,6 @@ const overrideReasoningEffort = computed({
   set: (value: string) => { paneView.value.pairEffort.value = value },
 })
 
-// Show the composer loading spinner only when the load outlasts a fast
-// round-trip: sub-3s catalog loads must not flash a spinner on every pane
-// switch (user feedback, 2026-09-02). The popover's own loading row stays
-// immediate — there the user is actively waiting on an open menu.
-function useDelayedTrue(source: Ref<boolean>, delayMs: number): Ref<boolean> {
-  const visible = ref(false)
-  let timer: ReturnType<typeof setTimeout> | undefined
-  watch(source, (value) => {
-    if (value) {
-      timer ??= setTimeout(() => { visible.value = true }, delayMs)
-      return
-    }
-    if (timer) { clearTimeout(timer); timer = undefined }
-    visible.value = false
-  }, { immediate: true })
-  onBeforeUnmount(() => { if (timer) clearTimeout(timer) })
-  return visible
-}
-
 // Session creation briefly changes several pieces of the direct-runtime
 // identity. That is one draft being promoted, not a switch to another chat.
 let directDraftPromotionPending = false
@@ -1496,17 +1471,32 @@ const startupSendFailure = computed(() => chatStore.startupSendFailureFor(
 const hasRenderedSession = computed(() =>
   !!(paneTarget.value.sessionId || activeChatTarget.value.sessionId || '').trim(),
 )
+// The first message sent from this pane's draft, from Enter until it is an
+// ordinary session (or failed). The store owns the phase; the pane only reads
+// it. It is keyed by the pane's view id, so it outlives the draft -> session
+// repoint.
+const firstSendEntry = computed(() => chatStore.firstSendFor(paneTarget.value))
+// From Enter on a draft until the server confirms the send. The pane stays on
+// welcome with the input in a locked composer. draftSendStarting covers the
+// part before the store has registered the send (attachment encoding, an
+// External Agent's REST session creation).
+const draftSendStarting = ref(false)
+const firstSendAwaiting = computed(() =>
+  draftSendStarting.value || (!!firstSendEntry.value && !firstSendEntry.value.revealed))
+// A draft whose first message is in flight is committed to its setup (the
+// folder travels with that message), even before a session id exists.
+const draftSetupEditable = computed(() => !hasRenderedSession.value && !firstSendEntry.value && !draftSendStarting.value)
 
 // A fresh, writable chat opens with the composer centred and a greeting above
 // it. Read-only sessions (system / synced channel threads) hide the composer
-// entirely, so they never reach this state.
-const isWelcome = computed(() =>
-  !!currentBotId.value
-  && !hasRenderedSession.value
-  && !activeChatReadOnly.value
-  && !loadingChats.value
-  && messages.value.length === 0,
-)
+// entirely, so they never reach this state. A first send stays on welcome
+// until the server confirms it; from then on the pane is a chat even before
+// a turn has rendered (a skill activation appends none of its own).
+const isWelcome = computed(() => {
+  if (!currentBotId.value || activeChatReadOnly.value || loadingChats.value) return false
+  if (firstSendEntry.value?.revealed) return false
+  return !hasRenderedSession.value && messages.value.length === 0
+})
 
 // During boot, "a draft that stays a draft" and "a draft about to be
 // repointed to the most recent session" are indistinguishable until
@@ -1519,15 +1509,10 @@ const isWelcome = computed(() =>
 // from the first frame, so this gate never engages on session routes.
 const composerPlacementPending = computed(() => loadingChats.value && !hasRenderedSession.value)
 const composerPlacementEl = useTemplateRef<HTMLElement>('composerPlacementEl')
-// Armed by handleSend when the send leaves from welcome; consumed on the
-// welcome→chat flip. Without an armed send the flip is navigation, and the
-// composer just lands docked with the rest of the pane.
-const welcomeSendMotionArmed = ref(false)
-useComposerPlacementMotion(composerPlacementEl, isWelcome, () => {
-  const armed = welcomeSendMotionArmed.value
-  welcomeSendMotionArmed.value = false
-  return armed
-})
+// Only a first send moves the composer, out of welcome when the server
+// confirms it, together with the turns appearing. Any other flip is
+// navigation, and the composer just lands with the rest of the pane.
+useComposerPlacementMotion(composerPlacementEl, isWelcome, () => !!firstSendEntry.value?.revealed)
 
 // Rotate the greeting per fresh chat so the entry point feels alive rather than
 // a fixed banner; the pick stays stable while a single welcome screen is shown
@@ -1556,7 +1541,9 @@ const welcomeGreeting = computed(() => {
   return t(WELCOME_GREETING_KEYS[welcomeGreetingIndex.value] ?? WELCOME_GREETING_KEYS[0])
 })
 watch([isWelcome, currentBotId, () => activeSession.value?.id], ([welcome]) => {
-  if (welcome) welcomeGreetingIndex.value = pickWelcomeGreetingIndex()
+  // A first send that failed before confirmation never left this welcome, so
+  // the greeting stays: its failure is still on screen with the input.
+  if (welcome && !startupSendFailure.value) welcomeGreetingIndex.value = pickWelcomeGreetingIndex()
 })
 
 const pendingDecision = computed(() => findLatestPendingChatDecision(messages.value))
@@ -2566,6 +2553,13 @@ const directRuntimeAuthRequired = computed(() =>
     || isApiErrorCode(composerModelCatalogError.value, 'agent_credential.reauthorization_required')
   ),
 )
+// Native catalogs keep the last loaded list on a failed refresh, so the menu
+// only reports a failure it has nothing to show for.
+const modelCatalogMenuError = computed(() => {
+  if (activeUsesDirectRuntime.value) return directModelCatalogError.value
+  if (!composerModelCatalogError.value || composerModels.value.length) return ''
+  return resolveApiErrorMessage(composerModelCatalogError.value, t('common.loadFailed'))
+})
 const directModelCatalogError = computed(() => {
   if (!activeUsesDirectRuntime.value || !composerModelCatalogError.value) return ''
   return resolveApiErrorMessage(composerModelCatalogError.value, t('bots.agent.modelsLoadFailed'))
@@ -2578,10 +2572,6 @@ const composerAgentConfigPending = computed(() => activeUsesExternalAgentCompose
 // manual loading paints hover chrome. Keep opacity only, with no busy chrome
 // or model/Agent preparation spinner.
 const composerConfigPending = computed(() => composerAgentConfigPending.value || runtimeModeChanging.value)
-const composerSpinnerVisible = useDelayedTrue(
-  computed(() => composerAgentConfigPending.value || composerModelsLoading.value),
-  3000,
-)
 const canAddAgent = computed(() => !!currentBotId.value && hasBotPermission(currentBot.value?.current_user_permissions, 'manage'))
 const canChangeAgent = computed(() => !!currentBotId.value
   && !hasRenderedSession.value
@@ -2661,7 +2651,7 @@ const composerReasoningEffort = computed(() => {
 const composerReasoningOptions = computed(() => {
   const efforts = composerModelCatalog.value.reasoningEfforts
   if (!efforts) return undefined
-  return efforts.flatMap((effort) => {
+  const options = efforts.flatMap((effort) => {
     const value = effort.id?.trim() ?? ''
     if (!value) return []
     const runtimeLabel = effort.name?.trim() ?? ''
@@ -2672,6 +2662,12 @@ const composerReasoningOptions = computed(() => {
       description: effort.description?.trim() || undefined,
     }]
   })
+  // A Codex model without a default level sends none until one is picked, so
+  // the menu needs a way back to that state.
+  if (activeDirectRuntime.value === BOT_AGENT_RUNTIME_CODEX && options.length && !composerModelCatalog.value.defaultReasoningEffort) {
+    options.unshift({ value: '', label: t('chat.modelDefault'), description: undefined })
+  }
+  return options
 })
 
 function openAgentSettings(addAgent: boolean) {
@@ -4194,10 +4190,22 @@ async function handleSend() {
   const sentWorkspaceTargetId = sendWorkspaceTargetId.value
   const preserveDirectDraftSelection = activeUsesDirectRuntime.value && !sentContext.target.sessionId
   composerError.value = ''
-  inputText.value = ''
-  saveInputDraft(sentDraftKey, '')
-  pendingFiles.value = []
-  requestedSkills.value = []
+  // A draft's first send keeps its input on screen, locked, until the server
+  // confirms it (onBeforeTurnAppend); a failure then leaves it where it is.
+  const holdsInput = !sentContext.target.sessionId
+  const clearSentInput = () => {
+    saveInputDraft(sentDraftKey, '')
+    if (holdsInput && !matchesChatPaneSendContext(
+      sentContext,
+      paneTarget.value,
+      inputDraftKey.value || 'chat',
+    )) return
+    inputText.value = ''
+    pendingFiles.value = []
+    requestedSkills.value = []
+  }
+  if (holdsInput) draftSendStarting.value = true
+  else clearSentInput()
 
   let attachments: ChatAttachment[] | undefined
   try {
@@ -4206,6 +4214,7 @@ async function handleSend() {
     }
   } catch (error) {
     pairSend.releaseReads()
+    draftSendStarting.value = false
     if (!matchesChatPaneSendContext(
       sentContext,
       paneTarget.value,
@@ -4214,14 +4223,10 @@ async function handleSend() {
     inputText.value = text
     pendingFiles.value = files
     requestedSkills.value = skills
-    composerError.value = error instanceof Error ? error.message : t('chat.sendFailed')
+    composerError.value = resolveApiErrorMessage(error, t('chat.sendFailed'))
     return
   }
 
-  // Arm the placement FLIP only after attachment conversion has succeeded and
-  // the send is really going out: arming earlier lets a navigation during the
-  // async read (or a failed conversion) consume/inherit the flag.
-  welcomeSendMotionArmed.value = isWelcome.value
   // Arm the pin only once the store has passed command handling and session
   // setup and is about to start a real turn. Command-only sends therefore do
   // not leave a latent pin behind; startup failures roll the arm back.
@@ -4237,6 +4242,10 @@ async function handleSend() {
     onBeforeMessageSend: () => pairSend.begin(),
     onModelPreferenceSettled: () => pairSend.finish(false),
     onBeforeTurnAppend: (target) => {
+      if (holdsInput) {
+        clearSentInput()
+        draftSendStarting.value = false
+      }
       if (goalSend && goalDraftScope.value === sentGoalScope) goalDraftScope.value = ''
       if (preserveDirectDraftSelection) {
         void nextTick(() => { directDraftPromotionPending = false })
@@ -4253,16 +4262,12 @@ async function handleSend() {
       rollbackPin = null
     },
   }).finally(() => {
+    draftSendStarting.value = false
     directDraftPromotionPending = false
     pairSend.finish(false)
     pairSend.releaseReads()
   })
   rollbackPin = null
-  // A send that never promoted the draft (command-only, or failed before the
-  // turn) leaves the motion armed; disarm so a later navigation can't inherit it.
-  void nextTick(() => {
-    if (isWelcome.value) welcomeSendMotionArmed.value = false
-  })
   pairSend.finish(result.messageSent === true || result.stage === 'stream')
   await refreshACPComposerConfigAfterSelectionError(result)
   const restore = composerRestoreForSendResult(result, text, t('chat.sendFailed'))
@@ -4291,6 +4296,8 @@ async function handleSend() {
 }
 
 function handleSendButton() {
+  // A first send waits for the server to confirm it.
+  if (firstSendAwaiting.value) return
   if (streaming.value && !showSend.value) {
     chatStore.abort(paneTarget.value)
     return

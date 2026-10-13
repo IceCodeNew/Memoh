@@ -2497,7 +2497,7 @@ const docTemplate = `{
         },
         "/bots/{bot_id}/apps/check-updates": {
             "post": {
-                "description": "Compares every installed App with the registry's current release, runs the dependency update checks, and returns the refreshed list.",
+                "description": "Compares every installed App with the registry's current release, runs the dependency update checks, and returns the refreshed list. The checks are bounded in time; update_checks_incomplete marks a list where some did not finish and keep their last result.",
                 "produces": [
                     "application/json"
                 ],
@@ -3731,6 +3731,7 @@ const docTemplate = `{
                 }
             },
             "delete": {
+                "description": "Records the removal and answers at once. The workspace is gone when GET answers 404; until then GET reports the removal's state.",
                 "tags": [
                     "containerd"
                 ],
@@ -3751,8 +3752,8 @@ const docTemplate = `{
                     }
                 ],
                 "responses": {
-                    "204": {
-                        "description": "No Content"
+                    "202": {
+                        "description": "Accepted"
                     },
                     "404": {
                         "description": "Not Found",
@@ -4905,6 +4906,35 @@ const docTemplate = `{
                 }
             }
         },
+        "/bots/{bot_id}/container/removal/cancel": {
+            "post": {
+                "description": "Keeps the workspace after its removal failed. Does nothing when no removal has failed; one still in progress cannot be withdrawn.",
+                "tags": [
+                    "containerd"
+                ],
+                "summary": "Withdraw a failed workspace removal",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Bot ID",
+                        "name": "bot_id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "204": {
+                        "description": "No Content"
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/server.Problem"
+                        }
+                    }
+                }
+            }
+        },
         "/bots/{bot_id}/container/skills": {
             "get": {
                 "tags": [
@@ -5507,7 +5537,7 @@ const docTemplate = `{
         },
         "/bots/{bot_id}/dependencies/check-updates": {
             "post": {
-                "description": "Re-discovers the workspace and runs the upstream update check of every installed tool dependency, then returns the refreshed list.",
+                "description": "Re-discovers the workspace and runs the upstream update check of every installed tool dependency, then returns the refreshed list. The checks are bounded in time; update_checks_incomplete marks a list where some did not finish and keep their last result.",
                 "produces": [
                     "application/json"
                 ],
@@ -20180,6 +20210,8 @@ const docTemplate = `{
                 "read_media",
                 "renderer_prune",
                 "mid_stream_retry",
+                "current_input_omitted",
+                "current_input_images_omitted",
                 "run_abort_observed"
             ],
             "x-enum-varnames": [
@@ -20195,6 +20227,8 @@ const docTemplate = `{
                 "MutationReadMedia",
                 "MutationRendererPrune",
                 "MutationMidStreamRetry",
+                "MutationCurrentInputOmitted",
+                "MutationCurrentInputImagesOmitted",
                 "MutationRunAbortObserved"
             ]
         },
@@ -21485,6 +21519,9 @@ const docTemplate = `{
         "handlers.AppListResponse": {
             "type": "object",
             "properties": {
+                "dependency_catalog_refreshing": {
+                    "type": "boolean"
+                },
                 "dependency_catalog_stale": {
                     "type": "boolean"
                 },
@@ -21493,6 +21530,9 @@ const docTemplate = `{
                     "items": {
                         "$ref": "#/definitions/handlers.AppItem"
                     }
+                },
+                "update_checks_incomplete": {
+                    "type": "boolean"
                 },
                 "workspace_state": {
                     "type": "string",
@@ -22504,6 +22544,9 @@ const docTemplate = `{
                 },
                 "namespace": {
                     "type": "string"
+                },
+                "removal": {
+                    "$ref": "#/definitions/handlers.WorkspaceRemovalResponse"
                 },
                 "runtime_backend": {
                     "type": "string"
@@ -24040,9 +24083,11 @@ const docTemplate = `{
                     "type": "string"
                 },
                 "last_error": {
+                    "description": "LastError is text recorded by earlier servers, including the script\noutput they used to keep. A failure recorded now carries LastErrorCode.",
                     "type": "string"
                 },
                 "last_error_code": {
+                    "description": "LastErrorCode is the catalog code of a recorded failure, which clients\nrender as errors.\u003ccode\u003e.",
                     "type": "string"
                 },
                 "latest_version": {
@@ -24128,6 +24173,10 @@ const docTemplate = `{
                 "catalog_fetched_at": {
                     "type": "string"
                 },
+                "catalog_refreshing": {
+                    "description": "CatalogRefreshing is set while the catalog is refreshed in the\nbackground; listing again shortly may show a newer catalog.",
+                    "type": "boolean"
+                },
                 "catalog_stale": {
                     "type": "boolean"
                 },
@@ -24143,6 +24192,10 @@ const docTemplate = `{
                 },
                 "platform": {
                     "$ref": "#/definitions/handlers.WorkspaceDependencyPlatform"
+                },
+                "update_checks_incomplete": {
+                    "description": "UpdateChecksIncomplete is set by check-updates when some checks did not\nfinish in time; those keep their last result.",
+                    "type": "boolean"
                 },
                 "workspace_state": {
                     "type": "string",
@@ -24368,6 +24421,24 @@ const docTemplate = `{
                     "type": "string"
                 },
                 "name": {
+                    "type": "string"
+                }
+            }
+        },
+        "handlers.WorkspaceRemovalResponse": {
+            "type": "object",
+            "properties": {
+                "preserve_data": {
+                    "type": "boolean"
+                },
+                "state": {
+                    "type": "string",
+                    "enum": [
+                        "removing",
+                        "failed"
+                    ]
+                },
+                "updated_at": {
                     "type": "string"
                 }
             }
@@ -25545,6 +25616,10 @@ const docTemplate = `{
                 "dimensions": {
                     "type": "integer"
                 },
+                "max_output_tokens": {
+                    "description": "MaxOutputTokens is the most output tokens the model can produce in one\nresponse; nil means unknown. When set, every turn requests an explicit\nlimit within it.",
+                    "type": "integer"
+                },
                 "reasoning_default_on": {
                     "description": "ReasoningDefaultOn reports whether omitting the thinking field leaves the\nmodel thinking. Separate from off-ability: Claude 4.6 can be turned off *and*\ndefaults to off, while Opus 5 can be turned off but defaults to on, so\nomitting the field there keeps thinking running — billed, and invisible to a\nuser who believes they turned it off. nil means unknown.",
                     "type": "boolean"
@@ -26179,7 +26254,11 @@ const docTemplate = `{
                 "completed_at": {
                     "type": "string"
                 },
+                "error_code": {
+                    "type": "string"
+                },
                 "error_message": {
+                    "description": "ErrorMessage is the text an earlier server stored; new failures set\nErrorCode and leave it empty.",
                     "type": "string"
                 },
                 "id": {

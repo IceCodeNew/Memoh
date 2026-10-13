@@ -102,6 +102,8 @@ type Service struct {
 	connectors   ConnectorManager
 	logger       *slog.Logger
 	now          func() time.Time
+	// updateCheckBudget is workspacedeps.UpdateCheckBudget; tests shorten it.
+	updateCheckBudget time.Duration
 }
 
 // NewService wires a Service. It panics when a required option is nil, which
@@ -119,6 +121,7 @@ func NewService(opts Options) *Service {
 		store: opts.Store, registry: opts.Registry, skills: opts.Skills,
 		dependencies: opts.Dependencies, connectors: opts.Connectors,
 		logger: opts.Logger, now: opts.Now,
+		updateCheckBudget: workspacedeps.UpdateCheckBudget,
 	}
 	if s.logger == nil {
 		s.logger = slog.Default()
@@ -405,11 +408,10 @@ func (s *Service) materialize(ctx context.Context, botID string, release superma
 	return result, nil
 }
 
-// failInstallation records a failed operation. last_error_code keeps only
-// the public catalog code; the cause with its infrastructure detail is logged.
+// failInstallation records a failed operation. last_error_code keeps only the
+// public catalog code; the caller records the returned cause with its
+// infrastructure detail.
 func (s *Service) failInstallation(ctx context.Context, inst Installation, cause error) error {
-	s.logger.WarnContext(ctx, "App operation failed",
-		slog.String("installation_id", inst.ID), slog.String("app_id", inst.AppID), slog.Any("error", cause))
 	if _, err := s.store.SetStatus(ctx, inst.BotID, inst.ID, StatusFailed, string(publicCode(cause))); err != nil {
 		s.logger.WarnContext(ctx, "record failed App installation", slog.String("installation_id", inst.ID), slog.Any("error", err))
 	}
@@ -545,7 +547,9 @@ func (s *Service) connectorRef(ctx context.Context, botID, installationID, conne
 // reconcileStatus promotes a partial installation to installed once every
 // required connector is linked and no dependency step failed.
 func (s *Service) reconcileStatus(ctx context.Context, inst Installation) {
-	if inst.Status != StatusPartial || inst.LastErrorCode != "" {
+	// Migration 0163 does not backfill legacy failure text. Linking a
+	// connector cannot resolve a dependency failure recorded in either column.
+	if inst.Status != StatusPartial || inst.LastErrorCode != "" || inst.LastError != "" {
 		return
 	}
 	refs, err := s.store.ListConnectorRefs(ctx, inst.ID)
