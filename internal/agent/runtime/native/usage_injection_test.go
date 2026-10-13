@@ -119,7 +119,6 @@ func TestGenerateInjectsToolUsageIntoModelSystem(t *testing.T) {
 		Model: &sdk.Model{
 			ID:       "usage-model",
 			Provider: modelProvider,
-			Type:     sdk.ModelTypeChat,
 		},
 		System:           "base system",
 		Messages:         []sdk.Message{sdk.UserMessage("hi")},
@@ -144,7 +143,6 @@ func TestGeneratePlacesToolUsageBeforeWorkspaceInstructions(t *testing.T) {
 		Model: &sdk.Model{
 			ID:       "usage-model",
 			Provider: modelProvider,
-			Type:     sdk.ModelTypeChat,
 		},
 		System:           "base system\n\n## Workspace instruction files\n\nworkspace text",
 		Messages:         []sdk.Message{sdk.UserMessage("hi")},
@@ -189,7 +187,6 @@ func TestStreamInjectsToolUsageIntoModelSystem(t *testing.T) {
 		Model: &sdk.Model{
 			ID:       "usage-model",
 			Provider: modelProvider,
-			Type:     sdk.ModelTypeChat,
 		},
 		System:           "base system",
 		Messages:         []sdk.Message{sdk.UserMessage("hi")},
@@ -225,7 +222,6 @@ func TestStreamPassesLiveToolStreamFlagToTools(t *testing.T) {
 				Model: &sdk.Model{
 					ID:       "usage-model",
 					Provider: modelProvider,
-					Type:     sdk.ModelTypeChat,
 				},
 				System:           "base system",
 				Messages:         []sdk.Message{sdk.UserMessage("hi")},
@@ -267,7 +263,6 @@ func TestStreamOmitsToolUsageWhenToolCallingUnsupported(t *testing.T) {
 		Model: &sdk.Model{
 			ID:       "usage-model",
 			Provider: modelProvider,
-			Type:     sdk.ModelTypeChat,
 		},
 		System:           "base system",
 		Messages:         []sdk.Message{sdk.UserMessage("hi")},
@@ -290,7 +285,6 @@ func TestGenerateOmitsToolUsageWhenToolCallingUnsupported(t *testing.T) {
 		Model: &sdk.Model{
 			ID:       "usage-model",
 			Provider: modelProvider,
-			Type:     sdk.ModelTypeChat,
 		},
 		System:           "base system",
 		Messages:         []sdk.Message{sdk.UserMessage("hi")},
