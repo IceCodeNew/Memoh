@@ -210,6 +210,18 @@ func (a *Agent) applyBeforeModelCallHook(ctx context.Context, cfg RunConfig, ste
 		if errors.Is(err, hooks.ErrDenied) || res.Decision == hooks.DecisionDeny {
 			return cfg, fmt.Errorf("%w: %s", hooks.ErrDenied, firstHookText(res.Reason, err.Error()))
 		}
+		if errors.Is(err, hooks.ErrConfigUnavailable) {
+			// The turn runs without tools and its prompt says hooks did not
+			// run; a configuration that cannot be read does not block it.
+			if a.logger != nil {
+				a.logger.WarnContext(ctx, "before model call hook skipped: hooks configuration unavailable",
+					slog.String("bot_id", cfg.Identity.BotID),
+					slog.String("session_id", cfg.Identity.SessionID),
+					slog.Any("error", err),
+				)
+			}
+			return cfg, nil
+		}
 		return cfg, fmt.Errorf("before model call hook failed: %w", err)
 	}
 	if strings.TrimSpace(res.AppendContext) != "" {

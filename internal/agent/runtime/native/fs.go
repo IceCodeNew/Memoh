@@ -2,6 +2,7 @@ package native
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -48,6 +49,10 @@ func (f *FSClient) ReadTextSafe(ctx context.Context, path string) string {
 }
 
 // LoadSystemFiles loads the standard set of system files from the bot container.
+// A missing file is empty. A file that cannot be read is marked
+// SystemFileUnavailable instead of passing for an empty one. Each read waits
+// up to bridge.AuxiliaryLoadTimeout; once the workspace is found unreachable
+// the remaining files are not read.
 func (f *FSClient) LoadSystemFiles(ctx context.Context) []SystemFile {
 	home := "/data"
 	filenames := []string{
@@ -58,10 +63,21 @@ func (f *FSClient) LoadSystemFiles(ctx context.Context) []SystemFile {
 
 	files := make([]SystemFile, len(filenames))
 	for i, name := range filenames {
-		content := f.ReadTextSafe(ctx, home+"/"+name)
-		files[i] = SystemFile{
-			Filename: name,
-			Content:  strings.TrimSpace(content),
+		files[i] = SystemFile{Filename: name}
+		if bridge.WorkspaceUnavailableFromContext(ctx) {
+			files[i].LoadStatus = SystemFileUnavailable
+			continue
+		}
+		readCtx, cancel := bridge.AuxiliaryContext(ctx)
+		content, err := f.ReadText(readCtx, home+"/"+name)
+		cancel()
+		switch {
+		case err == nil:
+			files[i].Content = strings.TrimSpace(content)
+		case errors.Is(err, bridge.ErrNotFound):
+		default:
+			bridge.MarkWorkspaceUnavailableOn(ctx, err)
+			files[i].LoadStatus = SystemFileUnavailable
 		}
 	}
 	return files

@@ -4,12 +4,15 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strings"
 
 	"github.com/felinics/memoh/internal/agent/runtime/native"
 	"github.com/felinics/memoh/internal/bots"
+	"github.com/felinics/memoh/internal/hooks"
 	"github.com/felinics/memoh/internal/workdir"
 	"github.com/felinics/memoh/internal/workspace"
+	"github.com/felinics/memoh/internal/workspace/bridge"
 )
 
 var ErrExternalAgentWorkspaceTargetUnsupported = errors.New("workspace_target_id is not supported for external agent sessions")
@@ -24,11 +27,18 @@ func (s *Service) ValidateWorkspaceTarget(ctx context.Context, botID, targetID s
 	if s == nil || s.workspaceTargets == nil {
 		return errors.New("workspace target resolver not configured")
 	}
-	_, err := s.workspaceTargets.ResolveWorkspaceTarget(ctx, strings.TrimSpace(botID), targetID)
+	resolveCtx, cancel := bridge.AuxiliaryContext(ctx)
+	defer cancel()
+	target, err := s.workspaceTargets.ResolveWorkspaceTarget(resolveCtx, strings.TrimSpace(botID), targetID)
+	if workspaceCapabilityUnavailable(ctx, target, err) {
+		// The Computer exists; the turn itself degrades to text-only.
+		return nil
+	}
 	return err
 }
 
 func (s *Service) prepareWorkspaceRequest(ctx context.Context, req ChatRequest) (context.Context, ChatRequest, error) {
+	ctx = withAuxiliaryTurn(ctx)
 	requestedTargetID := strings.TrimSpace(req.WorkspaceTargetID)
 	bound, hasWorkdir, err := s.resolveSessionWorkdirBinding(ctx, req.BotID, req.ThreadID)
 	if err != nil {
@@ -73,7 +83,7 @@ func (s *Service) prepareWorkspaceRequest(ctx context.Context, req ChatRequest) 
 		}
 		return ctx, req, nil
 	}
-	resolved, err := s.workspaceTargets.ResolveWorkspaceTarget(ctx, req.BotID, requestedTargetID)
+	resolved, err := s.resolveTurnWorkspaceTarget(ctx, req.BotID, requestedTargetID)
 	if err != nil {
 		return ctx, req, err
 	}
@@ -84,7 +94,46 @@ func (s *Service) prepareWorkspaceRequest(ctx context.Context, req ChatRequest) 
 		Name:     strings.TrimSpace(resolved.Name),
 	}
 	ctx = workspace.WithWorkspaceTarget(ctx, req.WorkspaceTargetID)
+	ctx = context.WithValue(ctx, preparedWorkspaceTargetKey{}, *req.WorkspaceTarget)
 	return ctx, req, nil
+}
+
+// withAuxiliaryTurn scopes auxiliary loading to one chat turn: the hooks
+// configuration is read once, and a workspace found unavailable by one stage
+// is skipped by the later ones instead of each waiting for it again.
+func withAuxiliaryTurn(ctx context.Context) context.Context {
+	return hooks.WithTurnSnapshot(bridge.WithWorkspaceAvailability(ctx))
+}
+
+type preparedWorkspaceTargetKey struct{}
+
+// resolveTurnWorkspaceTarget resolves the workspace target of a chat turn
+// within the auxiliary timeout. A known target whose runtime is not ready or
+// stopped responding is returned without error and the turn's workspace is
+// marked unavailable, so the turn continues as a text-only conversation.
+// Identity, permission and database failures are returned unchanged.
+func (s *Service) resolveTurnWorkspaceTarget(ctx context.Context, botID, targetID string) (workspace.ResolvedWorkspaceTarget, error) {
+	resolveCtx, cancel := bridge.AuxiliaryContext(ctx)
+	defer cancel()
+	target, err := s.workspaceTargets.ResolveWorkspaceTarget(resolveCtx, botID, targetID)
+	if workspaceCapabilityUnavailable(ctx, target, err) {
+		if s.logger != nil {
+			s.logger.WarnContext(ctx, "workspace unavailable, continuing chat turn without it",
+				slog.String("bot_id", botID),
+				slog.String("workspace_target_id", target.TargetID),
+				slog.Any("error", err),
+			)
+		}
+		bridge.MarkWorkspaceUnavailable(ctx)
+		return target, nil
+	}
+	return target, err
+}
+
+func workspaceCapabilityUnavailable(ctx context.Context, target workspace.ResolvedWorkspaceTarget, err error) bool {
+	return err != nil && ctx.Err() == nil &&
+		errors.Is(err, workspace.ErrCapabilityUnavailable) &&
+		strings.TrimSpace(target.TargetID) != ""
 }
 
 func (s *Service) resolveWorkspaceTargetSnapshot(ctx context.Context, botID, targetID string) (*WorkspaceTarget, error) {

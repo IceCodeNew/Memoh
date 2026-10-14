@@ -29,6 +29,12 @@ func (s *Service) applyUserMessageHook(ctx context.Context, req ChatRequest) (Ch
 		if errors.Is(err, hooks.ErrDenied) || res.Decision == hooks.DecisionDeny {
 			return req, fmt.Errorf("%w: %s", hooks.ErrDenied, firstHookText(res.Reason, err.Error()))
 		}
+		if errors.Is(err, hooks.ErrConfigUnavailable) {
+			// The turn continues without tools; prepareRunConfig tells the
+			// model the hooks did not run.
+			s.logHookWarn(hooks.EventUserMessageReceived, req.BotID, req.ThreadID, err)
+			return req, nil
+		}
 		return req, err
 	}
 	if strings.TrimSpace(res.AppendContext) != "" {
@@ -158,4 +164,15 @@ func firstHookText(values ...string) string {
 		}
 	}
 	return ""
+}
+
+// hooksConfigUnavailable reports whether the turn's hooks configuration could
+// not be loaded. The policy the hooks would enforce is then unknown, so the
+// turn must not run tools.
+func (s *Service) hooksConfigUnavailable(ctx context.Context, botID string) bool {
+	if s == nil || s.hookService == nil {
+		return false
+	}
+	_, _, err := s.hookService.LoadEffective(ctx, botID)
+	return errors.Is(err, hooks.ErrConfigUnavailable)
 }
