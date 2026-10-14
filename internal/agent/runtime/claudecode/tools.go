@@ -56,6 +56,7 @@ func (d *Driver) mountTurnTools(ctx context.Context, client *bridge.Client, work
 func turnToolSession(ctx context.Context, input external.PromptInput) mcp.ToolSessionContext {
 	session := mcp.ToolSessionContext{
 		BotID:                     input.BotID,
+		UserID:                    input.ActorUserID,
 		ChatID:                    firstNonEmpty(input.ChatID, input.BotID),
 		SessionID:                 input.ThreadID,
 		RunID:                     input.RunID,
@@ -67,6 +68,7 @@ func turnToolSession(ctx context.Context, input external.PromptInput) mcp.ToolSe
 		ChannelIdentityID:         input.ChannelIdentityID,
 		SessionToken:              input.SessionToken,
 		CanRequestUserInput:       input.CanRequestUserInput,
+		IsSubagent:                input.IsSubagent(),
 		CanListUserInput:          true,
 		RuntimeActive:             true,
 		RequireActiveRun:          true,
