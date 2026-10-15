@@ -25,8 +25,9 @@ func NewFSClient(provider bridge.Provider, botID string, now func() time.Time) *
 	return &FSClient{provider: provider, botID: botID, now: now}
 }
 
-// ReadText reads a text file from the container, returning its content as a string.
-// Returns an empty string if the file does not exist or cannot be read.
+// ReadText reads a text file from the container, returning its content as a
+// string. A missing file is bridge.ErrNotFound; without a provider every file
+// is empty.
 func (f *FSClient) ReadText(ctx context.Context, path string) (string, error) {
 	if f.provider == nil {
 		return "", nil
@@ -40,12 +41,6 @@ func (f *FSClient) ReadText(ctx context.Context, path string) (string, error) {
 		return "", err
 	}
 	return resp.GetContent(), nil
-}
-
-// ReadTextSafe reads a text file, returning empty string on any error.
-func (f *FSClient) ReadTextSafe(ctx context.Context, path string) string {
-	content, _ := f.ReadText(ctx, path)
-	return content
 }
 
 // LoadSystemFiles loads the standard set of system files from the bot container.

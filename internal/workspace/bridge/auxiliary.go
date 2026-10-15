@@ -50,6 +50,13 @@ func WithWorkspaceAvailability(ctx context.Context) context.Context {
 	if availabilityFrom(ctx) != nil {
 		return ctx
 	}
+	return WithNewWorkspaceAvailability(ctx)
+}
+
+// WithNewWorkspaceAvailability starts availability state of its own even
+// inside a scoped turn. Work that outlives the turn it was started from, such
+// as a background task, uses it so the two never share a verdict.
+func WithNewWorkspaceAvailability(ctx context.Context) context.Context {
 	return context.WithValue(ctx, workspaceAvailabilityKey{}, &workspaceAvailability{})
 }
 

@@ -1020,7 +1020,6 @@ func (s *Service) buildBaseRunConfig(ctx context.Context, p baseRunConfigParams)
 			SessionToken:      p.SessionToken,
 		},
 		Bot:               botInfo,
-		Skills:            []native.SkillEntry{},
 		LoopDetection:     native.LoopDetectionConfig{Enabled: loopDetectionEnabled},
 		BackgroundManager: s.bgManager,
 		ContextLifecycle:  contextfrag.NewLifecycleHolder(),
@@ -1066,8 +1065,8 @@ func (s *Service) buildBaseRunConfig(ctx context.Context, p baseRunConfigParams)
 }
 
 // loadTurnSkills lists the bot's skills within the auxiliary timeout. When
-// the listing cannot be completed the turn continues with the skills that
-// loaded and a notice that the installed set is unknown.
+// the listing fails the turn continues with no skills and a notice that the
+// installed set is unknown.
 func (s *Service) loadTurnSkills(ctx context.Context, botID string) ([]native.SkillEntry, []string) {
 	agentSkills := []native.SkillEntry{}
 	if s.skillLoader == nil {
@@ -1078,12 +1077,12 @@ func (s *Service) loadTurnSkills(ctx context.Context, botID string) ([]native.Sk
 	}
 	skillCtx, cancel := bridge.AuxiliaryContext(ctx)
 	entries, err := s.skillLoader.LoadSkills(skillCtx, botID)
-	cancel()
-	for _, e := range entries {
-		if skill, ok := normalizeGatewaySkill(e); ok {
-			agentSkills = append(agentSkills, skill)
-		}
+	if err == nil && skillCtx.Err() != nil {
+		// Skill discovery treats files it cannot read as absent, so a listing
+		// cut short by the deadline comes back empty without an error.
+		err = skillCtx.Err()
 	}
+	cancel()
 	if err != nil {
 		s.logger.WarnContext(ctx, "failed to load skills", slog.String("bot_id", botID), slog.Any("error", err))
 		// Listing skills takes many bridge calls, so running out of time
@@ -1093,6 +1092,11 @@ func (s *Service) loadTurnSkills(ctx context.Context, botID string) ([]native.Sk
 			bridge.MarkWorkspaceUnavailable(ctx)
 		}
 		return agentSkills, []string{native.SkillsUnavailableNotice}
+	}
+	for _, e := range entries {
+		if skill, ok := normalizeGatewaySkill(e); ok {
+			agentSkills = append(agentSkills, skill)
+		}
 	}
 	return agentSkills, nil
 }
@@ -1402,7 +1406,10 @@ func buildModelSelectionRequest(p baseRunConfigParams, chatID string) ChatReques
 // The caller is responsible for filling RunConfig.Messages.
 // Used by discuss turns to reuse the service's model, tools, and prompt pipeline.
 func (s *Service) ResolveRunConfig(ctx context.Context, botID, sessionID, channelIdentityID, currentPlatform, replyTarget, conversationType, chatToken string) (ResolveRunConfigResult, error) {
-	ctx = withAuxiliaryTurn(ctx)
+	// Callers that go on to prepare and run the turn open this scope
+	// themselves so the verdict reached here carries into the run; opening
+	// it again is a no-op.
+	ctx = hooks.WithAuxiliaryTurn(ctx)
 	if strings.TrimSpace(botID) == "" {
 		return ResolveRunConfigResult{}, errors.New("bot id is required")
 	}

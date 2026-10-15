@@ -82,3 +82,24 @@ func TestWorkspaceAvailabilityIsTurnScoped(t *testing.T) {
 		t.Fatal("a canceled turn marked the workspace unavailable")
 	}
 }
+
+// Work that outlives a turn, such as a background task, opens availability
+// state of its own: a verdict reached on either side stays there.
+func TestWithNewWorkspaceAvailabilityIsolatesScopes(t *testing.T) {
+	t.Parallel()
+
+	turn := WithWorkspaceAvailability(t.Context())
+	task := WithNewWorkspaceAvailability(context.WithoutCancel(turn))
+	if task == turn || WithWorkspaceAvailability(task) != task {
+		t.Fatal("WithNewWorkspaceAvailability did not open a scope of its own")
+	}
+	MarkWorkspaceUnavailable(task)
+	if WorkspaceUnavailableFromContext(turn) {
+		t.Fatal("a background task's verdict reached the parent turn")
+	}
+	MarkWorkspaceUnavailable(turn)
+	child := WithNewWorkspaceAvailability(turn)
+	if WorkspaceUnavailableFromContext(child) {
+		t.Fatal("a new scope inherited the parent turn's verdict")
+	}
+}

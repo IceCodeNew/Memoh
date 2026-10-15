@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/felinics/memoh/internal/agent/runtime/native"
@@ -95,7 +96,7 @@ func (p failingHooksProvider) MCPClient(context.Context, string) (*bridge.Client
 // answered, but the policy the hooks enforce is unknown, so no tools run.
 func TestUnavailableHooksConfigAllowsTextOnlyTurn(t *testing.T) {
 	s := &Service{hookService: hooks.NewService(nil, failingHooksProvider{err: errors.New("read hooks.json: permission denied")})}
-	ctx := withAuxiliaryTurn(t.Context())
+	ctx := hooks.WithAuxiliaryTurn(t.Context())
 	req := ChatRequest{BotID: "bot-1", Query: "hello"}
 	got, err := s.applyUserMessageHook(ctx, req)
 	if err != nil || got.Query != req.Query {
@@ -112,7 +113,7 @@ func TestUnavailableHooksConfigAllowsTextOnlyTurn(t *testing.T) {
 
 func TestHealthyTurnKeepsToolsAndNoLoadStatus(t *testing.T) {
 	s := &Service{hookService: hooks.NewService(nil, nil)}
-	cfg := s.prepareRunConfig(withAuxiliaryTurn(t.Context()), native.RunConfig{SupportsToolCall: true, Identity: native.SessionContext{BotID: "bot-1"}})
+	cfg := s.prepareRunConfig(hooks.WithAuxiliaryTurn(t.Context()), native.RunConfig{SupportsToolCall: true, Identity: native.SessionContext{BotID: "bot-1"}})
 	if !cfg.SupportsToolCall || strings.Contains(cfg.System, "Context loading status") {
 		t.Fatalf("SupportsToolCall=%v, want a healthy turn untouched", cfg.SupportsToolCall)
 	}
@@ -122,4 +123,48 @@ type failingSkillLoader struct{}
 
 func (failingSkillLoader) LoadSkills(context.Context, string) ([]SkillEntry, error) {
 	return nil, bridge.ErrUnavailable
+}
+
+type countingWorkspaceInfoProvider struct {
+	calls atomic.Int32
+}
+
+func (*countingWorkspaceInfoProvider) MCPClient(context.Context, string) (*bridge.Client, error) {
+	return nil, bridge.ErrUnavailable
+}
+
+func (p *countingWorkspaceInfoProvider) WorkspaceInfo(context.Context, string) (bridge.WorkspaceInfo, error) {
+	p.calls.Add(1)
+	return bridge.WorkspaceInfo{DefaultWorkDir: "/srv/work"}, nil
+}
+
+// Every hook event of a turn reports the same workspace description, read
+// once; a workspace the turn found unavailable is not asked at all.
+func TestHookEventsShareOneWorkspaceDescriptionPerTurn(t *testing.T) {
+	provider := &countingWorkspaceInfoProvider{}
+	s := &Service{
+		agent:       native.New(native.Deps{BridgeProvider: provider}),
+		hookService: hooks.NewService(nil, nil),
+	}
+	ctx := hooks.WithAuxiliaryTurn(t.Context())
+	for _, event := range []string{hooks.EventUserMessageReceived, hooks.EventBeforePromptBuild, hooks.EventAfterPromptBuild} {
+		if _, err := s.runBaseHook(ctx, "bot-1", "sess-1", "chat-1", event, nil); err != nil {
+			t.Fatalf("%s: %v", event, err)
+		}
+	}
+	if got := provider.calls.Load(); got != 1 {
+		t.Fatalf("workspace described %d times in one turn, want 1", got)
+	}
+	if info := s.hookWorkspace(ctx, "bot-1"); info.CWD != "/srv/work" {
+		t.Fatalf("hook workspace = %+v", info)
+	}
+
+	unavailable := hooks.WithAuxiliaryTurn(t.Context())
+	bridge.MarkWorkspaceUnavailable(unavailable)
+	if info := s.hookWorkspace(unavailable, "bot-1"); info.CWD != hooks.DefaultWorkDir {
+		t.Fatalf("hook workspace for an unavailable workspace = %+v", info)
+	}
+	if got := provider.calls.Load(); got != 1 {
+		t.Fatalf("an unavailable workspace was described: calls = %d", got)
+	}
 }

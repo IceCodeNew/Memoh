@@ -14,7 +14,6 @@ import (
 	"github.com/felinics/memoh/internal/agent/step"
 	"github.com/felinics/memoh/internal/agent/toolexec"
 	"github.com/felinics/memoh/internal/hooks"
-	"github.com/felinics/memoh/internal/workspace/bridge"
 )
 
 type hookToolRunner struct {
@@ -308,28 +307,10 @@ func (a *Agent) runAfterModelCallHook(ctx context.Context, cfg RunConfig, record
 }
 
 func (a *Agent) hookWorkspace(ctx context.Context, botID string) hooks.WorkspaceInfo {
-	info := hooks.WorkspaceInfo{
-		CWD:     hooks.DefaultWorkDir,
-		Runtime: bridge.WorkspaceBackendContainer,
+	if a == nil {
+		return hooks.TurnWorkspaceInfo(ctx, nil, botID)
 	}
-	if a == nil || a.bridgeProvider == nil {
-		return info
-	}
-	provider, ok := a.bridgeProvider.(bridge.WorkspaceInfoProvider)
-	if !ok {
-		return info
-	}
-	workspaceInfo, err := provider.WorkspaceInfo(ctx, botID)
-	if err != nil {
-		return info
-	}
-	if strings.TrimSpace(workspaceInfo.DefaultWorkDir) != "" {
-		info.CWD = workspaceInfo.DefaultWorkDir
-	}
-	if strings.TrimSpace(workspaceInfo.Backend) != "" {
-		info.Runtime = workspaceInfo.Backend
-	}
-	return info
+	return hooks.TurnWorkspaceInfo(ctx, a.bridgeProvider, botID)
 }
 
 func execContext(fallback context.Context, execCtx *toolexec.ToolExecContext) context.Context {

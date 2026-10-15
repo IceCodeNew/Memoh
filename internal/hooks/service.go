@@ -80,13 +80,16 @@ func (s *Service) Load(ctx context.Context, botID string) (Config, bool, error) 
 }
 
 // LoadEffective returns the configuration hooks run with. Failing to read or
-// parse it is ErrConfigUnavailable. Within a turn scoped by WithTurnSnapshot
-// the first result is reused, so every hook event of the turn sees the same
-// configuration and a stalled workspace is waited on at most once.
+// parse it is ErrConfigUnavailable; failing to identify the bot's workspace
+// target (a database error, for example) is returned as is, since that is not
+// a workspace fault a turn may continue without. Within a turn scoped by
+// WithTurnSnapshot the first result is reused, so every hook event of the
+// turn sees the same configuration and a stalled workspace is waited on at
+// most once.
 func (s *Service) LoadEffective(ctx context.Context, botID string) (Config, bool, error) {
 	targetID, err := s.currentWorkspaceTargetID(ctx, botID)
 	if err != nil {
-		return Config{}, false, fmt.Errorf("%w: %w", ErrConfigUnavailable, err)
+		return Config{}, false, err
 	}
 	ctx = bridge.WithWorkspaceTarget(ctx, targetID)
 	if snapshot := turnSnapshotFrom(ctx); snapshot != nil {
@@ -145,7 +148,7 @@ func (s *Service) Run(ctx context.Context, req Request, runner ToolRunner) (Resu
 	}
 	targetID, err := s.currentWorkspaceTargetID(ctx, req.BotID)
 	if err != nil {
-		return Result{}, fmt.Errorf("%w: %w", ErrConfigUnavailable, err)
+		return Result{}, err
 	}
 	ctx = bridge.WithWorkspaceTarget(ctx, targetID)
 	cfg, _, err := s.LoadEffective(ctx, req.BotID)

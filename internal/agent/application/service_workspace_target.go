@@ -38,7 +38,7 @@ func (s *Service) ValidateWorkspaceTarget(ctx context.Context, botID, targetID s
 }
 
 func (s *Service) prepareWorkspaceRequest(ctx context.Context, req ChatRequest) (context.Context, ChatRequest, error) {
-	ctx = withAuxiliaryTurn(ctx)
+	ctx = hooks.WithAuxiliaryTurn(ctx)
 	requestedTargetID := strings.TrimSpace(req.WorkspaceTargetID)
 	bound, hasWorkdir, err := s.resolveSessionWorkdirBinding(ctx, req.BotID, req.ThreadID)
 	if err != nil {
@@ -98,13 +98,6 @@ func (s *Service) prepareWorkspaceRequest(ctx context.Context, req ChatRequest) 
 	return ctx, req, nil
 }
 
-// withAuxiliaryTurn scopes auxiliary loading to one chat turn: the hooks
-// configuration is read once, and a workspace found unavailable by one stage
-// is skipped by the later ones instead of each waiting for it again.
-func withAuxiliaryTurn(ctx context.Context) context.Context {
-	return hooks.WithTurnSnapshot(bridge.WithWorkspaceAvailability(ctx))
-}
-
 type preparedWorkspaceTargetKey struct{}
 
 // resolveTurnWorkspaceTarget resolves the workspace target of a chat turn
@@ -136,6 +129,11 @@ func workspaceCapabilityUnavailable(ctx context.Context, target workspace.Resolv
 		strings.TrimSpace(target.TargetID) != ""
 }
 
+// resolveWorkspaceTargetSnapshot describes the workspace target a stored turn
+// records. It resolves within the auxiliary timeout like the turn itself, so
+// a workspace that is not ready or stopped responding keeps its identity and
+// is marked unavailable for the rest of the turn instead of being waited on
+// again by the continuation that follows.
 func (s *Service) resolveWorkspaceTargetSnapshot(ctx context.Context, botID, targetID string) (*WorkspaceTarget, error) {
 	if s == nil || s.workspaceTargets == nil {
 		if strings.TrimSpace(targetID) == "" {
@@ -143,7 +141,7 @@ func (s *Service) resolveWorkspaceTargetSnapshot(ctx context.Context, botID, tar
 		}
 		return nil, errors.New("workspace target resolver not configured")
 	}
-	resolved, err := s.workspaceTargets.ResolveWorkspaceTarget(ctx, botID, targetID)
+	resolved, err := s.resolveTurnWorkspaceTarget(ctx, botID, targetID)
 	if err != nil {
 		return nil, err
 	}

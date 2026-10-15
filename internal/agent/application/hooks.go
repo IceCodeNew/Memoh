@@ -8,7 +8,6 @@ import (
 	"strings"
 
 	"github.com/felinics/memoh/internal/hooks"
-	"github.com/felinics/memoh/internal/workspace/bridge"
 )
 
 func (s *Service) applyUserMessageHook(ctx context.Context, req ChatRequest) (ChatRequest, error) {
@@ -103,28 +102,10 @@ func (s *Service) runBaseHook(ctx context.Context, botID, sessionID, chatID, eve
 }
 
 func (s *Service) hookWorkspace(ctx context.Context, botID string) hooks.WorkspaceInfo {
-	info := hooks.WorkspaceInfo{
-		CWD:     hooks.DefaultWorkDir,
-		Runtime: bridge.WorkspaceBackendContainer,
-	}
 	if s == nil || s.agent == nil {
-		return info
+		return hooks.TurnWorkspaceInfo(ctx, nil, botID)
 	}
-	provider, ok := s.agent.BridgeProvider().(bridge.WorkspaceInfoProvider)
-	if !ok {
-		return info
-	}
-	workspaceInfo, err := provider.WorkspaceInfo(ctx, botID)
-	if err != nil {
-		return info
-	}
-	if strings.TrimSpace(workspaceInfo.DefaultWorkDir) != "" {
-		info.CWD = workspaceInfo.DefaultWorkDir
-	}
-	if strings.TrimSpace(workspaceInfo.Backend) != "" {
-		info.Runtime = workspaceInfo.Backend
-	}
-	return info
+	return hooks.TurnWorkspaceInfo(ctx, s.agent.BridgeProvider(), botID)
 }
 
 func (s *Service) logHookWarn(eventName, botID, sessionID string, err error) {
