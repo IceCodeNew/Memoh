@@ -914,3 +914,64 @@ func TestExecStreamCloseWithoutCloseSendCancelsProcess(t *testing.T) {
 		return
 	}
 }
+
+func TestClientTunnelCloseUnblocksServerTargetWrite(t *testing.T) {
+	listener, err := (&net.ListenConfig{}).Listen(t.Context(), "tcp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = listener.Close() }()
+	accepted := make(chan net.Conn, 1)
+	go func() {
+		conn, err := listener.Accept()
+		if err == nil {
+			accepted <- conn
+		}
+	}()
+	handlerDone := make(chan struct{})
+	lis := bufconn.Listen(testBufSize)
+	srv := grpc.NewServer(grpc.StreamInterceptor(func(srv any, ss grpc.ServerStream, _ *grpc.StreamServerInfo, handler grpc.StreamHandler) error {
+		defer close(handlerDone)
+		return handler(srv, ss)
+	}))
+	pb.RegisterContainerServiceServer(srv, bridgesvc.New(bridgesvc.Options{}))
+	go func() { _ = srv.Serve(lis) }()
+	defer srv.Stop()
+	rpc, err := grpc.NewClient("passthrough:///bufnet", grpc.WithTransportCredentials(insecure.NewCredentials()), grpc.WithContextDialer(func(context.Context, string) (net.Conn, error) { return lis.Dial() }))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = rpc.Close() }()
+	client := NewClientFromConn(rpc)
+	tunnel, err := client.DialContext(context.Background(), "tcp", listener.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	target := <-accepted
+	defer func() { _ = target.Close() }()
+	wrote := make(chan struct{})
+	go func() {
+		defer close(wrote)
+		for i := 0; i < 2000; i++ {
+			if _, err := tunnel.Write(make([]byte, 48*1024)); err != nil {
+				return
+			}
+		}
+	}()
+	time.Sleep(300 * time.Millisecond)
+	select {
+	case <-wrote:
+		t.Fatal("writes finished without target reading")
+	default:
+	}
+	if err := tunnel.Close(); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-handlerDone:
+	case <-time.After(time.Second):
+		t.Error("canceled tunnel handler remains blocked writing the target socket")
+	}
+	_ = target.Close()
+	<-wrote
+}
