@@ -162,7 +162,7 @@ export function useDisplayClipboard(connection: ClipboardConnection, isActive: (
         }
         return false
       } catch {
-        return false
+        return superseded()
       }
     })()
     let timeout!: ReturnType<typeof setTimeout>

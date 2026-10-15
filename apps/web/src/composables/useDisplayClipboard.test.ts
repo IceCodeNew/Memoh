@@ -286,14 +286,16 @@ describe('clipboard sync without extra controls', () => {
     expect(connection.syncClipboardText).not.toHaveBeenCalled()
   })
 
-  it('preserves a queued click and copy shortcut when that copy supersedes the local read', async () => {
+  it.each([false, true])('preserves queued copy when the superseded read rejects: %s', async (rejectRead) => {
     const { clipboard, connection } = setup()
     let resolve!: (text: string) => void
-    readText.mockImplementationOnce(() => new Promise(yes => { resolve = yes }))
+    let reject!: (error: Error) => void
+    readText.mockImplementationOnce(() => new Promise((yes, no) => { resolve = yes; reject = no }))
     const sync = clipboard.syncLocalClipboard(true)
     await Promise.resolve()
     clipboard.prepareRemoteCopy()
-    resolve('old local clipboard')
+    if (rejectRead) reject(new Error('Read denied'))
+    else resolve('old local clipboard')
     expect(await sync).toBe(true)
     expect(connection.syncClipboardText).not.toHaveBeenCalled()
     connection.clipboardText.value = 'new remote selection'
