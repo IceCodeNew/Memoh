@@ -8,18 +8,29 @@ import (
 	dbstore "github.com/felinics/memoh/internal/db/store"
 )
 
-func (s *Store) CreateUserRuntime(ctx context.Context, input dbstore.CreateUserRuntimeInput) (dbstore.UserRuntimeRecord, error) {
+func (s *Store) CreateUserRuntime(ctx context.Context, input dbstore.CreateUserRuntimeInput, attach dbstore.UserRuntimeAttach) (dbstore.UserRuntimeRecord, error) {
 	userID, err := db.ParseUUID(input.UserID)
 	if err != nil {
 		return dbstore.UserRuntimeRecord{}, err
 	}
-	row, err := s.queries.CreateUserRuntime(ctx, dbsqlc.CreateUserRuntimeParams{
-		UserID: userID, Name: input.Name, ApiToken: input.APIToken,
+	var record dbstore.UserRuntimeRecord
+	err = s.inTx(ctx, func(queries *dbsqlc.Queries) error {
+		row, err := queries.CreateUserRuntime(ctx, dbsqlc.CreateUserRuntimeParams{
+			UserID: userID, Name: input.Name, ApiToken: input.APIToken,
+		})
+		if err != nil {
+			return err
+		}
+		record = userRuntimeRecord(row)
+		if attach == nil {
+			return nil
+		}
+		return attach(ctx, NewQueries(queries), record)
 	})
 	if err != nil {
 		return dbstore.UserRuntimeRecord{}, err
 	}
-	return userRuntimeRecord(row), nil
+	return record, nil
 }
 
 func (s *Store) GetUserRuntimeByAPIToken(ctx context.Context, apiToken string) (dbstore.UserRuntimeRecord, error) {
@@ -75,28 +86,16 @@ func (s *Store) RevokeUserRuntime(ctx context.Context, runtimeID, userID string)
 	if err != nil {
 		return err
 	}
-	revoke := func(queries *dbsqlc.Queries) error {
+	return s.inTx(ctx, func(queries *dbsqlc.Queries) error {
 		if _, err := queries.RevokeUserRuntime(ctx, dbsqlc.RevokeUserRuntimeParams{ID: id, UserID: ownerID}); err != nil {
 			return mapQueryErr(err)
 		}
 		// Cascade: dead mounts of the revoked runtime must not linger as
-		// ghost rows on the bot page / grants view / composer selector.
-		return mapQueryErr(queries.DeleteBotRemoteRuntimeMountsByRuntime(ctx, id))
-	}
-	if s.pool == nil {
-		// NewWithQueries is used only by focused store tests. Production stores
-		// always carry a pool and use the transaction below.
-		return revoke(s.queries)
-	}
-	tx, err := s.pool.Begin(ctx)
-	if err != nil {
-		return err
-	}
-	defer func() { _ = tx.Rollback(ctx) }()
-	if err := revoke(s.queries.WithTx(tx)); err != nil {
-		return err
-	}
-	return tx.Commit(ctx)
+		// ghost rows on the bot page / grants view / composer selector. The
+		// runtime's user workspace row stays; only the bindings to it go.
+		_, err := queries.DeleteBotWorkspaceBindingsByWorkspace(ctx, id)
+		return mapQueryErr(err)
+	})
 }
 
 func (s *Store) BackfillUserRuntimeName(ctx context.Context, runtimeID, userID, name, defaultName string) (bool, error) {

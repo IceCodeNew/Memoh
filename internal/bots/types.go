@@ -107,6 +107,19 @@ type WorkspaceIntents interface {
 	Current(ctx context.Context, botID string) (WorkspaceOutcome, bool, error)
 }
 
+// WorkspaceBindings keeps the managed workspace a bot is bound to in step
+// with the bot's lifecycle. Every method runs through the caller's
+// transaction q so the workspace rows commit with the bot row or not at all.
+type WorkspaceBindings interface {
+	// BindManaged creates the new bot's managed workspace (its own id, owned
+	// by ownerUserID, named after the bot) and binds it as the primary target.
+	BindManaged(ctx context.Context, q dbstore.Queries, botID, ownerUserID, name string) error
+	// ManagedWorkspaceIDs lists the managed workspaces bound to the bot.
+	ManagedWorkspaceIDs(ctx context.Context, q dbstore.Queries, botID string) ([]string, error)
+	// ReleaseUnbound deletes the workspace once nothing binds it any more.
+	ReleaseUnbound(ctx context.Context, q dbstore.Queries, workspaceID string) error
+}
+
 // WorkspaceOutcome is the bots-facing projection of a workspace observation.
 type WorkspaceOutcome struct {
 	Desired        string

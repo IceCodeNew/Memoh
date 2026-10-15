@@ -308,27 +308,9 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_user_runtimes_active_user_name
   WHERE revoked_at IS NULL;
 CREATE INDEX IF NOT EXISTS idx_user_runtimes_user_id ON user_runtimes(user_id);
 
--- bot_remote_runtime_bindings: persistent Bot workspace placement on a
--- user-owned Remote Runtime. The Runtime exposes its host filesystem and uses
--- the OS user's home directory as the default working directory.
-CREATE TABLE IF NOT EXISTS bot_remote_runtime_bindings (
-  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  bot_id UUID NOT NULL REFERENCES bots(id) ON DELETE CASCADE,
-  runtime_id UUID NOT NULL REFERENCES user_runtimes(id) ON DELETE RESTRICT,
-  is_primary BOOLEAN NOT NULL DEFAULT false,
-  tool_approval_config JSONB NOT NULL DEFAULT '{"enabled":true,"read":{"mode":"allow","bypass_globs":[],"force_review_globs":[]},"write":{"mode":"allow","bypass_globs":[],"force_review_globs":[]},"exec":{"mode":"allow","bypass_commands":[],"force_review_commands":[]}}'::jsonb,
-  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-  UNIQUE (bot_id, runtime_id)
-);
-
-CREATE INDEX IF NOT EXISTS idx_bot_remote_runtime_bindings_runtime_id
-  ON bot_remote_runtime_bindings(runtime_id);
-CREATE INDEX IF NOT EXISTS idx_bot_remote_runtime_bindings_bot_id
-  ON bot_remote_runtime_bindings(bot_id);
-CREATE UNIQUE INDEX IF NOT EXISTS idx_bot_remote_runtime_bindings_primary
-  ON bot_remote_runtime_bindings(bot_id)
-  WHERE is_primary = TRUE;
+-- Bot placement on a user-owned Remote Runtime is recorded in
+-- bot_workspace_bindings (declared at the end of this file, next to
+-- workspaces), one binding per (bot, user workspace).
 
 CREATE TABLE IF NOT EXISTS bot_acl_rules (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -1272,7 +1254,6 @@ ALTER TABLE IF EXISTS public.bot_channel_routes ADD COLUMN IF NOT EXISTS team_id
 ALTER TABLE IF EXISTS public.bot_history_message_assets ADD COLUMN IF NOT EXISTS team_id uuid;
 ALTER TABLE IF EXISTS public.bot_history_message_compacts ADD COLUMN IF NOT EXISTS team_id uuid;
 ALTER TABLE IF EXISTS public.bot_history_messages ADD COLUMN IF NOT EXISTS team_id uuid;
-ALTER TABLE IF EXISTS public.bot_remote_runtime_bindings ADD COLUMN IF NOT EXISTS team_id uuid;
 ALTER TABLE IF EXISTS public.bot_session_discuss_cursors ADD COLUMN IF NOT EXISTS team_id uuid;
 ALTER TABLE IF EXISTS public.bot_session_events ADD COLUMN IF NOT EXISTS team_id uuid;
 ALTER TABLE IF EXISTS public.bot_sessions ADD COLUMN IF NOT EXISTS team_id uuid;
@@ -1331,7 +1312,6 @@ ALTER TABLE IF EXISTS public.bot_channel_routes ALTER COLUMN team_id SET DEFAULT
 ALTER TABLE IF EXISTS public.bot_history_message_assets ALTER COLUMN team_id SET DEFAULT public.memoh_current_team_id();
 ALTER TABLE IF EXISTS public.bot_history_message_compacts ALTER COLUMN team_id SET DEFAULT public.memoh_current_team_id();
 ALTER TABLE IF EXISTS public.bot_history_messages ALTER COLUMN team_id SET DEFAULT public.memoh_current_team_id();
-ALTER TABLE IF EXISTS public.bot_remote_runtime_bindings ALTER COLUMN team_id SET DEFAULT public.memoh_current_team_id();
 ALTER TABLE IF EXISTS public.bot_session_discuss_cursors ALTER COLUMN team_id SET DEFAULT public.memoh_current_team_id();
 ALTER TABLE IF EXISTS public.bot_session_events ALTER COLUMN team_id SET DEFAULT public.memoh_current_team_id();
 ALTER TABLE IF EXISTS public.bot_sessions ALTER COLUMN team_id SET DEFAULT public.memoh_current_team_id();
@@ -2571,10 +2551,10 @@ CREATE TABLE IF NOT EXISTS public.bot_workdirs (
         CHECK ((target_kind = 'remote') = (remote_binding_id IS NOT NULL)),
     CONSTRAINT bot_workdirs_bot_id_fkey
         FOREIGN KEY (team_id, bot_id)
-        REFERENCES public.bots(team_id, id) ON DELETE CASCADE,
-    CONSTRAINT bot_workdirs_remote_binding_fkey
-        FOREIGN KEY (team_id, remote_binding_id)
-        REFERENCES public.bot_remote_runtime_bindings(team_id, id) ON DELETE CASCADE
+        REFERENCES public.bots(team_id, id) ON DELETE CASCADE
+    -- bot_workdirs_remote_binding_fkey (team_id, remote_binding_id) ->
+    -- bot_workspace_bindings is added at the end of the file, after that
+    -- table exists.
 );
 
 -- One live workdir per directory per target. Native rows carry a NULL
@@ -3109,3 +3089,123 @@ CREATE POLICY bot_memory_usage_team_update ON public.bot_memory_usage
   WITH CHECK (team_id = public.memoh_current_team_id());
 CREATE POLICY bot_memory_usage_team_delete ON public.bot_memory_usage
   FOR DELETE USING (team_id = public.memoh_current_team_id());
+
+-- Computers a team knows about. A Bot is bound to workspaces instead of
+-- owning one container: kind 'managed' is the workspace the server provisions
+-- for a bot (its bot_workspaces row is the provisioning slot), kind 'user' is
+-- a machine paired through Remote Runtime and shares the user_runtimes id.
+-- These two tables stay at the end of the file so fresh installs and the 0167
+-- upgrade produce the same constraint set (0112 re-derives team helper keys
+-- from md5('<table>:<table>_pkey'), which is why the helper names below look
+-- generated).
+CREATE TABLE IF NOT EXISTS public.workspaces (
+    id            UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+    team_id       UUID        NOT NULL DEFAULT public.memoh_current_team_id()
+                              REFERENCES public.teams(id) ON DELETE RESTRICT,
+    owner_user_id UUID        NOT NULL,
+    kind          TEXT        NOT NULL,
+    name          TEXT        NOT NULL,
+    metadata      JSONB       NOT NULL DEFAULT '{}'::jsonb,
+    created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+    CONSTRAINT memoh_team_key_78c83a5def92 UNIQUE (team_id, id),
+    CONSTRAINT workspaces_kind_check CHECK (kind IN ('managed', 'user')),
+    CONSTRAINT workspaces_name_check CHECK (btrim(name) <> ''),
+    CONSTRAINT workspaces_owner_user_id_fkey
+        FOREIGN KEY (team_id, owner_user_id)
+        REFERENCES public.team_members(team_id, user_id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_workspaces_owner
+    ON public.workspaces (team_id, owner_user_id, kind);
+
+ALTER TABLE public.workspaces ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.workspaces FORCE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS workspaces_team_select ON public.workspaces;
+DROP POLICY IF EXISTS workspaces_team_insert ON public.workspaces;
+DROP POLICY IF EXISTS workspaces_team_update ON public.workspaces;
+DROP POLICY IF EXISTS workspaces_team_delete ON public.workspaces;
+
+CREATE POLICY workspaces_team_select ON public.workspaces
+    FOR SELECT USING (team_id = public.memoh_current_team_id());
+CREATE POLICY workspaces_team_insert ON public.workspaces
+    FOR INSERT WITH CHECK (team_id = public.memoh_current_team_id());
+CREATE POLICY workspaces_team_update ON public.workspaces
+    FOR UPDATE
+    USING (team_id = public.memoh_current_team_id())
+    WITH CHECK (team_id = public.memoh_current_team_id());
+CREATE POLICY workspaces_team_delete ON public.workspaces
+    FOR DELETE USING (team_id = public.memoh_current_team_id());
+
+-- Which bots may use which workspace; at most one binding per bot is primary.
+-- Remote mounts are the bindings whose workspace has kind 'user'.
+CREATE TABLE IF NOT EXISTS public.bot_workspace_bindings (
+    id                   UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+    team_id              UUID        NOT NULL DEFAULT public.memoh_current_team_id()
+                                     REFERENCES public.teams(id) ON DELETE RESTRICT,
+    bot_id               UUID        NOT NULL,
+    workspace_id         UUID        NOT NULL,
+    is_primary           BOOLEAN     NOT NULL DEFAULT false,
+    tool_approval_config JSONB       NOT NULL DEFAULT '{"enabled":true,"read":{"mode":"allow","bypass_globs":[],"force_review_globs":[]},"write":{"mode":"allow","bypass_globs":[],"force_review_globs":[]},"exec":{"mode":"allow","bypass_commands":[],"force_review_commands":[]}}'::jsonb,
+    created_at           TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at           TIMESTAMPTZ NOT NULL DEFAULT now(),
+    CONSTRAINT memoh_team_key_3bd860ed9422 UNIQUE (team_id, id),
+    CONSTRAINT bot_workspace_bindings_bot_workspace_key
+        UNIQUE (team_id, bot_id, workspace_id)
+);
+
+ALTER TABLE public.bot_workspace_bindings
+    DROP CONSTRAINT IF EXISTS bot_workspace_bindings_bot_id_fkey;
+ALTER TABLE public.bot_workspace_bindings
+    ADD CONSTRAINT bot_workspace_bindings_bot_id_fkey
+    FOREIGN KEY (team_id, bot_id)
+    REFERENCES public.bots(team_id, id) ON DELETE CASCADE
+    NOT VALID;
+ALTER TABLE public.bot_workspace_bindings
+    DROP CONSTRAINT IF EXISTS bot_workspace_bindings_workspace_id_fkey;
+-- A bound workspace cannot be deleted, but the check waits for the end of
+-- the transaction: removing a team membership cascades to the member's bots
+-- (and so to these bindings) and to their workspaces in one statement, and
+-- an immediate RESTRICT would fire before the bindings are gone, in an order
+-- that depends on constraint creation order.
+ALTER TABLE public.bot_workspace_bindings
+    ADD CONSTRAINT bot_workspace_bindings_workspace_id_fkey
+    FOREIGN KEY (team_id, workspace_id)
+    REFERENCES public.workspaces(team_id, id) ON DELETE NO ACTION
+    DEFERRABLE INITIALLY DEFERRED
+    NOT VALID;
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_bot_workspace_bindings_primary
+    ON public.bot_workspace_bindings (team_id, bot_id)
+    WHERE is_primary;
+CREATE INDEX IF NOT EXISTS idx_bot_workspace_bindings_workspace
+    ON public.bot_workspace_bindings (team_id, workspace_id);
+
+ALTER TABLE public.bot_workspace_bindings ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.bot_workspace_bindings FORCE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS bot_workspace_bindings_team_select ON public.bot_workspace_bindings;
+DROP POLICY IF EXISTS bot_workspace_bindings_team_insert ON public.bot_workspace_bindings;
+DROP POLICY IF EXISTS bot_workspace_bindings_team_update ON public.bot_workspace_bindings;
+DROP POLICY IF EXISTS bot_workspace_bindings_team_delete ON public.bot_workspace_bindings;
+
+CREATE POLICY bot_workspace_bindings_team_select ON public.bot_workspace_bindings
+    FOR SELECT USING (team_id = public.memoh_current_team_id());
+CREATE POLICY bot_workspace_bindings_team_insert ON public.bot_workspace_bindings
+    FOR INSERT WITH CHECK (team_id = public.memoh_current_team_id());
+CREATE POLICY bot_workspace_bindings_team_update ON public.bot_workspace_bindings
+    FOR UPDATE
+    USING (team_id = public.memoh_current_team_id())
+    WITH CHECK (team_id = public.memoh_current_team_id());
+CREATE POLICY bot_workspace_bindings_team_delete ON public.bot_workspace_bindings
+    FOR DELETE USING (team_id = public.memoh_current_team_id());
+
+-- Remote workdirs hang off their binding row; unbinding cascades to them.
+ALTER TABLE public.bot_workdirs
+    DROP CONSTRAINT IF EXISTS bot_workdirs_remote_binding_fkey;
+ALTER TABLE public.bot_workdirs
+    ADD CONSTRAINT bot_workdirs_remote_binding_fkey
+    FOREIGN KEY (team_id, remote_binding_id)
+    REFERENCES public.bot_workspace_bindings(team_id, id) ON DELETE CASCADE
+    NOT VALID;

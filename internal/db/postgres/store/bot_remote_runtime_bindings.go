@@ -102,72 +102,47 @@ func (s *Store) GetPrimaryMount(ctx context.Context, botID string) (dbstore.BotR
 	), nil
 }
 
+// SetPrimary makes targetID the bot's primary binding. "native" (or an empty
+// target) means the bot's managed workspace binding: the remote primaries are
+// cleared and the managed binding is marked primary in the same transaction,
+// so a bot without a managed binding keeps its current primary and gets
+// db.ErrNoManagedWorkspaceBinding instead of a silent no-op.
 func (s *Store) SetPrimary(ctx context.Context, botID, targetID string) error {
 	botUUID, err := db.ParseUUID(botID)
 	if err != nil {
 		return err
 	}
-	if strings.TrimSpace(targetID) == "" || strings.EqualFold(strings.TrimSpace(targetID), "native") {
-		return mapQueryErr(s.queries.ClearBotRemoteRuntimePrimary(ctx, botUUID))
-	}
-	targetUUID, err := db.ParseUUID(targetID)
-	if err != nil {
-		return err
-	}
-	setPrimary := func(queries *dbsqlc.Queries) error {
-		if err := queries.ClearBotRemoteRuntimePrimary(ctx, botUUID); err != nil {
-			return mapQueryErr(err)
-		}
-		rows, err := queries.SetBotRemoteRuntimePrimary(ctx, dbsqlc.SetBotRemoteRuntimePrimaryParams{
-			BotID: botUUID, TargetID: targetUUID,
+	targetID = strings.TrimSpace(targetID)
+	if targetID == "" || strings.EqualFold(targetID, "native") {
+		return s.inTx(ctx, func(queries *dbsqlc.Queries) error {
+			if err := queries.ClearBotWorkspaceBindingPrimary(ctx, botUUID); err != nil {
+				return mapQueryErr(err)
+			}
+			rows, err := queries.SetBotManagedWorkspaceBindingPrimary(ctx, botUUID)
+			if err != nil {
+				return mapQueryErr(err)
+			}
+			if rows == 0 {
+				return db.ErrNoManagedWorkspaceBinding
+			}
+			return nil
 		})
-		if err != nil {
-			return mapQueryErr(err)
-		}
-		if rows == 0 {
-			return db.ErrNotFound
-		}
-		return nil
 	}
-	if s.pool == nil {
-		// NewWithQueries is used only by focused store tests. Production stores
-		// always carry a pool and use the transaction below.
-		if _, err := s.GetMount(ctx, botID, targetID); err != nil {
-			return err
-		}
-		return setPrimary(s.queries)
-	}
-	tx, err := s.pool.Begin(ctx)
-	if err != nil {
+	// Only a remote mount is addressable here; the managed binding is reached
+	// through the "native" target above.
+	if _, err := s.GetMount(ctx, botID, targetID); err != nil {
 		return err
 	}
-	defer func() { _ = tx.Rollback(ctx) }()
-	if err := setPrimary(s.queries.WithTx(tx)); err != nil {
-		return err
-	}
-	return tx.Commit(ctx)
+	return s.SetPrimaryBotWorkspaceBinding(ctx, botID, targetID)
 }
 
 func (s *Store) UpdateToolApproval(ctx context.Context, botID, targetID string, config dbstore.JSON) error {
-	botUUID, targetUUID, err := parseRemoteMountIDs(botID, targetID)
-	if err != nil {
-		return err
-	}
-	_, err = s.queries.UpdateBotRemoteRuntimeMountToolApproval(ctx, dbsqlc.UpdateBotRemoteRuntimeMountToolApprovalParams{
-		BotID: botUUID, TargetID: targetUUID, ToolApprovalConfig: config,
-	})
-	return mapQueryErr(err)
+	_, err := s.UpdateBotWorkspaceBindingToolApproval(ctx, botID, targetID, config)
+	return err
 }
 
 func (s *Store) DeleteMount(ctx context.Context, botID, targetID string) error {
-	botUUID, targetUUID, err := parseRemoteMountIDs(botID, targetID)
-	if err != nil {
-		return err
-	}
-	_, err = s.queries.DeleteBotRemoteRuntimeMount(ctx, dbsqlc.DeleteBotRemoteRuntimeMountParams{
-		BotID: botUUID, TargetID: targetUUID,
-	})
-	return mapQueryErr(err)
+	return s.DeleteBotWorkspaceBinding(ctx, botID, targetID)
 }
 
 func parseRemoteMountIDs(botID, targetID string) (pgtype.UUID, pgtype.UUID, error) {

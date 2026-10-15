@@ -51,7 +51,7 @@ func TestRemoteRuntimeDeletionPreservesAppInstallation(t *testing.T) {
 	}
 	var bindingCount int
 	if err := pool.QueryRow(ctx, `
-		SELECT count(*) FROM bot_remote_runtime_bindings
+		SELECT count(*) FROM bot_workspace_bindings
 		WHERE bot_id = $1 AND id = $2`, appBotOneID, targetID).Scan(&bindingCount); err != nil {
 		t.Fatalf("count target bindings: %v", err)
 	}
@@ -66,16 +66,7 @@ func TestUserRuntimeRevocationPreservesAppInstallations(t *testing.T) {
 	seedAppBot(t, pool)
 	const runtimeID = "50000000-0000-4000-8000-000000000002"
 	const targetID = "60000000-0000-4000-8000-000000000002"
-	if _, err := pool.Exec(ctx,
-		`INSERT INTO user_runtimes (id, user_id, name, api_token) VALUES ($1, $2, 'app-runtime-2', 'token-2')`,
-		runtimeID, appUserID); err != nil {
-		t.Fatalf("seed runtime: %v", err)
-	}
-	if _, err := pool.Exec(ctx,
-		`INSERT INTO bot_remote_runtime_bindings (id, bot_id, runtime_id) VALUES ($1, $2, $3)`,
-		targetID, appBotOneID, runtimeID); err != nil {
-		t.Fatalf("seed target: %v", err)
-	}
+	seedUserWorkspaceMount(t, pool, runtimeID, targetID, "app-runtime-2", "token-2")
 	if _, err := pool.Exec(ctx, `
 		INSERT INTO bot_app_installations
 			(id, bot_id, registry_id, app_id, revision, status)
@@ -100,20 +91,41 @@ func TestUserRuntimeRevocationPreservesAppInstallations(t *testing.T) {
 	if appCount != 1 {
 		t.Fatalf("revoked runtime App installation count = %d, want 1", appCount)
 	}
+	// Revocation removes the bot's bindings to the computer but keeps the
+	// workspace record itself.
+	var bindingCount, workspaceCount int
+	if err := pool.QueryRow(ctx, `
+		SELECT (SELECT count(*) FROM bot_workspace_bindings WHERE workspace_id = $1),
+		       (SELECT count(*) FROM workspaces WHERE id = $1)`, runtimeID).Scan(&bindingCount, &workspaceCount); err != nil {
+		t.Fatalf("count revoked runtime rows: %v", err)
+	}
+	if bindingCount != 0 || workspaceCount != 1 {
+		t.Fatalf("after revoke: bindings=%d workspaces=%d, want 0 and 1", bindingCount, workspaceCount)
+	}
 }
 
 func seedRemoteRuntimeTarget(t *testing.T, pool *pgxpool.Pool) string {
 	t.Helper()
 	const runtimeID = "50000000-0000-4000-8000-000000000001"
 	const targetID = "60000000-0000-4000-8000-000000000001"
+	seedUserWorkspaceMount(t, pool, runtimeID, targetID, "app-runtime", "token")
+	return targetID
+}
+
+// seedUserWorkspaceMount pairs a runtime for appUserID (its user workspace
+// shares the runtime id) and mounts it on appBotOneID as binding targetID.
+func seedUserWorkspaceMount(t *testing.T, pool *pgxpool.Pool, runtimeID, targetID, name, token string) {
+	t.Helper()
 	ctx := context.Background()
-	if _, err := pool.Exec(ctx, `INSERT INTO user_runtimes (id, user_id, name, api_token) VALUES ($1, $2, 'app-runtime', 'token')`, runtimeID, appUserID); err != nil {
+	if _, err := pool.Exec(ctx, `INSERT INTO user_runtimes (id, user_id, name, api_token) VALUES ($1, $2, $3, $4)`, runtimeID, appUserID, name, token); err != nil {
 		t.Fatalf("seed Remote Runtime: %v", err)
 	}
-	if _, err := pool.Exec(ctx, `INSERT INTO bot_remote_runtime_bindings (id, bot_id, runtime_id) VALUES ($1, $2, $3)`, targetID, appBotOneID, runtimeID); err != nil {
+	if _, err := pool.Exec(ctx, `INSERT INTO workspaces (id, owner_user_id, kind, name) VALUES ($1, $2, 'user', $3)`, runtimeID, appUserID, name); err != nil {
+		t.Fatalf("seed user workspace: %v", err)
+	}
+	if _, err := pool.Exec(ctx, `INSERT INTO bot_workspace_bindings (id, bot_id, workspace_id) VALUES ($1, $2, $3)`, targetID, appBotOneID, runtimeID); err != nil {
 		t.Fatalf("seed target: %v", err)
 	}
-	return targetID
 }
 
 func teamScopedPool(t *testing.T) *pgxpool.Pool {

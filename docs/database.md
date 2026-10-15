@@ -67,7 +67,10 @@ The canonical source of truth for the full PostgreSQL schema is `db/postgres/mig
 **Apps**
 - `bot_app_installations` — Installed Registry App revision per bot in its isolated workspace
 
-**Containers**
+**Workspaces & Containers**
+- `workspaces` — Computers a team knows about: `managed` (the workspace the server provisions for a bot) or `user` (a machine paired through Remote Runtime; shares the `user_runtimes` id)
+- `bot_workspace_bindings` — Which bots may use which workspace, with per-binding tool approval; at most one binding per bot is primary. Remote mounts are the bindings to `user` workspaces
+- `user_runtimes` — Remote Runtime credentials (pending/activated/revoked) for a user's own computers
 - `bot_workspaces` — Declarative workspace state per bot: desired/observed state with generations, retry backoff, reconciler lease
 - `containers` — Bot container instances
 - `snapshots` — Container snapshots

@@ -28,7 +28,7 @@ type serviceTestStore struct {
 	revoked bool
 }
 
-func (s *serviceTestStore) CreateUserRuntime(_ context.Context, input dbstore.CreateUserRuntimeInput) (dbstore.UserRuntimeRecord, error) {
+func (s *serviceTestStore) CreateUserRuntime(ctx context.Context, input dbstore.CreateUserRuntimeInput, attach dbstore.UserRuntimeAttach) (dbstore.UserRuntimeRecord, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.runtime = dbstore.UserRuntimeRecord{
@@ -36,6 +36,12 @@ func (s *serviceTestStore) CreateUserRuntime(_ context.Context, input dbstore.Cr
 		APIToken: input.APIToken, PendingExpiresAt: time.Now().UTC().Add(15 * time.Minute), CreatedAt: time.Now().UTC(),
 	}
 	s.revoked = false
+	if attach != nil {
+		if err := attach(ctx, nil, s.runtime); err != nil {
+			s.runtime = dbstore.UserRuntimeRecord{}
+			return dbstore.UserRuntimeRecord{}, err
+		}
+	}
 	return s.runtime, nil
 }
 

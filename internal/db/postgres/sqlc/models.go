@@ -345,17 +345,6 @@ type BotMemoryUsage struct {
 	CreatedAt pgtype.Timestamptz `json:"created_at"`
 }
 
-type BotRemoteRuntimeBinding struct {
-	ID                 pgtype.UUID        `json:"id"`
-	BotID              pgtype.UUID        `json:"bot_id"`
-	RuntimeID          pgtype.UUID        `json:"runtime_id"`
-	IsPrimary          bool               `json:"is_primary"`
-	ToolApprovalConfig []byte             `json:"tool_approval_config"`
-	CreatedAt          pgtype.Timestamptz `json:"created_at"`
-	UpdatedAt          pgtype.Timestamptz `json:"updated_at"`
-	TeamID             pgtype.UUID        `json:"team_id"`
-}
-
 type BotSession struct {
 	ID                       pgtype.UUID        `json:"id"`
 	BotID                    pgtype.UUID        `json:"bot_id"`
@@ -491,6 +480,17 @@ type BotWorkspace struct {
 	LeaseOwner         string             `json:"lease_owner"`
 	LeaseUntil         pgtype.Timestamptz `json:"lease_until"`
 	Version            int64              `json:"version"`
+	CreatedAt          pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt          pgtype.Timestamptz `json:"updated_at"`
+}
+
+type BotWorkspaceBinding struct {
+	ID                 pgtype.UUID        `json:"id"`
+	TeamID             pgtype.UUID        `json:"team_id"`
+	BotID              pgtype.UUID        `json:"bot_id"`
+	WorkspaceID        pgtype.UUID        `json:"workspace_id"`
+	IsPrimary          bool               `json:"is_primary"`
+	ToolApprovalConfig []byte             `json:"tool_approval_config"`
 	CreatedAt          pgtype.Timestamptz `json:"created_at"`
 	UpdatedAt          pgtype.Timestamptz `json:"updated_at"`
 }
@@ -1111,6 +1111,17 @@ type UserRuntime struct {
 	CreatedAt        pgtype.Timestamptz `json:"created_at"`
 	UpdatedAt        pgtype.Timestamptz `json:"updated_at"`
 	TeamID           pgtype.UUID        `json:"team_id"`
+}
+
+type Workspace struct {
+	ID          pgtype.UUID        `json:"id"`
+	TeamID      pgtype.UUID        `json:"team_id"`
+	OwnerUserID pgtype.UUID        `json:"owner_user_id"`
+	Kind        string             `json:"kind"`
+	Name        string             `json:"name"`
+	Metadata    []byte             `json:"metadata"`
+	CreatedAt   pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt   pgtype.Timestamptz `json:"updated_at"`
 }
 
 type WorkspaceDependencyCatalog struct {

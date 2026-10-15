@@ -300,7 +300,8 @@ func workspaceTargetHTTPError(err error) error {
 		return apperror.Wrap(apperror.CodeWorkspaceTargetNotFound, err, nil)
 	case errors.Is(err, workspace.ErrRemoteRuntimeRevoked),
 		errors.Is(err, workspace.ErrRemoteRuntimeOwnerMismatch),
-		errors.Is(err, workspace.ErrRemoteRuntimeClientUpdateNeeded):
+		errors.Is(err, workspace.ErrRemoteRuntimeClientUpdateNeeded),
+		errors.Is(err, db.ErrNoManagedWorkspaceBinding):
 		return echo.NewHTTPError(http.StatusConflict).WithInternal(err)
 	case errors.Is(err, bridge.ErrUnavailable):
 		return workspaceUnavailableError(err)

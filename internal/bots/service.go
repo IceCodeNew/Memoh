@@ -31,6 +31,7 @@ type Service struct {
 	queries               dbstore.Queries
 	logger                *slog.Logger
 	workspaceIntents      WorkspaceIntents
+	workspaceBindings     WorkspaceBindings
 	connectorLifecycle    ConnectorLifecycle
 	checkers              []RuntimeChecker
 	containerReachability func(ctx context.Context, botID string) error
@@ -70,6 +71,12 @@ func NewService(log *slog.Logger, queries dbstore.Queries) *Service {
 // botworkspace reconciler) for bot creation and deletion.
 func (s *Service) SetWorkspaceIntents(intents WorkspaceIntents) {
 	s.workspaceIntents = intents
+}
+
+// SetWorkspaceBindings registers the workspace record keeper: a new bot gets
+// a managed workspace bound as its primary target, a deleted bot releases it.
+func (s *Service) SetWorkspaceBindings(bindings WorkspaceBindings) {
+	s.workspaceBindings = bindings
 }
 
 // SetConnectorLifecycle registers connector cleanup for bot deletion.
@@ -191,6 +198,13 @@ func (s *Service) Create(ctx context.Context, ownerUserID string, req CreateBotR
 			// status failed with its diagnostics, never stranded in creating.
 			if err := s.workspaceIntents.RecordPresent(ctx, q, botID, workspaceImageFromMetadata(metadata)); err != nil {
 				return fmt.Errorf("record workspace intent: %w", err)
+			}
+		}
+		if s.workspaceBindings != nil {
+			// The bot's computer is a record of its own, bound to the bot as
+			// the primary target; the reconciler above provisions it.
+			if err := s.workspaceBindings.BindManaged(ctx, q, botID, ownerID, botName); err != nil {
+				return fmt.Errorf("bind managed workspace: %w", err)
 			}
 		}
 		row = created
@@ -813,8 +827,30 @@ func (s *Service) runDeleteLifecycle(ctx context.Context, botID, revertStatus st
 	if err := s.queries.RevokeAgentCredentialsForBot(lifecycleCtx, botUUID); err != nil {
 		return revert(errs.Wrap(err, "revoke agent credentials"))
 	}
-	if err := s.queries.DeleteBotByID(lifecycleCtx, botUUID); err != nil {
-		return revert(errs.Wrap(err, "delete bot row"))
+	// The bot row's cascade removes its workspace bindings; the managed
+	// workspace itself is a record of its own and is released in the same
+	// transaction once nothing binds it any more.
+	err = s.inTx(lifecycleCtx, func(q dbstore.Queries) error {
+		var managed []string
+		if s.workspaceBindings != nil {
+			ids, err := s.workspaceBindings.ManagedWorkspaceIDs(lifecycleCtx, q, botID)
+			if err != nil {
+				return errs.Wrap(err, "list managed workspaces")
+			}
+			managed = ids
+		}
+		if err := q.DeleteBotByID(lifecycleCtx, botUUID); err != nil {
+			return errs.Wrap(err, "delete bot row")
+		}
+		for _, workspaceID := range managed {
+			if err := s.workspaceBindings.ReleaseUnbound(lifecycleCtx, q, workspaceID); err != nil {
+				return errs.Wrap(err, "release managed workspace", slog.String("workspace_id", workspaceID))
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		return revert(err)
 	}
 	return nil
 }

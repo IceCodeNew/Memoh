@@ -36,8 +36,15 @@ type CreateUserRuntimeInput struct {
 	APIToken string //nolint:gosec // owner-readable Remote Runtime credential by product design
 }
 
+// UserRuntimeAttach runs inside the transaction that inserts a runtime, with
+// the transaction-scoped Queries, so companion rows (the runtime's user
+// workspace) commit with the credential or not at all.
+type UserRuntimeAttach func(ctx context.Context, q Queries, runtime UserRuntimeRecord) error
+
 type UserRuntimeStore interface {
-	CreateUserRuntime(ctx context.Context, input CreateUserRuntimeInput) (UserRuntimeRecord, error)
+	// CreateUserRuntime inserts the credential row and, when attach is not
+	// nil, runs it in the same transaction.
+	CreateUserRuntime(ctx context.Context, input CreateUserRuntimeInput, attach UserRuntimeAttach) (UserRuntimeRecord, error)
 	GetUserRuntimeByAPIToken(ctx context.Context, apiToken string) (UserRuntimeRecord, error)
 	ActivateUserRuntime(ctx context.Context, runtimeID, apiToken string) (UserRuntimeRecord, error)
 	ExpirePendingUserRuntimes(ctx context.Context, userID string) error
@@ -64,6 +71,9 @@ type BotRemoteRuntimeBindingRecord struct {
 	UpdatedAt      time.Time
 }
 
+// BotRemoteRuntimeBindingStore is the remote-mount view over
+// bot_workspace_bindings: the bindings whose workspace has kind "user".
+// RuntimeID is that workspace's id, which the paired runtime shares.
 type BotRemoteRuntimeBindingStore interface {
 	CreateOrUpdateMount(ctx context.Context, botID, runtimeID string) (BotRemoteRuntimeBindingRecord, error)
 	ListMounts(ctx context.Context, botID string) ([]BotRemoteRuntimeBindingRecord, error)
@@ -73,9 +83,89 @@ type BotRemoteRuntimeBindingStore interface {
 	ListGrantsByRuntimeOwner(ctx context.Context, ownerUserID string) ([]BotRemoteRuntimeBindingRecord, error)
 	GetMount(ctx context.Context, botID, targetID string) (BotRemoteRuntimeBindingRecord, error)
 	GetPrimaryMount(ctx context.Context, botID string) (BotRemoteRuntimeBindingRecord, error)
+	// SetPrimary makes the mount targetID the bot's primary binding. The
+	// target "native" (or an empty id) makes the bot's managed workspace
+	// binding primary instead and fails with db.ErrNoManagedWorkspaceBinding
+	// when the bot has none.
 	SetPrimary(ctx context.Context, botID, targetID string) error
 	UpdateToolApproval(ctx context.Context, botID, targetID string, config JSON) error
 	DeleteMount(ctx context.Context, botID, targetID string) error
+}
+
+// Workspace kinds. A managed workspace is the one the server provisions for
+// a bot; a user workspace is a machine paired through Remote Runtime and
+// shares the user_runtimes id.
+const (
+	WorkspaceKindManaged = "managed"
+	WorkspaceKindUser    = "user"
+)
+
+// WorkspaceRecord is one computer a team knows about.
+type WorkspaceRecord struct {
+	ID          string
+	TeamID      string
+	OwnerUserID string
+	Kind        string
+	Name        string
+	Metadata    JSON
+	CreatedAt   time.Time
+	UpdatedAt   time.Time
+}
+
+// CreateWorkspaceInput creates a workspace. ID is optional: user workspaces
+// pass their runtime id, managed workspaces leave it empty for a fresh one.
+type CreateWorkspaceInput struct {
+	ID          string
+	OwnerUserID string
+	Kind        string
+	Name        string
+	Metadata    JSON
+}
+
+type WorkspaceStore interface {
+	CreateWorkspace(ctx context.Context, input CreateWorkspaceInput) (WorkspaceRecord, error)
+	GetWorkspace(ctx context.Context, workspaceID string) (WorkspaceRecord, error)
+	ListWorkspacesByOwner(ctx context.Context, ownerUserID string) ([]WorkspaceRecord, error)
+	// ListWorkspacesByBot returns every workspace the bot is bound to, in
+	// binding order.
+	ListWorkspacesByBot(ctx context.Context, botID string) ([]WorkspaceRecord, error)
+	UpdateWorkspaceName(ctx context.Context, workspaceID, name string) (WorkspaceRecord, error)
+	// DeleteWorkspace fails while a binding still references the workspace.
+	DeleteWorkspace(ctx context.Context, workspaceID string) error
+	// DeleteWorkspaceIfUnbound deletes the workspace only when nothing binds
+	// it; it reports whether a row was removed.
+	DeleteWorkspaceIfUnbound(ctx context.Context, workspaceID string) (bool, error)
+}
+
+// BotWorkspaceBindingRecord grants a bot the use of a workspace. At most one
+// binding per bot is primary.
+type BotWorkspaceBindingRecord struct {
+	ID           string
+	TeamID       string
+	BotID        string
+	WorkspaceID  string
+	IsPrimary    bool
+	ToolApproval JSON
+	CreatedAt    time.Time
+	UpdatedAt    time.Time
+}
+
+type BotWorkspaceBindingStore interface {
+	// UpsertBotWorkspaceBinding binds the bot to the workspace; an existing
+	// binding is returned unchanged apart from updated_at.
+	UpsertBotWorkspaceBinding(ctx context.Context, botID, workspaceID string, primary bool) (BotWorkspaceBindingRecord, error)
+	GetBotWorkspaceBinding(ctx context.Context, botID, bindingID string) (BotWorkspaceBindingRecord, error)
+	ListBotWorkspaceBindingsByBot(ctx context.Context, botID string) ([]BotWorkspaceBindingRecord, error)
+	ListBotWorkspaceBindingsByWorkspace(ctx context.Context, workspaceID string) ([]BotWorkspaceBindingRecord, error)
+	GetPrimaryBotWorkspaceBinding(ctx context.Context, botID string) (BotWorkspaceBindingRecord, error)
+	// SetPrimaryBotWorkspaceBinding clears the bot's current primary and makes
+	// bindingID primary in one transaction.
+	SetPrimaryBotWorkspaceBinding(ctx context.Context, botID, bindingID string) error
+	UpdateBotWorkspaceBindingToolApproval(ctx context.Context, botID, bindingID string, config JSON) (BotWorkspaceBindingRecord, error)
+	DeleteBotWorkspaceBinding(ctx context.Context, botID, bindingID string) error
+	// DeleteBotWorkspaceBindingsByWorkspace removes every bot's binding to the
+	// workspace and reports how many were removed.
+	DeleteBotWorkspaceBindingsByWorkspace(ctx context.Context, workspaceID string) (int64, error)
 }
 
 // BotWorkdirRecord is a named per-bot working directory: a workspace target
@@ -418,7 +508,10 @@ type MemoryProviderStore interface {
 	Delete(ctx context.Context, id ID) error
 }
 
-type WorkspaceStore interface {
+// ContainerWorkspaceStore is the container-era record contract kept for the
+// legacy workspace manager; the workspace/binding tables use WorkspaceStore
+// and BotWorkspaceBindingStore below.
+type ContainerWorkspaceStore interface {
 	GetBotByID(ctx context.Context, botID ID) (Record, error)
 	UpdateBotProfile(ctx context.Context, botID ID, input Patch) (Record, error)
 	UpsertContainer(ctx context.Context, input Input) (Record, error)

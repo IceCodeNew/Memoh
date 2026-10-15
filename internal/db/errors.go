@@ -9,4 +9,7 @@ var (
 	// lost. Callers that would perform destructive compensation must reconcile
 	// an idempotency/publication key on a fresh connection first.
 	ErrCommitOutcomeUnknown = errors.New("database transaction commit outcome is unknown")
+	// ErrNoManagedWorkspaceBinding: the bot has no binding to a managed
+	// workspace, so "native" cannot be made its primary target.
+	ErrNoManagedWorkspaceBinding = errors.New("bot has no managed workspace binding")
 )

@@ -43,7 +43,7 @@ func TestUserRuntimeCredentialLifecyclePostgresPath(t *testing.T) {
 	expiredKey := "mrk_" + strings.Repeat("1", 64)
 	expired, err := store.CreateUserRuntime(ctx, dbstore.CreateUserRuntimeInput{
 		UserID: userID, Name: "Abandoned", APIToken: expiredKey,
-	})
+	}, nil)
 	if err != nil {
 		t.Fatalf("create pending Runtime: %v", err)
 	}
@@ -73,7 +73,7 @@ func TestUserRuntimeCredentialLifecyclePostgresPath(t *testing.T) {
 	activeKey := "mrk_" + strings.Repeat("2", 64)
 	pending, err := store.CreateUserRuntime(ctx, dbstore.CreateUserRuntimeInput{
 		UserID: userID, Name: "Connected", APIToken: activeKey,
-	})
+	}, nil)
 	if err != nil {
 		t.Fatalf("create second pending Runtime: %v", err)
 	}

@@ -25,6 +25,14 @@ const maxRuntimeNameBytes = 255
 
 type ConnectionCommitGuard func() error
 
+// RuntimeWorkspaces keeps a user workspace record for every paired runtime
+// without this package importing the workspace package. RuntimeCreated runs
+// through the create's transaction q, so the workspace commits with the
+// credential or not at all.
+type RuntimeWorkspaces interface {
+	RuntimeCreated(ctx context.Context, q dbstore.Queries, runtime dbstore.UserRuntimeRecord) error
+}
+
 // Service owns the persistent pending/activated credential registry and the
 // in-memory reverse-RPC connections. Bot/session routing belongs outside this
 // package.
@@ -32,6 +40,7 @@ type Service struct {
 	store          dbstore.UserRuntimeStore
 	hub            *Hub
 	lifecycleLocks *runtimeLifecycleLocks
+	workspaces     RuntimeWorkspaces
 }
 
 func NewService(store dbstore.UserRuntimeStore, hub *Hub) *Service {
@@ -40,6 +49,11 @@ func NewService(store dbstore.UserRuntimeStore, hub *Hub) *Service {
 		hub:            hub,
 		lifecycleLocks: newRuntimeLifecycleLocks(),
 	}
+}
+
+// SetRuntimeWorkspaces registers the workspace record keeper for new runtimes.
+func (s *Service) SetRuntimeWorkspaces(workspaces RuntimeWorkspaces) {
+	s.workspaces = workspaces
 }
 
 // DefaultRuntimeName is the placeholder assigned at credential creation when
@@ -76,9 +90,13 @@ func (s *Service) CreateRuntime(ctx context.Context, userID string, req CreateRu
 	if name == "" {
 		name = DefaultRuntimeName(key)
 	}
+	var attach dbstore.UserRuntimeAttach
+	if s.workspaces != nil {
+		attach = s.workspaces.RuntimeCreated
+	}
 	row, err := s.store.CreateUserRuntime(ctx, dbstore.CreateUserRuntimeInput{
 		UserID: userID, Name: name, APIToken: key,
-	})
+	}, attach)
 	if err != nil {
 		return Runtime{}, err
 	}

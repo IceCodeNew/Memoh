@@ -251,6 +251,20 @@ func provideBotRemoteRuntimeBindingStore(postgresStore *postgresstore.Store) (db
 	return postgresStore, nil
 }
 
+func provideWorkspaceStore(postgresStore *postgresstore.Store) (dbstore.WorkspaceStore, error) {
+	if postgresStore == nil {
+		return nil, errors.New("postgres workspace store not configured")
+	}
+	return postgresStore, nil
+}
+
+func provideBotWorkspaceBindingStore(postgresStore *postgresstore.Store) (dbstore.BotWorkspaceBindingStore, error) {
+	if postgresStore == nil {
+		return nil, errors.New("postgres bot workspace binding store not configured")
+	}
+	return postgresStore, nil
+}
+
 func provideBotWorkdirStore(postgresStore *postgresstore.Store) (dbstore.BotWorkdirStore, error) {
 	if postgresStore == nil {
 		return nil, errors.New("postgres bot workdir store not configured")
@@ -596,6 +610,13 @@ func injectBotWorkspaceIntents(botService *bots.Service, workspaces *botworkspac
 	botService.SetWorkspaceIntents(botWorkspaceIntents{svc: workspaces})
 	workspaces.SetBotStatusWriter(botService)
 	containerdHandler.SetWorkspaceIntents(workspaces)
+}
+
+// injectWorkspaceLifecycle keeps workspace records in step with bot creation
+// and deletion and with runtime pairing; see workspace.WorkspaceLifecycle.
+func injectWorkspaceLifecycle(botService *bots.Service, runtimes *userruntime.Service, lifecycle *workspace.WorkspaceLifecycle) {
+	botService.SetWorkspaceBindings(lifecycle)
+	runtimes.SetRuntimeWorkspaces(lifecycle)
 }
 
 // botWorkspaceIntents adapts the reconciler to the bots.WorkspaceIntents port

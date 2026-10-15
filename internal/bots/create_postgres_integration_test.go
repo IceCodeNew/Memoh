@@ -16,6 +16,7 @@ import (
 	postgresstore "github.com/felinics/memoh/internal/db/postgres/store"
 	dbstore "github.com/felinics/memoh/internal/db/store"
 	"github.com/felinics/memoh/internal/team"
+	"github.com/felinics/memoh/internal/workspace"
 )
 
 func TestPostgresBotCreate(t *testing.T) {
@@ -113,6 +114,33 @@ func TestPostgresBotCreate(t *testing.T) {
 		}
 	})
 
+	t.Run("a create binds a fresh managed workspace as primary", func(t *testing.T) {
+		svc := newService(postgresIntents{})
+		svc.SetWorkspaceBindings(workspace.NewWorkspaceLifecycle())
+		bot, err := svc.Create(ctx, owner.String(), CreateBotRequest{DisplayName: "小猫", AclPreset: "allow_all"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		var workspaceID, kind, name, workspaceOwner string
+		var primary bool
+		if err := pool.QueryRow(ctx, `
+			SELECT w.id, w.kind, w.name, w.owner_user_id, b.is_primary
+			FROM bot_workspace_bindings b JOIN workspaces w ON w.id = b.workspace_id
+			WHERE b.bot_id = $1`, bot.ID).Scan(&workspaceID, &kind, &name, &workspaceOwner, &primary); err != nil {
+			t.Fatalf("read managed binding: %v", err)
+		}
+		if workspaceID == bot.ID || kind != workspace.WorkspaceKindManaged || name != bot.Name || workspaceOwner != owner.String() || !primary {
+			t.Fatalf("managed workspace = %s/%s/%s owner %s primary %v; want a fresh id, kind managed, the bot name, the owner, primary", workspaceID, kind, name, workspaceOwner, primary)
+		}
+		// Deleting the bot releases the workspace it alone was bound to.
+		if err := svc.runDeleteLifecycle(ctx, bot.ID, BotStatusReady); err != nil {
+			t.Fatalf("runDeleteLifecycle: %v", err)
+		}
+		if n := count("SELECT count(*) FROM workspaces WHERE id = $1", workspaceID); n != 0 {
+			t.Errorf("managed workspace left behind after delete = %d, want 0", n)
+		}
+	})
+
 	t.Run("creates without a key never replay", func(t *testing.T) {
 		svc := newService(postgresIntents{})
 		before := count("SELECT count(*) FROM bots WHERE owner_user_id = $1 AND create_request_key IS NULL", owner)
@@ -130,7 +158,7 @@ func TestPostgresBotCreate(t *testing.T) {
 // postgresIntents writes intents as the botworkspace adapter in
 // cmd/internal/core does; fail fails the create after the write.
 type postgresIntents struct {
-	WorkspaceIntents // Create uses only RecordPresent and Wake
+	WorkspaceIntents // Create uses RecordPresent and Wake; delete RequestAbsent and AwaitSettled
 	fail             bool
 }
 
@@ -142,3 +170,11 @@ func (i postgresIntents) RecordPresent(ctx context.Context, q dbstore.Queries, b
 }
 
 func (postgresIntents) Wake(context.Context) {}
+
+// The delete path of the workspace test only needs the workspace reported
+// absent; the real reconciler is not running here.
+func (postgresIntents) RequestAbsent(context.Context, string, bool) (int64, error) { return 1, nil }
+
+func (postgresIntents) AwaitSettled(context.Context, string, int64) (WorkspaceOutcome, error) {
+	return WorkspaceOutcome{Desired: WorkspaceDesiredAbsent, Observed: WorkspaceObservedAbsent}, nil
+}
