@@ -1,11 +1,13 @@
 package native
 
 import (
+	"strconv"
 	"strings"
 
 	sdk "github.com/felinics/twilight/sdk"
 
 	contextfrag "github.com/felinics/memoh/internal/agent/context/fragment"
+	tools "github.com/felinics/memoh/internal/agent/tool"
 	"github.com/felinics/memoh/internal/agent/toolexec"
 )
 
@@ -14,6 +16,20 @@ const toolUsageGroupID = "system.tool_usage"
 type toolUsageSection struct {
 	capability string
 	text       string
+}
+
+// toolNoticeCapability names the usage section a provider's ToolNotice lands
+// in. Notices carry no registered tool, so the provider label (or its
+// position) keeps the fragment id unique instead of a tool name.
+func toolNoticeCapability(provider tools.ToolProvider, index int) string {
+	label := ""
+	if labeler, ok := provider.(tools.ProviderLabeler); ok {
+		label = strings.TrimSpace(labeler.ProviderLabel())
+	}
+	if label == "" {
+		label = strconv.Itoa(index)
+	}
+	return "notice." + label
 }
 
 func firstToolName(providerTools []toolexec.Tool) string {

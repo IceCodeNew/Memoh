@@ -50,6 +50,23 @@ func (p *usageTestProvider) Usage(_ context.Context, _ tools.SessionContext, ava
 	return p.usage
 }
 
+// noticeTestProvider registers no tools but implements tools.ToolNotice, the
+// shape of a federated source whose upstream failed this turn.
+type noticeTestProvider struct {
+	label  string
+	notice string
+}
+
+func (p noticeTestProvider) ProviderLabel() string { return p.label }
+
+func (noticeTestProvider) Tools(_ context.Context, _ tools.SessionContext) ([]toolexec.Tool, error) {
+	return nil, nil
+}
+
+func (p noticeTestProvider) ToolNotice(_ context.Context, _ tools.SessionContext) string {
+	return p.notice
+}
+
 // plainTestProvider returns a tool but does NOT implement tools.ToolUsage.
 type plainTestProvider struct{}
 
@@ -522,5 +539,45 @@ func TestAssembleToolsPassesCompleteAvailableToolSetToUsage(t *testing.T) {
 	}
 	if strings.Contains(usage, markerMissing) {
 		t.Fatalf("expected complete available tool set, got missing marker in %q", usage)
+	}
+}
+
+func TestGenerateInjectsToolNoticeWithoutRegisteredTools(t *testing.T) {
+	t.Parallel()
+	modelProvider := &usageRecordingProvider{}
+	const notice = "Connector tools could not be loaded: Forbidden."
+	a := newTestAgent(
+		&usageTestProvider{emitTool: true, usage: usageMarker},
+		noticeTestProvider{label: "mcp", notice: "  " + notice + "  "},
+		noticeTestProvider{label: "quiet"},
+	)
+
+	if _, err := a.Generate(context.Background(), RunConfig{
+		Model: &sdk.Model{
+			ID:       "usage-model",
+			Provider: modelProvider,
+			Type:     sdk.ModelTypeChat,
+		},
+		System:           "base system",
+		Messages:         []sdk.Message{sdk.UserMessage("hi")},
+		SupportsToolCall: true,
+	}); err != nil {
+		t.Fatalf("Generate error: %v", err)
+	}
+
+	params := modelProvider.lastParams()
+	wantSystem := "base system\n\n## Tool usage\n\n" + usageMarker + "\n\n" + notice
+	if params.System != wantSystem {
+		t.Fatalf("expected model system %q, got %q", wantSystem, params.System)
+	}
+}
+
+func TestToolNoticeCapabilityIsUniquePerProvider(t *testing.T) {
+	t.Parallel()
+	if got := toolNoticeCapability(noticeTestProvider{label: " mcp "}, 3); got != "notice.mcp" {
+		t.Fatalf("got %q", got)
+	}
+	if got := toolNoticeCapability(plainTestProvider{}, 3); got != "notice.3" {
+		t.Fatalf("got %q", got)
 	}
 }
