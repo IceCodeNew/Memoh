@@ -137,8 +137,8 @@ func executionMarkers(child thread.Thread) [2]string {
 	return [2]string{metadataString(child.RuntimeMetadata, "external_execution_run"), metadataString(child.RuntimeMetadata, "external_termination_unconfirmed")}
 }
 
-// confirmSubagentTermination settles an unconfirmed run once the reaper has
-// stopped everything the run left in the workspace: the child keeps its
+// confirmSubagentTermination settles an unconfirmed run once a reap finds
+// nothing of the child session left in the workspace: the child keeps its
 // transcript, gives back its slot and may run again. A failed attempt keeps
 // its claim until it expires.
 func (s *Service) confirmSubagentTermination(ctx context.Context, child thread.Thread, runID string) (thread.Thread, bool) {
@@ -163,9 +163,9 @@ func (s *Service) confirmSubagentTermination(ctx context.Context, child thread.T
 	return resolved, true
 }
 
-// reapSubagent stops whatever runID left in the child's workspace. The claim
-// keeps a second attempt from overlapping it and from stopping a later run
-// once the session no longer records runID.
+// reapSubagent stops what the child session left in the workspace on behalf
+// of runID. The claim keeps a second attempt from overlapping it and from
+// stopping a later run once the session no longer records runID.
 func (s *Service) reapSubagent(ctx context.Context, child thread.Thread, runID string) (claim string, claimed, reaped bool) {
 	store, ok := s.sessionService.(externalExecutionStore)
 	if s.subagentReaper == nil || !ok {

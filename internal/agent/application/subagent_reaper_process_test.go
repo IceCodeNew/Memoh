@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	sdk "github.com/felinics/twilight/sdk"
 	"github.com/google/uuid"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
@@ -233,5 +234,80 @@ func TestSubagentProcessReaperFreezesUnmarkedForkersBeforeKilling(t *testing.T) 
 	time.Sleep(100 * time.Millisecond)
 	if left := alive(); len(left) != 0 {
 		t.Fatalf("processes forked by an unmarked descendant survived: %d", len(left))
+	}
+}
+
+// Reap reports what a scan of marked processes found, not that every effect
+// of the child stopped: a process that dropped the marker and left the marked
+// tree is out of its sight.
+func TestSubagentProcessReaperCannotSeeAProcessThatLeftTheMarkedTree(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("the reaper reads /proc")
+	}
+	client := reaperBridgeClient(t)
+	childID := uuid.NewString()
+	marker := external.SubagentThreadEnvEntry(childID)[0]
+	started, err := client.ExecWithEnv(t.Context(), "setsid sh -c 'exec env -i sleep 300' </dev/null >/dev/null 2>&1 & echo $!", "", 10, []string{marker})
+	if err != nil {
+		t.Fatal(err)
+	}
+	pid, err := strconv.Atoi(strings.TrimSpace(started.Stdout))
+	if err != nil {
+		t.Fatalf("escaped pid %q: %v", started.Stdout, err)
+	}
+	t.Cleanup(func() { _ = syscall.Kill(pid, syscall.SIGKILL) })
+	waitMarked(t, marker, 0)
+	if err := NewSubagentProcessReaper(reaperBridges{client: client}).Reap(t.Context(), uuid.NewString(), childID); err != nil {
+		t.Fatalf("reap: %v", err)
+	}
+	if err := syscall.Kill(pid, 0); err != nil {
+		t.Fatalf("the reaper now stops processes outside the marked tree; update its documented limits: %v", err)
+	}
+}
+
+// Cleanup is per child session: the app-server or agent process that serves a
+// child's later runs carries the marker of the session, not of one run, so a
+// run that does not finish also stops what an earlier, completed run left.
+func TestUnfinishedSubagentRunStopsServicesLeftByEarlierRuns(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("the reaper reads /proc")
+	}
+	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
+	defer cancel()
+	client := reaperBridgeClient(t)
+	marker := external.SubagentThreadEnvEntry(lifecycleTestSessionID)[0]
+	t.Cleanup(func() {
+		for _, pid := range markedProcesses(marker) {
+			_ = syscall.Kill(pid, syscall.SIGKILL)
+		}
+	})
+	f := newReapTestFixture(t)
+	f.mu.Lock()
+	delete(f.meta, "external_execution_run")
+	delete(f.meta, "external_termination_unconfirmed")
+	f.mu.Unlock()
+	f.svc.SetSubagentProcessReaper(NewSubagentProcessReaper(reaperBridges{client: client}))
+	f.svc.SetExternalRuntimes(noticeTestDriver{kind: "codex", prompt: func(ctx context.Context, input external.PromptInput) (external.PromptResult, error) {
+		if input.Prompt != "serve" {
+			return external.PromptResult{}, external.Unavailable(errors.New("launcher missing"))
+		}
+		if _, err := client.ExecWithEnv(ctx, "setsid sleep 300 </dev/null >/dev/null 2>&1 &", "", 10, input.ProcessEnv()); err != nil {
+			return external.PromptResult{}, err
+		}
+		return external.PromptResult{TurnCompleted: true, Output: []sdk.Message{sdk.AssistantMessage("serving")}}, nil
+	}})
+
+	if result, err := f.run(ctx, uuid.NewString(), "serve"); err != nil || result == nil || result.Text != "serving" {
+		t.Fatalf("serving run = %+v, %v", result, err)
+	}
+	waitMarked(t, marker, 1)
+	if _, err := f.run(ctx, uuid.NewString(), "work"); err == nil {
+		t.Fatal("failed run reported success")
+	}
+	if left := markedProcesses(marker); len(left) != 0 {
+		t.Fatalf("a run that did not finish left the session's earlier service running: %v", left)
+	}
+	if meta := f.child().RuntimeMetadata; meta["external_execution_run"] != nil || meta["external_termination_unconfirmed"] != nil {
+		t.Fatalf("reaped child stayed blocked: %v", meta)
 	}
 }

@@ -21,7 +21,7 @@ const (
 
 	// subagentStopConfirmedNotice opens the first prompt after a run whose stop
 	// Memoh confirmed only later, since that run may have done part of its work.
-	subagentStopConfirmedNotice = "[Memoh] Your previous run in this session ended before Memoh could confirm that it stopped. Memoh has since stopped the processes it could find from that run. Check the current workspace state before repeating actions that may already have completed."
+	subagentStopConfirmedNotice = "[Memoh] Your previous run in this session ended before Memoh could confirm that it stopped. Memoh has since stopped the processes it could find from this session, including any left running by earlier runs. Check the current workspace state before repeating actions that may already have completed."
 )
 
 // subagentProcessScript SIGKILLs every workspace process whose environment
@@ -80,8 +80,12 @@ type nativeBridgeProvider interface {
 	NativeMCPClient(ctx context.Context, botID string) (*bridge.Client, error)
 }
 
-// SubagentProcessReaper confirms that an external subagent run stopped by
-// stopping whatever in the bot's workspace still carries the child's marker.
+// SubagentProcessReaper stops whatever in the bot's workspace still carries
+// an external child session's marker. The marker names the session, not a
+// run: the app-server or agent process that serves later runs keeps the
+// environment of the run that started it, so one reap also stops services
+// that earlier, completed runs left. A clean reap is the best evidence of a
+// stop Memoh has, not proof that every effect of the child ended.
 type SubagentProcessReaper struct {
 	bridges nativeBridgeProvider
 }
@@ -90,8 +94,9 @@ func NewSubagentProcessReaper(bridges nativeBridgeProvider) *SubagentProcessReap
 	return &SubagentProcessReaper{bridges: bridges}
 }
 
-// Reap returns nil once a scan of the live workspace finds no process of the
-// child left.
+// Reap returns nil once a scan of the live workspace finds no marked process
+// of the child left; what the scan cannot see is listed on
+// subagentProcessScript.
 func (r *SubagentProcessReaper) Reap(ctx context.Context, botID, childID string) error {
 	if _, err := uuid.Parse(childID); err != nil {
 		return errs.Wrap(err, "parse subagent thread")

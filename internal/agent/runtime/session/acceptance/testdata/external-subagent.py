@@ -40,7 +40,7 @@ def prompt(request):
     text = "\n".join(str(block.get("text", "")) for block in request["params"].get("prompt", []))
     matches = re.findall(r"external-subagent-action=(\w+)", text)
     action = matches[-1] if matches else "invalid"
-    record("prompt", action=action, session_id=session_id, notice="Memoh has since stopped the processes it could find from that run" in text)
+    record("prompt", action=action, session_id=session_id, notice="Memoh has since stopped the processes it could find from this session" in text)
     update(session_id, "external-subagent-partial-" + action + "\n")
     if action == "hold_escape":
         escaped = subprocess.Popen(["sleep", "600"], start_new_session=True, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
