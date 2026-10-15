@@ -1880,7 +1880,6 @@ func (p *SpawnProvider) resolveModel(
 		ReasoningDialect:      modelInfo.Config.ReasoningDialect(),
 		ReasoningOffSupport:   modelInfo.Config.ReasoningOffSupport(),
 		ReasoningReplay:       modelInfo.Config.ReasoningReplay(),
-		ReasoningDefaultOn:    modelInfo.Config.ReasoningDefaultOn(),
 		ThinkingBudgetMin:     modelInfo.Config.ThinkingBudgetMin(),
 		ThinkingBudgetMax:     modelInfo.Config.ThinkingBudgetMax(),
 		ContextWindow:         contextWindow,
