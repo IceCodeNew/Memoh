@@ -252,8 +252,8 @@ func (input PromptInput) IsSubagent() bool {
 }
 
 // SubagentThreadEnv marks every process started for a managed subagent with
-// the child thread. Descendants inherit it, so Memoh can find what a run left
-// behind when the process stop was never confirmed.
+// the child thread. Descendants inherit it, so Memoh can find and stop what the
+// child session left running when one of its runs does not finish.
 const SubagentThreadEnv = "MEMOH_SUBAGENT_THREAD"
 
 // SubagentThreadEnvEntry is the marker entry for a subagent thread.

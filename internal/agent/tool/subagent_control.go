@@ -49,7 +49,7 @@ type controlAgentArgs struct {
 func (p *SpawnProvider) controlAgentTool(parent SessionContext) toolexec.Tool {
 	return toolexec.Tool{
 		Name:        ToolControlAgent().String(),
-		Description: "Stop or steer one exact run of a child created by this parent. Stop acknowledgement may report stopping; observe list_agents until terminal. A stopped or failed External Agent run also ends every process its child left in the workspace, including services from earlier runs. Steer requires advertised support.",
+		Description: "Stop or steer one exact run of a child created by this parent. Stop acknowledgement may report stopping; observe list_agents until terminal. A stopped or failed External Agent run can also stop the workspace processes Memoh traces to that child, including services from its earlier runs; processes that detached from it may survive. Steer requires advertised support.",
 		Parameters:  toolexec.SchemaFor[controlAgentArgs](toolexec.Enum("action", "stop", "steer")),
 		Execute: toolexec.Typed(func(ctx *toolexec.ToolExecContext, args controlAgentArgs) (sdk.ToolOutput, error) {
 			if err := validateParentSession(parent); err != nil {

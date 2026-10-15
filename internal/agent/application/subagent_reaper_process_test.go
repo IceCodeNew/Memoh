@@ -260,14 +260,24 @@ func TestSubagentProcessReaperCannotSeeAProcessThatLeftTheMarkedTree(t *testing.
 	if err := NewSubagentProcessReaper(reaperBridges{client: client}).Reap(t.Context(), uuid.NewString(), childID); err != nil {
 		t.Fatalf("reap: %v", err)
 	}
-	if err := syscall.Kill(pid, 0); err != nil {
-		t.Fatalf("the reaper now stops processes outside the marked tree; update its documented limits: %v", err)
+	time.Sleep(100 * time.Millisecond)
+	if !processRunning(pid) {
+		t.Fatal("the reaper now stops processes outside the marked tree; update its documented limits")
 	}
 }
 
-// Cleanup is per child session: the app-server or agent process that serves a
-// child's later runs carries the marker of the session, not of one run, so a
-// run that does not finish also stops what an earlier, completed run left.
+func processRunning(pid int) bool {
+	stat, err := os.ReadFile("/proc/" + strconv.Itoa(pid) + "/stat") //nolint:gosec // test reads its own process table.
+	if err != nil {
+		return false
+	}
+	end := strings.LastIndex(string(stat), ") ")
+	return end >= 0 && !strings.HasPrefix(string(stat[end+2:]), "Z") && !strings.HasPrefix(string(stat[end+2:]), "X")
+}
+
+// Cleanup is per child session: the marker is the child thread id, since an
+// ACP agent process serves many runs, so a run that does not finish also stops
+// what an earlier, completed run left.
 func TestUnfinishedSubagentRunStopsServicesLeftByEarlierRuns(t *testing.T) {
 	if runtime.GOOS != "linux" {
 		t.Skip("the reaper reads /proc")
@@ -275,13 +285,14 @@ func TestUnfinishedSubagentRunStopsServicesLeftByEarlierRuns(t *testing.T) {
 	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
 	defer cancel()
 	client := reaperBridgeClient(t)
-	marker := external.SubagentThreadEnvEntry(lifecycleTestSessionID)[0]
+	childID := uuid.NewString()
+	marker := external.SubagentThreadEnvEntry(childID)[0]
 	t.Cleanup(func() {
 		for _, pid := range markedProcesses(marker) {
 			_ = syscall.Kill(pid, syscall.SIGKILL)
 		}
 	})
-	f := newReapTestFixture(t)
+	f := newReapTestFixtureFor(t, childID)
 	f.mu.Lock()
 	delete(f.meta, "external_execution_run")
 	delete(f.meta, "external_termination_unconfirmed")

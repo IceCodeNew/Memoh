@@ -81,11 +81,11 @@ type nativeBridgeProvider interface {
 }
 
 // SubagentProcessReaper stops whatever in the bot's workspace still carries
-// an external child session's marker. The marker names the session, not a
-// run: the app-server or agent process that serves later runs keeps the
-// environment of the run that started it, so one reap also stops services
-// that earlier, completed runs left. A clean reap is the best evidence of a
-// stop Memoh has, not proof that every effect of the child ended.
+// an external child session's marker. The marker is the child thread id, not
+// a run id, since an ACP agent process serves many runs, so one reap also
+// stops services that earlier, completed runs left. A clean reap is the best
+// evidence of a stop Memoh has, not proof that every effect of the child
+// ended.
 type SubagentProcessReaper struct {
 	bridges nativeBridgeProvider
 }

@@ -82,6 +82,7 @@ func (r reapTestSessions) ResolveExternalSubagentTermination(ctx context.Context
 }
 
 type reapTestFixture struct {
+	childID    string
 	svc        *Service
 	reaper     *scriptedReaper
 	child      func() thread.Thread
@@ -96,7 +97,12 @@ type reapTestFixture struct {
 
 func newReapTestFixture(t *testing.T) reapTestFixture {
 	t.Helper()
-	botID, childID, unknownRun := lifecycleTestBotID, lifecycleTestSessionID, uuid.NewString()
+	return newReapTestFixtureFor(t, lifecycleTestSessionID)
+}
+
+func newReapTestFixtureFor(t *testing.T, childID string) reapTestFixture {
+	t.Helper()
+	botID, unknownRun := lifecycleTestBotID, uuid.NewString()
 	manager := sessionruntime.NewManager(sessionruntime.NewMemoryBackend(), sessionruntime.Options{Ledger: sessionledger.New(), Fence: queueTestFence{}})
 	t.Cleanup(func() { _ = manager.CloseContext(context.Background()) })
 	var mu sync.Mutex
@@ -141,13 +147,13 @@ func newReapTestFixture(t *testing.T) reapTestFixture {
 	}})
 	reaper := &scriptedReaper{err: errors.New("workspace unreachable")}
 	svc.SetSubagentProcessReaper(reaper)
-	return reapTestFixture{svc: svc, reaper: reaper, child: child, mu: &mu, meta: meta, prompts: prompts, completed: completed, unknownRun: unknownRun, deadlines: svc.sessionService.(reapTestSessions).deadlines, messages: messages}
+	return reapTestFixture{childID: childID, svc: svc, reaper: reaper, child: child, mu: &mu, meta: meta, prompts: prompts, completed: completed, unknownRun: unknownRun, deadlines: svc.sessionService.(reapTestSessions).deadlines, messages: messages}
 }
 
 func (f reapTestFixture) run(ctx context.Context, runID, query string) (*tools.SpawnResult, error) {
 	parent := tools.SessionContext{BotID: lifecycleTestBotID, SessionID: "parent", UserID: "user-1"}
-	handle := sessionruntime.RunHandle{BotID: lifecycleTestBotID, SessionID: lifecycleTestSessionID, RunID: runID, FencingToken: 1}
-	return f.svc.RunExternalSubagent(withSubagentRunHandle(ctx, handle), tools.ExternalSubagentRun{Parent: parent, SessionID: lifecycleTestSessionID, RuntimeType: "codex", BotAgentID: "backend", Query: query, Admission: tools.SubagentAdmission{RunID: handle.RunID, TurnID: handle.RunID}})
+	handle := sessionruntime.RunHandle{BotID: lifecycleTestBotID, SessionID: f.childID, RunID: runID, FencingToken: 1}
+	return f.svc.RunExternalSubagent(withSubagentRunHandle(ctx, handle), tools.ExternalSubagentRun{Parent: parent, SessionID: f.childID, RuntimeType: "codex", BotAgentID: "backend", Query: query, Admission: tools.SubagentAdmission{RunID: handle.RunID, TurnID: handle.RunID}})
 }
 
 func TestUnconfirmedSubagentResumesOnlyAfterLeftoversStop(t *testing.T) {

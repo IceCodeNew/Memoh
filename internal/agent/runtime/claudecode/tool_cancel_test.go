@@ -6,7 +6,9 @@ import (
 	"net"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -27,14 +29,14 @@ import (
 	"github.com/felinics/memoh/internal/workspace/bridgesvc"
 )
 
-// toolCallingCLI calls the Memoh tool gateway once per prompt. On interrupt
-// it reports the result and exits without waiting for that call, the way the
-// real CLI leaves an in-flight Memoh tool behind; "finish" in the working
-// directory makes it end the turn normally while the call is still open.
-const toolCallingCLI = `#!/usr/bin/env python3
-import json, os, sys, threading, time, urllib.request
+// toolCallingCLI calls the Memoh tool gateway once per prompt. On interrupt it
+// waits for that call's answer, records it in "answer" and only then reports
+// the result and exits; "finish" in the working directory makes it end the
+// turn normally while the call is still open.
+const toolCallingCLI = `import json, os, sys, threading, time, urllib.request
 args = sys.argv[1:]
 url = json.loads(args[args.index("--mcp-config") + 1])["mcpServers"]["memoh"]["url"]
+answer = {}
 def send(value):
     sys.stdout.write(json.dumps(value) + "\n")
     sys.stdout.flush()
@@ -42,24 +44,30 @@ def call():
     body = json.dumps({"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {"name": "hold", "arguments": {}}}).encode()
     headers = {"Content-Type": "application/json", "Accept": "application/json, text/event-stream", "Mcp-Protocol-Version": "2025-11-25"}
     try:
-        urllib.request.urlopen(urllib.request.Request(url, body, headers), timeout=60).read()
-    except Exception:
-        pass
+        answer["body"] = urllib.request.urlopen(urllib.request.Request(url, body, headers), timeout=60).read().decode()
+    except Exception as error:
+        answer["body"] = "transport error: %s" % error
 def finish_when_released():
     while not os.path.exists("finish"):
         time.sleep(0.02)
     send({"type": "result", "subtype": "success", "session_id": "native", "is_error": False, "result": "done"})
     os._exit(0)
+caller = None
 for line in sys.stdin:
     msg = json.loads(line)
     if msg.get("type") == "control_request":
         send({"type": "control_response", "response": {"subtype": "success", "request_id": msg["request_id"], "response": {}}})
         if msg["request"]["subtype"] == "interrupt":
+            if caller:
+                caller.join(60)
+            with open("answer", "w") as output:
+                output.write(answer.get("body", "no answer"))
             send({"type": "result", "subtype": "error_during_execution", "session_id": "native", "is_error": True})
             os._exit(0)
     elif msg.get("type") == "user":
         send({"type": "system", "subtype": "init", "session_id": "native", "model": "fixture"})
-        threading.Thread(target=call, daemon=True).start()
+        caller = threading.Thread(target=call, daemon=True)
+        caller.start()
         threading.Thread(target=finish_when_released, daemon=True).start()
 `
 
@@ -120,6 +128,11 @@ type toolTurnHarness struct {
 
 func newToolTurnHarness(t *testing.T) *toolTurnHarness {
 	t.Helper()
+	resolved, err := exec.CommandContext(t.Context(), "python3", "-c", "import sys; print(sys.executable)").Output()
+	python := strings.TrimSpace(string(resolved))
+	if err != nil || python == "" {
+		t.Skip("the scripted CLI needs python3")
+	}
 	root := t.TempDir()
 	broker := bridgesvc.NewReverseHTTPBroker()
 	listener := bufconn.Listen(1 << 20)
@@ -136,8 +149,12 @@ func newToolTurnHarness(t *testing.T) *toolTurnHarness {
 	t.Cleanup(func() { _ = conn.Close() })
 	proxy := httptest.NewServer(broker)
 	t.Cleanup(proxy.Close)
+	script := filepath.Join(root, "claude.py")
+	if err := os.WriteFile(script, []byte(toolCallingCLI), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	launcher := filepath.Join(root, "claude")
-	if err := os.WriteFile(launcher, []byte(toolCallingCLI), 0o700); err != nil { //nolint:gosec // test launcher must be executable.
+	if err := os.WriteFile(launcher, []byte("#!/bin/sh\nexec "+shellQuote(python)+" "+shellQuote(script)+" \"$@\"\n"), 0o700); err != nil { //nolint:gosec // test launcher must be executable.
 		t.Fatal(err)
 	}
 	tool := &heldTool{started: make(chan string, 4), stopped: make(chan string, 4)}
@@ -228,6 +245,10 @@ func TestStopCancelsOnlyTheStoppedRunsMemohTool(t *testing.T) {
 	if completed := awaitTurn(t, doneA, "stopped turn waited for its Memoh tool"); completed.err != nil || completed.result.TerminationUnconfirmed {
 		t.Fatalf("stopped turn = %+v, %v", completed.result, completed.err)
 	}
+	answer, err := os.ReadFile(filepath.Join(h.root, "child-a", "answer")) //nolint:gosec // test-owned path.
+	if err != nil || !strings.Contains(string(answer), `"result"`) || !strings.Contains(string(answer), "context canceled") {
+		t.Fatalf("the CLI did not get its cancelled call answered over the tool route: %q %v", answer, err)
+	}
 	select {
 	case id := <-h.tool.stopped:
 		t.Fatalf("%s's tool stopped with the other run", id)
@@ -237,8 +258,13 @@ func TestStopCancelsOnlyTheStoppedRunsMemohTool(t *testing.T) {
 	}
 
 	stopB()
-	if id := <-h.tool.stopped; id != "child-b" {
-		t.Fatalf("stopped tool = %s", id)
+	select {
+	case id := <-h.tool.stopped:
+		if id != "child-b" {
+			t.Fatalf("stopped tool = %s", id)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("stop did not cancel the other run's Memoh tool")
 	}
 	awaitTurn(t, doneB, "second stopped turn waited for its Memoh tool")
 }
