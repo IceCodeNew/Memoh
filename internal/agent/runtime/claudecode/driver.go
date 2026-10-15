@@ -317,15 +317,11 @@ func (d *Driver) Prompt(ctx context.Context, input external.PromptInput) (result
 		storedSessionID = ""
 	}
 	storedSessionID = d.ensureResumableSession(ctx, client, input, storedSessionID)
-	// The mount must survive a caller disconnect exactly as long as the CLI
-	// process does (the interrupt handshake still runs tools).
-	mountCtx, cancelMount := context.WithCancel(context.WithoutCancel(ctx))
-	defer cancelMount()
-	mcpConfig, toolsMount, err := d.mountTurnTools(mountCtx, client, workspaceInfo, input)
+	mcpConfig, stopTools, err := d.mountTurnTools(ctx, client, workspaceInfo, input)
 	if err != nil {
 		return external.PromptResult{}, external.Unavailable(err)
 	}
-	defer toolsMount.Stop()
+	defer stopTools()
 	// The process must survive a caller disconnect long enough for the
 	// interrupt handshake below.
 	proc, err := startTurnCLI(context.WithoutCancel(ctx), client, cfg, input, storedSessionID, mcpConfig, launcher.Path)
