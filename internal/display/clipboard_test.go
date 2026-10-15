@@ -236,6 +236,29 @@ func TestRejectedClipboardDoesNotCloseInput(t *testing.T) {
 	}
 }
 
+func TestClipboardTransportFailureDisconnectsInsteadOfReportingCopyError(t *testing.T) {
+	client, server := net.Pipe()
+	defer func() { _ = client.Close() }()
+	go func() {
+		var encodings [8]byte
+		_, _ = io.ReadFull(server, encodings[:])
+		_ = server.Close()
+	}()
+	c := &rfbInputClient{conn: client}
+	disconnected := make(chan error, 1)
+	if err := c.startClipboard(func(string) { t.Error("unexpected clipboard text") }, func(error) { t.Error("transport closure reported as clipboard content error") }, func(err error) { disconnected <- err }); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-disconnected:
+	case <-time.After(time.Second):
+		t.Fatal("transport closure did not disconnect the viewer")
+	}
+	if err := c.Key('a', true); !errors.Is(err, net.ErrClosed) {
+		t.Fatalf("dead input connection remained usable: %v", err)
+	}
+}
+
 func TestLegacyClipboardAndPublicError(t *testing.T) {
 	conn := &clipboardTestConn{}
 	c := &rfbInputClient{conn: conn, clipboard: &rfbClipboard{}}

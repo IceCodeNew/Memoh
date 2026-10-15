@@ -36,7 +36,7 @@ type rfbClipboard struct {
 	hasText  bool
 }
 
-func (c *rfbInputClient) startClipboard(onText func(string), onError func(error)) error {
+func (c *rfbInputClient) startClipboard(onText func(string), onError func(error), onDisconnect func(error)) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.clipboard = &rfbClipboard{}
@@ -48,9 +48,11 @@ func (c *rfbInputClient) startClipboard(onText func(string), onError func(error)
 	conn := c.conn
 	go func() {
 		if err := c.readClipboard(conn, onText, onError); err != nil {
-			onError(err)
+			// Close the underlying stream before taking the write lock, so a
+			// pending write cannot prevent connection cleanup indefinitely.
 			_ = conn.Close()
 			_ = c.Close()
+			onDisconnect(err)
 		}
 	}()
 	return nil
