@@ -572,12 +572,31 @@ func TestGenerateInjectsToolNoticeWithoutRegisteredTools(t *testing.T) {
 	}
 }
 
-func TestToolNoticeCapabilityIsUniquePerProvider(t *testing.T) {
+func TestToolNoticeFragmentsSurviveCapabilityGate(t *testing.T) {
 	t.Parallel()
-	if got := toolNoticeCapability(noticeTestProvider{label: " mcp "}, 3); got != "notice.mcp" {
+	if got := toolNoticeSectionID(noticeTestProvider{label: " mcp "}, 3); got != "notice.mcp" {
 		t.Fatalf("got %q", got)
 	}
-	if got := toolNoticeCapability(plainTestProvider{}, 3); got != "notice.3" {
+	if got := toolNoticeSectionID(plainTestProvider{}, 3); got != "notice.3" {
 		t.Fatalf("got %q", got)
+	}
+	frags := structuredToolUsage([]toolUsageSection{
+		{capability: "fake_tool", text: "usage"},
+		{id: "notice.mcp", text: "notice"},
+	}, contextfrag.Scope{})
+	if len(frags) != 3 {
+		t.Fatalf("frags=%d", len(frags))
+	}
+	notice := frags[2]
+	if notice.ID != toolUsageGroupID+".notice.mcp" {
+		t.Fatalf("notice id = %q", notice.ID)
+	}
+	// A notice reports a missing tool, so it must not be gated on a tool
+	// being present: an empty required capability passes the capability gate.
+	if notice.RequiredCapability != "" {
+		t.Fatalf("notice must not require a capability, got %q", notice.RequiredCapability)
+	}
+	if frags[1].RequiredCapability != "fake_tool" {
+		t.Fatalf("usage guidance must keep its capability, got %q", frags[1].RequiredCapability)
 	}
 }

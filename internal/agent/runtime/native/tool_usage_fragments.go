@@ -14,14 +14,27 @@ import (
 const toolUsageGroupID = "system.tool_usage"
 
 type toolUsageSection struct {
+	// capability is the tool whose registration this guidance follows; the
+	// capability gate drops the fragment when that tool is not available.
+	// Empty for provider notices, which exist precisely because a tool is
+	// missing and must survive the gate.
 	capability string
-	text       string
+	// id names the fragment when capability is empty.
+	id   string
+	text string
 }
 
-// toolNoticeCapability names the usage section a provider's ToolNotice lands
+func (s toolUsageSection) fragID() string {
+	if s.id != "" {
+		return s.id
+	}
+	return s.capability
+}
+
+// toolNoticeSectionID names the usage section a provider's ToolNotice lands
 // in. Notices carry no registered tool, so the provider label (or its
 // position) keeps the fragment id unique instead of a tool name.
-func toolNoticeCapability(provider tools.ToolProvider, index int) string {
+func toolNoticeSectionID(provider tools.ToolProvider, index int) string {
 	label := ""
 	if labeler, ok := provider.(tools.ProviderLabeler); ok {
 		label = strings.TrimSpace(labeler.ProviderLabel())
@@ -82,7 +95,7 @@ func structuredToolUsage(sections []toolUsageSection, scope contextfrag.Scope) [
 	))
 	for i, section := range sections {
 		frags = append(frags, frag(
-			toolUsageGroupID+"."+section.capability,
+			toolUsageGroupID+"."+section.fragID(),
 			section.text,
 			section.capability,
 			i+1,

@@ -672,8 +672,8 @@ func (a *Agent) assembleTools(
 		}
 		if text := strings.TrimSpace(noticer.ToolNotice(ctx, session)); text != "" {
 			usageSections = append(usageSections, toolUsageSection{
-				capability: toolNoticeCapability(provider, i),
-				text:       text,
+				id:   toolNoticeSectionID(provider, i),
+				text: text,
 			})
 		}
 	}
