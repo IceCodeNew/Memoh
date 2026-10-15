@@ -373,6 +373,109 @@ func TestClientTunnelSurvivesDialContextCancellation(t *testing.T) {
 	}
 }
 
+// blockedTunnelStream models a peer that no longer drains its receive window.
+// Both I/O directions remain blocked until the stream context is canceled.
+type blockedTunnelStream struct {
+	grpc.ClientStream
+	ctx         context.Context
+	sendStarted chan struct{}
+	recvStarted chan struct{}
+	sendOnce    sync.Once
+}
+
+func (s *blockedTunnelStream) Context() context.Context { return s.ctx }
+func (*blockedTunnelStream) CloseSend() error           { return nil }
+
+func (s *blockedTunnelStream) Send(*pb.TunnelFrame) error {
+	s.sendOnce.Do(func() { close(s.sendStarted) })
+	<-s.ctx.Done()
+	return s.ctx.Err()
+}
+
+func (s *blockedTunnelStream) Recv() (*pb.TunnelFrame, error) {
+	close(s.recvStarted)
+	<-s.ctx.Done()
+	return nil, s.ctx.Err()
+}
+
+func TestTunnelCloseUnblocksConcurrentReadAndWrite(t *testing.T) {
+	t.Parallel()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	stream := &blockedTunnelStream{ctx: ctx, sendStarted: make(chan struct{}), recvStarted: make(chan struct{})}
+	conn := &tunnelConn{stream: stream, cancel: cancel}
+	writeDone := make(chan error, 1)
+	readDone := make(chan error, 1)
+	go func() {
+		_, err := conn.Write([]byte("blocked input"))
+		writeDone <- err
+	}()
+	go func() {
+		_, err := conn.Read(make([]byte, 1))
+		readDone <- err
+	}()
+	<-stream.sendStarted
+	<-stream.recvStarted
+	closeDone := make(chan error, 1)
+	go func() { closeDone <- conn.Close() }()
+	select {
+	case err := <-closeDone:
+		if err != nil {
+			t.Fatalf("Close: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Close waited for blocked stream I/O instead of canceling it")
+	}
+	for name, done := range map[string]<-chan error{"read": readDone, "write": writeDone} {
+		select {
+		case err := <-done:
+			if err == nil {
+				t.Fatalf("%s succeeded after Close", name)
+			}
+		case <-time.After(time.Second):
+			t.Fatalf("Close left %s blocked", name)
+		}
+	}
+	if err := conn.Close(); err != nil {
+		t.Fatalf("repeated Close: %v", err)
+	}
+}
+
+type tunnelCancellationTestServer struct {
+	pb.UnimplementedContainerServiceServer
+	canceled chan struct{}
+}
+
+func (s *tunnelCancellationTestServer) Tunnel(stream pb.ContainerService_TunnelServer) error {
+	if _, err := stream.Recv(); err != nil {
+		return err
+	}
+	if err := stream.Send(&pb.TunnelFrame{Frame: &pb.TunnelFrame_Data{Data: &pb.TunnelData{}}}); err != nil {
+		return err
+	}
+	<-stream.Context().Done()
+	close(s.canceled)
+	return stream.Context().Err()
+}
+
+func TestClientTunnelCloseCancelsServerStream(t *testing.T) {
+	t.Parallel()
+	server := &tunnelCancellationTestServer{canceled: make(chan struct{})}
+	client := newTestClient(t, server)
+	conn, err := client.DialContext(context.Background(), "tcp", "127.0.0.1:9222")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := conn.Close(); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-server.canceled:
+	case <-time.After(time.Second):
+		t.Fatal("Close left the server tunnel alive")
+	}
+}
+
 func TestServeReverseHTTPForwardsRequests(t *testing.T) {
 	broker := bridgesvc.NewReverseHTTPBroker()
 	client := newTestClient(t, bridgesvc.New(bridgesvc.Options{ReverseHTTP: broker}))
