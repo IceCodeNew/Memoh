@@ -393,16 +393,17 @@ func SkillDiscoveryRootsFromMetadata(metadata map[string]any) []string {
 }
 
 func (m *Manager) resolveWorkspaceImage(ctx context.Context, botID string) (string, error) {
-	if m.queries != nil {
-		pgBotID, err := db.ParseUUID(botID)
-		if err == nil {
-			row, dbErr := m.queries.GetContainerByBotID(ctx, pgBotID)
-			if dbErr == nil && strings.TrimSpace(row.Image) != "" {
-				return config.NormalizeImageRef(strings.TrimSpace(row.Image)), nil
+	if m.computers != nil {
+		// The managed computer record carries the image the container runs.
+		record, err := m.managedComputer(ctx, botID)
+		switch {
+		case err == nil:
+			if image := strings.TrimSpace(record.Image); image != "" {
+				return config.NormalizeImageRef(image), nil
 			}
-			if dbErr != nil && !errors.Is(dbErr, pgx.ErrNoRows) {
-				return "", dbErr
-			}
+		case noManagedComputer(err):
+		default:
+			return "", err
 		}
 	}
 

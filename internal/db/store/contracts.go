@@ -303,10 +303,6 @@ type BotReader interface {
 	GetByID(ctx context.Context, botID ID) (Record, error)
 }
 
-type ContainerReader interface {
-	GetContainerByBotID(ctx context.Context, botID ID) (Record, error)
-}
-
 type ModelStore interface {
 	Create(ctx context.Context, input Input) (Record, error)
 	GetByID(ctx context.Context, modelID ID) (Record, error)
@@ -508,24 +504,122 @@ type MemoryProviderStore interface {
 	Delete(ctx context.Context, id ID) error
 }
 
-// ContainerWorkspaceStore is the container-era record contract kept for the
-// legacy workspace manager; the workspace/binding tables use WorkspaceStore
-// and BotWorkspaceBindingStore below.
-type ContainerWorkspaceStore interface {
-	GetBotByID(ctx context.Context, botID ID) (Record, error)
-	UpdateBotProfile(ctx context.Context, botID ID, input Patch) (Record, error)
-	UpsertContainer(ctx context.Context, input Input) (Record, error)
-	GetContainerByBotID(ctx context.Context, botID ID) (Record, error)
-	ListAutoStartContainers(ctx context.Context) ([]Record, error)
-	DeleteContainerByBotID(ctx context.Context, botID ID) error
-	UpdateContainerStarted(ctx context.Context, input Patch) (Record, error)
-	UpdateContainerStopped(ctx context.Context, input Patch) (Record, error)
-	UpdateContainerStatus(ctx context.Context, input Patch) (Record, error)
-	ListSnapshotsWithVersionByContainerID(ctx context.Context, containerID string) ([]Record, error)
-	ListVersionsByContainerID(ctx context.Context, containerID string) ([]Record, error)
-	GetVersionSnapshotRuntimeName(ctx context.Context, versionID ID) (string, error)
-	RecordSnapshotVersion(ctx context.Context, input Input) (Record, error)
-	InsertLifecycleEvent(ctx context.Context, input Input) error
+// ManagedComputerRecord is the instance view of a managed computer: the
+// container the workspace manager recorded for the workspace. The
+// reconciler's intent / observation columns of the same row are read through
+// botworkspace.Repository. InstanceID is empty until a container exists.
+type ManagedComputerRecord struct {
+	WorkspaceID    string
+	TeamID         string
+	Image          string
+	InstanceID     string
+	InstanceName   string
+	InstanceStatus string
+	Namespace      string
+	AutoStart      bool
+	ContainerPath  string
+	LastStartedAt  time.Time
+	LastStoppedAt  time.Time
+	CreatedAt      time.Time
+	UpdatedAt      time.Time
+}
+
+// ManagedComputerInstanceInput records the container behind a managed
+// computer. A computer without a row yet gets one that is desired present
+// and observed by Status; an existing row keeps its intent and observation.
+type ManagedComputerInstanceInput struct {
+	WorkspaceID   string
+	InstanceID    string
+	InstanceName  string
+	Image         string
+	Status        string
+	Namespace     string
+	AutoStart     bool
+	ContainerPath string
+}
+
+// ManagedComputerSnapshotRecord is a snapshot of a managed computer. Version
+// is nil when no version points at the snapshot.
+type ManagedComputerSnapshotRecord struct {
+	ID                        string
+	WorkspaceID               string
+	ContainerID               string
+	RuntimeSnapshotName       string
+	DisplayName               string
+	ParentRuntimeSnapshotName string
+	Snapshotter               string
+	Source                    string
+	Version                   *int
+	CreatedAt                 time.Time
+}
+
+// ManagedComputerVersionRecord is a numbered version of a managed computer
+// together with the snapshot it points at.
+type ManagedComputerVersionRecord struct {
+	ID                  string
+	WorkspaceID         string
+	ContainerID         string
+	SnapshotID          string
+	Version             int
+	RuntimeSnapshotName string
+	DisplayName         string
+	CreatedAt           time.Time
+}
+
+// RecordManagedComputerVersionInput upserts the snapshot row and assigns it
+// the computer's next version number in one transaction.
+type RecordManagedComputerVersionInput struct {
+	WorkspaceID               string
+	ContainerID               string
+	RuntimeSnapshotName       string
+	DisplayName               string
+	ParentRuntimeSnapshotName string
+	Snapshotter               string
+	Source                    string
+}
+
+type ManagedComputerEventInput struct {
+	ID          string
+	WorkspaceID string
+	ContainerID string
+	EventType   string
+	Payload     JSON
+}
+
+// ManagedComputerResourceLimits are the desired limits of a computer; 0
+// means unlimited.
+type ManagedComputerResourceLimits struct {
+	CPUMillicores int64
+	MemoryBytes   int64
+	StorageBytes  int64
+}
+
+// ManagedComputerStore is where the workspace manager keeps everything it
+// records about a managed computer: the container instance, its snapshots,
+// versions, lifecycle events and resource limits. Every method is keyed by
+// the workspace id; callers resolve a bot through its bindings first.
+// Lookups return db.ErrNotFound when the computer has no row.
+type ManagedComputerStore interface {
+	GetManagedComputer(ctx context.Context, workspaceID string) (ManagedComputerRecord, error)
+	GetManagedComputerByInstanceID(ctx context.Context, instanceID string) (ManagedComputerRecord, error)
+	// ListAutoStartManagedComputers lists the computers with a recorded
+	// container that the startup reconcile checks.
+	ListAutoStartManagedComputers(ctx context.Context) ([]ManagedComputerRecord, error)
+	UpsertManagedComputerInstance(ctx context.Context, input ManagedComputerInstanceInput) error
+	// ClearManagedComputerInstance forgets the container: the instance
+	// columns are reset and the snapshots, versions and events taken on it
+	// are deleted. The computer and its intent stay.
+	ClearManagedComputerInstance(ctx context.Context, workspaceID string) error
+	MarkManagedComputerStarted(ctx context.Context, workspaceID string) error
+	MarkManagedComputerStopped(ctx context.Context, workspaceID string) error
+	UpdateManagedComputerInstanceStatus(ctx context.Context, workspaceID, status string) error
+	ListManagedComputerSnapshots(ctx context.Context, workspaceID string) ([]ManagedComputerSnapshotRecord, error)
+	ListManagedComputerVersions(ctx context.Context, workspaceID string) ([]ManagedComputerVersionRecord, error)
+	GetManagedComputerVersionSnapshotName(ctx context.Context, workspaceID string, version int) (string, error)
+	RecordManagedComputerVersion(ctx context.Context, input RecordManagedComputerVersionInput) (ManagedComputerVersionRecord, error)
+	InsertManagedComputerEvent(ctx context.Context, input ManagedComputerEventInput) error
+	GetManagedComputerResourceLimits(ctx context.Context, workspaceID string) (ManagedComputerResourceLimits, error)
+	UpsertManagedComputerResourceLimits(ctx context.Context, workspaceID string, limits ManagedComputerResourceLimits) error
 }
 
 type RegistryStore interface {

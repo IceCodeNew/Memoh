@@ -87,26 +87,31 @@ func TestTeamCompositeKeys(t *testing.T) {
 // used by process-local registries and filesystem/runtime resources. These
 // resources are keyed by their globally unique database IDs; team_id is an
 // isolation qualifier and must not replace or join the stable primary key.
+// A managed computer is keyed by the workspace it is: its primary key is the
+// workspaces.id it references and takes no default of its own.
 func TestRuntimeResourceIDsRemainGlobalUUIDKeys(t *testing.T) {
 	ctx := context.Background()
 	pool := freshMigratedDB(t)
 
-	tables := []string{
-		"bot_channel_configs",
-		"bot_channel_routes",
-		"bot_sessions",
-		"bots",
-		"channel_identities",
-		"containers",
-		"fetch_providers",
-		"mcp_connections",
-		"models",
-		"providers",
-		"schedule",
-		"search_providers",
-		"storage_providers",
+	tables := []struct {
+		name, keyColumn, keyDefault string
+	}{
+		{"bot_channel_configs", "id", "gen_random_uuid()"},
+		{"bot_channel_routes", "id", "gen_random_uuid()"},
+		{"bot_sessions", "id", "gen_random_uuid()"},
+		{"bots", "id", "gen_random_uuid()"},
+		{"channel_identities", "id", "gen_random_uuid()"},
+		{"managed_computers", "workspace_id", ""},
+		{"fetch_providers", "id", "gen_random_uuid()"},
+		{"mcp_connections", "id", "gen_random_uuid()"},
+		{"models", "id", "gen_random_uuid()"},
+		{"providers", "id", "gen_random_uuid()"},
+		{"schedule", "id", "gen_random_uuid()"},
+		{"search_providers", "id", "gen_random_uuid()"},
+		{"storage_providers", "id", "gen_random_uuid()"},
 	}
-	for _, table := range tables {
+	for _, tc := range tables {
+		table, wantKey, wantDefault := tc.name, tc.keyColumn, tc.keyDefault
 		t.Run(table, func(t *testing.T) {
 			rows, err := pool.Query(ctx, `
 				SELECT a.attname,
@@ -140,11 +145,11 @@ func TestRuntimeResourceIDsRemainGlobalUUIDKeys(t *testing.T) {
 			if err := rows.Err(); err != nil {
 				t.Fatalf("iterate primary key: %v", err)
 			}
-			if len(columns) != 1 || columns[0].name != "id" || columns[0].dataType != "uuid" {
-				t.Fatalf("runtime resource primary key = %#v, want single UUID id", columns)
+			if len(columns) != 1 || columns[0].name != wantKey || columns[0].dataType != "uuid" {
+				t.Fatalf("runtime resource primary key = %#v, want single UUID %s", columns, wantKey)
 			}
-			if columns[0].defaultExpr != "gen_random_uuid()" {
-				t.Fatalf("runtime resource id default = %q, want gen_random_uuid()", columns[0].defaultExpr)
+			if columns[0].defaultExpr != wantDefault {
+				t.Fatalf("runtime resource %s default = %q, want %q", wantKey, columns[0].defaultExpr, wantDefault)
 			}
 		})
 	}

@@ -462,28 +462,6 @@ type BotWorkdir struct {
 	UpdatedAt       pgtype.Timestamptz `json:"updated_at"`
 }
 
-type BotWorkspace struct {
-	BotID              pgtype.UUID        `json:"bot_id"`
-	TeamID             pgtype.UUID        `json:"team_id"`
-	DesiredState       string             `json:"desired_state"`
-	DesiredGeneration  int64              `json:"desired_generation"`
-	Image              string             `json:"image"`
-	PreserveData       bool               `json:"preserve_data"`
-	ObservedState      string             `json:"observed_state"`
-	ObservedGeneration int64              `json:"observed_generation"`
-	EverReady          bool               `json:"ever_ready"`
-	LastError          string             `json:"last_error"`
-	LastErrorCode      string             `json:"last_error_code"`
-	LastErrorPhase     string             `json:"last_error_phase"`
-	Attempts           int32              `json:"attempts"`
-	NextAttemptAt      pgtype.Timestamptz `json:"next_attempt_at"`
-	LeaseOwner         string             `json:"lease_owner"`
-	LeaseUntil         pgtype.Timestamptz `json:"lease_until"`
-	Version            int64              `json:"version"`
-	CreatedAt          pgtype.Timestamptz `json:"created_at"`
-	UpdatedAt          pgtype.Timestamptz `json:"updated_at"`
-}
-
 type BotWorkspaceBinding struct {
 	ID                 pgtype.UUID        `json:"id"`
 	TeamID             pgtype.UUID        `json:"team_id"`
@@ -493,16 +471,6 @@ type BotWorkspaceBinding struct {
 	ToolApprovalConfig []byte             `json:"tool_approval_config"`
 	CreatedAt          pgtype.Timestamptz `json:"created_at"`
 	UpdatedAt          pgtype.Timestamptz `json:"updated_at"`
-}
-
-type BotWorkspaceResourceLimit struct {
-	BotID         pgtype.UUID        `json:"bot_id"`
-	CpuMillicores int64              `json:"cpu_millicores"`
-	MemoryBytes   int64              `json:"memory_bytes"`
-	StorageBytes  int64              `json:"storage_bytes"`
-	CreatedAt     pgtype.Timestamptz `json:"created_at"`
-	UpdatedAt     pgtype.Timestamptz `json:"updated_at"`
-	TeamID        pgtype.UUID        `json:"team_id"`
 }
 
 type ChannelIdentity struct {
@@ -538,33 +506,6 @@ type Connector struct {
 	UpdatedAt    pgtype.Timestamptz `json:"updated_at"`
 }
 
-type Container struct {
-	ID               pgtype.UUID        `json:"id"`
-	BotID            pgtype.UUID        `json:"bot_id"`
-	ContainerID      string             `json:"container_id"`
-	ContainerName    string             `json:"container_name"`
-	Image            string             `json:"image"`
-	Status           string             `json:"status"`
-	Namespace        string             `json:"namespace"`
-	AutoStart        bool               `json:"auto_start"`
-	ContainerPath    string             `json:"container_path"`
-	WorkspaceBackend string             `json:"workspace_backend"`
-	CreatedAt        pgtype.Timestamptz `json:"created_at"`
-	UpdatedAt        pgtype.Timestamptz `json:"updated_at"`
-	LastStartedAt    pgtype.Timestamptz `json:"last_started_at"`
-	LastStoppedAt    pgtype.Timestamptz `json:"last_stopped_at"`
-	TeamID           pgtype.UUID        `json:"team_id"`
-}
-
-type ContainerVersion struct {
-	ID          pgtype.UUID        `json:"id"`
-	ContainerID string             `json:"container_id"`
-	SnapshotID  pgtype.UUID        `json:"snapshot_id"`
-	Version     int32              `json:"version"`
-	CreatedAt   pgtype.Timestamptz `json:"created_at"`
-	TeamID      pgtype.UUID        `json:"team_id"`
-}
-
 type ContextLifecycle struct {
 	RunID              pgtype.UUID        `json:"run_id"`
 	TeamID             pgtype.UUID        `json:"team_id"`
@@ -588,13 +529,77 @@ type FetchProvider struct {
 	TeamID    pgtype.UUID        `json:"team_id"`
 }
 
-type LifecycleEvent struct {
+type ManagedComputer struct {
+	WorkspaceID        pgtype.UUID        `json:"workspace_id"`
+	TeamID             pgtype.UUID        `json:"team_id"`
+	DesiredState       string             `json:"desired_state"`
+	DesiredGeneration  int64              `json:"desired_generation"`
+	Image              string             `json:"image"`
+	PreserveData       bool               `json:"preserve_data"`
+	ObservedState      string             `json:"observed_state"`
+	ObservedGeneration int64              `json:"observed_generation"`
+	EverReady          bool               `json:"ever_ready"`
+	LastError          string             `json:"last_error"`
+	LastErrorCode      string             `json:"last_error_code"`
+	LastErrorPhase     string             `json:"last_error_phase"`
+	Attempts           int32              `json:"attempts"`
+	NextAttemptAt      pgtype.Timestamptz `json:"next_attempt_at"`
+	LeaseOwner         string             `json:"lease_owner"`
+	LeaseUntil         pgtype.Timestamptz `json:"lease_until"`
+	Version            int64              `json:"version"`
+	InstanceID         string             `json:"instance_id"`
+	InstanceName       string             `json:"instance_name"`
+	InstanceStatus     string             `json:"instance_status"`
+	Namespace          string             `json:"namespace"`
+	AutoStart          bool               `json:"auto_start"`
+	ContainerPath      string             `json:"container_path"`
+	LastStartedAt      pgtype.Timestamptz `json:"last_started_at"`
+	LastStoppedAt      pgtype.Timestamptz `json:"last_stopped_at"`
+	CreatedAt          pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt          pgtype.Timestamptz `json:"updated_at"`
+}
+
+type ManagedComputerEvent struct {
 	ID          string             `json:"id"`
 	ContainerID string             `json:"container_id"`
 	EventType   string             `json:"event_type"`
 	Payload     []byte             `json:"payload"`
 	CreatedAt   pgtype.Timestamptz `json:"created_at"`
 	TeamID      pgtype.UUID        `json:"team_id"`
+	WorkspaceID pgtype.UUID        `json:"workspace_id"`
+}
+
+type ManagedComputerResourceLimit struct {
+	WorkspaceID   pgtype.UUID        `json:"workspace_id"`
+	TeamID        pgtype.UUID        `json:"team_id"`
+	CpuMillicores int64              `json:"cpu_millicores"`
+	MemoryBytes   int64              `json:"memory_bytes"`
+	StorageBytes  int64              `json:"storage_bytes"`
+	CreatedAt     pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt     pgtype.Timestamptz `json:"updated_at"`
+}
+
+type ManagedComputerSnapshot struct {
+	ID                        pgtype.UUID        `json:"id"`
+	ContainerID               string             `json:"container_id"`
+	RuntimeSnapshotName       string             `json:"runtime_snapshot_name"`
+	DisplayName               pgtype.Text        `json:"display_name"`
+	ParentRuntimeSnapshotName pgtype.Text        `json:"parent_runtime_snapshot_name"`
+	Snapshotter               string             `json:"snapshotter"`
+	Source                    string             `json:"source"`
+	CreatedAt                 pgtype.Timestamptz `json:"created_at"`
+	TeamID                    pgtype.UUID        `json:"team_id"`
+	WorkspaceID               pgtype.UUID        `json:"workspace_id"`
+}
+
+type ManagedComputerVersion struct {
+	ID          pgtype.UUID        `json:"id"`
+	ContainerID string             `json:"container_id"`
+	SnapshotID  pgtype.UUID        `json:"snapshot_id"`
+	Version     int32              `json:"version"`
+	CreatedAt   pgtype.Timestamptz `json:"created_at"`
+	TeamID      pgtype.UUID        `json:"team_id"`
+	WorkspaceID pgtype.UUID        `json:"workspace_id"`
 }
 
 type McpConnection struct {
@@ -830,18 +835,6 @@ type SessionRun struct {
 	ErrorMessage          pgtype.Text        `json:"error_message"`
 	CreatedAt             pgtype.Timestamptz `json:"created_at"`
 	UpdatedAt             pgtype.Timestamptz `json:"updated_at"`
-}
-
-type Snapshot struct {
-	ID                        pgtype.UUID        `json:"id"`
-	ContainerID               string             `json:"container_id"`
-	RuntimeSnapshotName       string             `json:"runtime_snapshot_name"`
-	DisplayName               pgtype.Text        `json:"display_name"`
-	ParentRuntimeSnapshotName pgtype.Text        `json:"parent_runtime_snapshot_name"`
-	Snapshotter               string             `json:"snapshotter"`
-	Source                    string             `json:"source"`
-	CreatedAt                 pgtype.Timestamptz `json:"created_at"`
-	TeamID                    pgtype.UUID        `json:"team_id"`
 }
 
 type StorageProvider struct {

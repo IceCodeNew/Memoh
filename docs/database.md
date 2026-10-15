@@ -71,12 +71,11 @@ The canonical source of truth for the full PostgreSQL schema is `db/postgres/mig
 - `workspaces` — Computers a team knows about: `managed` (the workspace the server provisions for a bot) or `user` (a machine paired through Remote Runtime; shares the `user_runtimes` id)
 - `bot_workspace_bindings` — Which bots may use which workspace, with per-binding tool approval; at most one binding per bot is primary. Remote mounts are the bindings to `user` workspaces
 - `user_runtimes` — Remote Runtime credentials (pending/activated/revoked) for a user's own computers
-- `bot_workspaces` — Declarative workspace state per bot: desired/observed state with generations, retry backoff, reconciler lease
-- `containers` — Bot container instances
-- `snapshots` — Container snapshots
-- `container_versions` — Container version tracking
-- `lifecycle_events` — Container lifecycle events
-- `bot_workspace_resource_limits` — Per-bot CPU/memory/storage quotas
+- `managed_computers` — One row per managed workspace (keyed by `workspace_id`): the reconciler's desired/observed state with generations, retry backoff and lease, plus the container instance record (`instance_id`, `instance_name`, `instance_status`, namespace, auto-start). A bot reaches its computer only through `bot_workspace_bindings`
+- `managed_computer_snapshots` — Snapshots of a managed computer (`container_id` is the instance they were taken on)
+- `managed_computer_versions` — Version numbering per managed computer
+- `managed_computer_events` — Lifecycle events of a managed computer
+- `managed_computer_resource_limits` — Per-computer CPU/memory/storage quotas
 
 **Scheduling & Automation**
 - `schedule` — Scheduled tasks (cron)

@@ -87,24 +87,26 @@ type ListChecksResponse struct {
 	Items []BotCheck `json:"items"`
 }
 
-// WorkspaceIntents records the desired workspace state of a bot; the
+// WorkspaceIntents records the desired state of a bot's managed computer; the
 // botworkspace reconciler converges the actual workspace toward it and derives
-// bots.status. The bots service never drives provisioning itself.
+// bots.status. The reconciler is keyed by the workspace id, so every method
+// takes the computer the bots service resolved through WorkspaceBindings. The
+// bots service never drives provisioning itself.
 type WorkspaceIntents interface {
-	// RecordPresent records, through the create's transaction q, that a new
-	// bot should have a running workspace built from image.
-	RecordPresent(ctx context.Context, q dbstore.Queries, botID, image string) error
+	// RecordPresent records, through the create's transaction q, that the
+	// new bot's managed computer workspaceID should run, built from image.
+	RecordPresent(ctx context.Context, q dbstore.Queries, workspaceID, image string) error
 	// Wake starts the reconciler on intents that have committed.
 	Wake(ctx context.Context)
-	// RequestAbsent asks for the workspace to be removed, optionally exporting
+	// RequestAbsent asks for the computer to be removed, optionally exporting
 	// its data first, and returns the intent generation.
-	RequestAbsent(ctx context.Context, botID string, preserve bool) (int64, error)
-	// AwaitSettled blocks until the workspace has answered the given intent
+	RequestAbsent(ctx context.Context, workspaceID string, preserve bool) (int64, error)
+	// AwaitSettled blocks until the computer has answered the given intent
 	// generation (running, stopped, failed, or absent).
-	AwaitSettled(ctx context.Context, botID string, generation int64) (WorkspaceOutcome, error)
-	// Current returns the latest observation; ok is false when the bot has no
-	// workspace row.
-	Current(ctx context.Context, botID string) (WorkspaceOutcome, bool, error)
+	AwaitSettled(ctx context.Context, workspaceID string, generation int64) (WorkspaceOutcome, error)
+	// Current returns the latest observation; ok is false when the computer
+	// has no row.
+	Current(ctx context.Context, workspaceID string) (WorkspaceOutcome, bool, error)
 }
 
 // WorkspaceBindings keeps the managed workspace a bot is bound to in step
@@ -112,8 +114,12 @@ type WorkspaceIntents interface {
 // transaction q so the workspace rows commit with the bot row or not at all.
 type WorkspaceBindings interface {
 	// BindManaged creates the new bot's managed workspace (its own id, owned
-	// by ownerUserID, named after the bot) and binds it as the primary target.
-	BindManaged(ctx context.Context, q dbstore.Queries, botID, ownerUserID, name string) error
+	// by ownerUserID, named after the bot), binds it as the primary target
+	// and returns the workspace id.
+	BindManaged(ctx context.Context, q dbstore.Queries, botID, ownerUserID, name string) (string, error)
+	// ManagedWorkspaceID returns the bot's managed computer (its first managed
+	// binding) or db.ErrNoManagedWorkspaceBinding when the bot has none.
+	ManagedWorkspaceID(ctx context.Context, q dbstore.Queries, botID string) (string, error)
 	// ManagedWorkspaceIDs lists the managed workspaces bound to the bot.
 	ManagedWorkspaceIDs(ctx context.Context, q dbstore.Queries, botID string) ([]string, error)
 	// ReleaseUnbound deletes the workspace once nothing binds it any more.

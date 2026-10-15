@@ -20,6 +20,7 @@ import (
 	"github.com/felinics/memoh/internal/botworkspace"
 	"github.com/felinics/memoh/internal/config"
 	ctr "github.com/felinics/memoh/internal/container"
+	"github.com/felinics/memoh/internal/db"
 	displaypkg "github.com/felinics/memoh/internal/display"
 	"github.com/felinics/memoh/internal/errs"
 	"github.com/felinics/memoh/internal/httpx"
@@ -30,22 +31,23 @@ import (
 )
 
 type ContainerdHandler struct {
-	manager          containerWorkspace
-	cfg              config.WorkspaceConfig
-	containerBackend string
-	logger           *slog.Logger
-	toolGateway      *mcp.ToolGatewayService
-	toolContexts     *mcp.ToolSessionContextStore
-	acpRuntimes      acpRuntimeContextResolver
-	mcpStdioMu       sync.Mutex
-	mcpStdioSess     map[string]*mcpStdioSession
-	workspaces       workspaceIntents
-	botService       *bots.Service
-	accountService   *accounts.Service
-	policyService    *policy.Service
-	displayService   *displaypkg.Service
-	browserSessions  *browserSessionStore
-	workspaceDeps    workspaceDependencyService
+	manager           containerWorkspace
+	cfg               config.WorkspaceConfig
+	containerBackend  string
+	logger            *slog.Logger
+	toolGateway       *mcp.ToolGatewayService
+	toolContexts      *mcp.ToolSessionContextStore
+	acpRuntimes       acpRuntimeContextResolver
+	mcpStdioMu        sync.Mutex
+	mcpStdioSess      map[string]*mcpStdioSession
+	workspaces        workspaceIntents
+	managedWorkspaces managedWorkspaces
+	botService        *bots.Service
+	accountService    *accounts.Service
+	policyService     *policy.Service
+	displayService    *displaypkg.Service
+	browserSessions   *browserSessionStore
+	workspaceDeps     workspaceDependencyService
 	// wsHeartbeat and terminalIdleTimeout time the terminal socket. Zero
 	// values mean defaultWSHeartbeat and the terminalIdleTimeout constant;
 	// tests set shorter ones.
@@ -308,6 +310,40 @@ func (h *ContainerdHandler) SetWorkspaceIntents(intents workspaceIntents) {
 	h.workspaces = intents
 }
 
+// SetManagedWorkspaces wires the bot -> managed computer resolution the
+// workspace endpoints address the reconciler with.
+func (h *ContainerdHandler) SetManagedWorkspaces(resolver managedWorkspaces) {
+	h.managedWorkspaces = resolver
+}
+
+// workspaceLifecycleReady reports whether both the reconciler and the
+// bot -> computer resolution are wired.
+func (h *ContainerdHandler) workspaceLifecycleReady() bool {
+	return h.workspaces != nil && h.managedWorkspaces != nil
+}
+
+// managedWorkspaceID resolves the bot's managed computer.
+func (h *ContainerdHandler) managedWorkspaceID(ctx context.Context, botID string) (string, error) {
+	if h.managedWorkspaces == nil {
+		return "", errors.New("managed workspace resolver not configured")
+	}
+	return h.managedWorkspaces.ManagedWorkspaceID(ctx, botID)
+}
+
+// ensureManagedWorkspace resolves the bot's managed computer and, for a bot
+// that never had one, creates it so the first workspace create still works.
+func (h *ContainerdHandler) ensureManagedWorkspace(ctx context.Context, botID string) (string, error) {
+	workspaceID, err := h.managedWorkspaceID(ctx, botID)
+	if err == nil || !errors.Is(err, db.ErrNoManagedWorkspaceBinding) {
+		return workspaceID, err
+	}
+	bot, err := h.botService.Get(ctx, botID)
+	if err != nil {
+		return "", err
+	}
+	return h.managedWorkspaces.EnsureManaged(ctx, botID, bot.OwnerUserID, bot.Name)
+}
+
 func (h *ContainerdHandler) Register(e *echo.Echo) {
 	e.Pre(h.handleBrowserProxyPre)
 
@@ -430,11 +466,16 @@ func (h *ContainerdHandler) CreateContainer(c echo.Context) error {
 		}
 		return writeSSEData(writer, flusher, string(data)) == nil
 	}
-	events, unsubscribe := h.workspaces.Subscribe(botID)
+	intentCtx, cancelIntent := context.WithTimeout(context.WithoutCancel(ctx), 15*time.Second)
+	defer cancelIntent()
+	workspaceID, err := h.ensureManagedWorkspace(intentCtx, botID)
+	if err != nil {
+		return sendWorkspaceStreamFailure(ctx, send, apperror.CodeWorkspaceCreateFailed, err, httpx.RequestID(c))
+	}
+	events, unsubscribe := h.workspaces.Subscribe(workspaceID)
 	defer unsubscribe()
 
-	intentCtx, cancelIntent := context.WithTimeout(context.WithoutCancel(ctx), 15*time.Second)
-	intent, err := h.workspaces.EnsurePresent(intentCtx, botID, imageOverride)
+	intent, err := h.workspaces.EnsurePresent(intentCtx, workspaceID, imageOverride)
 	cancelIntent()
 	if err != nil {
 		return sendWorkspaceStreamFailure(ctx, send, apperror.CodeWorkspaceCreateFailed, err, httpx.RequestID(c))
@@ -443,7 +484,7 @@ func (h *ContainerdHandler) CreateContainer(c echo.Context) error {
 	streamCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), workspaceStreamBudget)
 	defer cancel()
 	outcome := streamWorkspaceProvisioning(streamCtx, send, events, func(ctx context.Context) (botworkspace.Workspace, error) {
-		return h.workspaces.Await(ctx, botID, intent.DesiredGeneration)
+		return h.workspaces.Await(ctx, workspaceID, intent.DesiredGeneration)
 	}, httpx.RequestID(c))
 	if outcome.Disconnected {
 		return nil
@@ -490,12 +531,18 @@ func (h *ContainerdHandler) GetContainer(c echo.Context) error {
 	// The removal is read before the workspace: the other way round, a removal
 	// finishing in between would answer "still there, nothing being removed".
 	var removal *WorkspaceRemovalResponse
-	if h.workspaces != nil {
-		w, err := h.workspaces.Get(c.Request().Context(), botID)
-		if err != nil && !errors.Is(err, botworkspace.ErrNotFound) {
+	if h.workspaceLifecycleReady() {
+		workspaceID, err := h.managedWorkspaceID(c.Request().Context(), botID)
+		if err != nil && !errors.Is(err, db.ErrNoManagedWorkspaceBinding) {
 			return apperror.Wrap(apperror.CodeWorkspaceLoadFailed, err, nil)
 		}
-		removal = workspaceRemovalResponse(w)
+		if err == nil {
+			w, err := h.workspaces.Get(c.Request().Context(), workspaceID)
+			if err != nil && !errors.Is(err, botworkspace.ErrNotFound) {
+				return apperror.Wrap(apperror.CodeWorkspaceLoadFailed, err, nil)
+			}
+			removal = workspaceRemovalResponse(w)
+		}
 	}
 	status, err := h.manager.GetContainerInfo(c.Request().Context(), botID)
 	if err != nil {
@@ -636,11 +683,18 @@ func (h *ContainerdHandler) DeleteContainer(c echo.Context) error {
 	if err != nil {
 		return err
 	}
-	if h.workspaces == nil {
+	if !h.workspaceLifecycleReady() {
 		return echo.NewHTTPError(http.StatusInternalServerError, "workspace lifecycle not configured")
 	}
 	preserveData := c.QueryParam("preserve_data") == "true"
-	if _, err := h.workspaces.RequestAbsent(c.Request().Context(), botID, preserveData); err != nil {
+	workspaceID, err := h.managedWorkspaceID(c.Request().Context(), botID)
+	if err != nil {
+		if errors.Is(err, db.ErrNoManagedWorkspaceBinding) {
+			return apperror.New(apperror.CodeWorkspaceNotFound, nil)
+		}
+		return apperror.Wrap(apperror.CodeWorkspaceDeleteFailed, err, nil)
+	}
+	if _, err := h.workspaces.RequestAbsent(c.Request().Context(), workspaceID, preserveData); err != nil {
 		return apperror.Wrap(apperror.CodeWorkspaceDeleteFailed, err, nil)
 	}
 	// The reconciler removes it. The request does not wait: an export can
@@ -661,10 +715,18 @@ func (h *ContainerdHandler) CancelContainerRemoval(c echo.Context) error {
 	if err != nil {
 		return err
 	}
-	if h.workspaces == nil {
+	if !h.workspaceLifecycleReady() {
 		return echo.NewHTTPError(http.StatusInternalServerError, "workspace lifecycle not configured")
 	}
-	if err := h.workspaces.CancelRemoval(c.Request().Context(), botID); err != nil {
+	workspaceID, err := h.managedWorkspaceID(c.Request().Context(), botID)
+	if err != nil {
+		if errors.Is(err, db.ErrNoManagedWorkspaceBinding) {
+			// No managed computer: there is no removal to withdraw.
+			return c.NoContent(http.StatusNoContent)
+		}
+		return errs.Wrap(err, "resolve managed workspace", slog.String("bot_id", botID))
+	}
+	if err := h.workspaces.CancelRemoval(c.Request().Context(), workspaceID); err != nil {
 		return errs.Wrap(err, "cancel workspace removal", slog.String("bot_id", botID))
 	}
 	return c.NoContent(http.StatusNoContent)
@@ -719,12 +781,19 @@ func (h *ContainerdHandler) StopContainer(c echo.Context) error {
 // observeWorkspace refreshes the reconciler's observation after a user-driven
 // start or stop so the recorded state (running / stopped) follows the action.
 func (h *ContainerdHandler) observeWorkspace(ctx context.Context, botID string) {
-	if h.workspaces == nil {
+	if !h.workspaceLifecycleReady() {
 		return
 	}
 	obsCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 15*time.Second)
 	defer cancel()
-	if _, err := h.workspaces.Observe(obsCtx, botID); err != nil && !errors.Is(err, botworkspace.ErrNotFound) {
+	workspaceID, err := h.managedWorkspaceID(obsCtx, botID)
+	if err != nil {
+		if !errors.Is(err, db.ErrNoManagedWorkspaceBinding) {
+			h.logger.WarnContext(ctx, "resolve managed workspace failed", slog.String("bot_id", botID), slog.Any("error", err))
+		}
+		return
+	}
+	if _, err := h.workspaces.Observe(obsCtx, workspaceID); err != nil && !errors.Is(err, botworkspace.ErrNotFound) {
 		h.logger.WarnContext(ctx, "refresh workspace observation failed", slog.String("bot_id", botID), slog.Any("error", err))
 	}
 }

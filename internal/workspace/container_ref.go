@@ -8,10 +8,12 @@ import (
 
 // lockedContainerRef holds a per-container lock together with the latest
 // container metadata so mutation workflows do not have to repeat the same
-// resolve -> lock -> load sequence.
+// resolve -> lock -> load sequence. workspaceID is the managed computer the
+// container is recorded under once EnsureDBRecords resolved it.
 type lockedContainerRef struct {
 	manager     *Manager
 	botID       string
+	workspaceID string
 	containerID string
 	info        ctr.ContainerInfo
 	unlock      func()
@@ -48,7 +50,13 @@ func (r *lockedContainerRef) StopTaskForMutation(ctx context.Context) (func(), e
 	return r.manager.stopTaskForMutation(ctx, r.botID, r.containerID)
 }
 
+// EnsureDBRecords records the container as the bot's managed computer
+// instance and remembers which computer that is.
 func (r *lockedContainerRef) EnsureDBRecords(ctx context.Context) error {
-	_, err := r.manager.ensureDBRecords(ctx, r.botID, r.info.ID, r.info.Runtime.Name, r.info.Image)
-	return err
+	workspaceID, err := r.manager.ensureDBRecords(ctx, r.botID, r.info.ID, r.info.Image)
+	if err != nil {
+		return err
+	}
+	r.workspaceID = workspaceID
+	return nil
 }

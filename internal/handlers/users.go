@@ -54,6 +54,9 @@ type UsersHandler struct {
 	channelRuntime channel.Runtime
 	registry       *channel.Registry
 	workspaceSetup botCreateWorkspace
+	// managedWorkspaces resolves the created bot to the managed computer the
+	// reconciler is keyed by.
+	managedWorkspaces managedWorkspaces
 	// workspaceStatus describes the settled workspace for the "complete"
 	// event; nil falls back to the provisioner's progress event.
 	workspaceStatus workspaceStatus
@@ -81,6 +84,12 @@ func NewUsersHandler(log *slog.Logger, service *accounts.Service, botService *bo
 
 func (h *UsersHandler) SetRuntimeResetService(closer runtimeResetService) {
 	h.runtimeResets = closer
+}
+
+// SetManagedWorkspaces wires the bot -> managed computer resolution the
+// creation stream follows the reconciler with.
+func (h *UsersHandler) SetManagedWorkspaces(resolver managedWorkspaces) {
+	h.managedWorkspaces = resolver
 }
 
 // SetWorkspaceStatus wires the manager view used to describe a provisioned
@@ -550,7 +559,7 @@ func (h *UsersHandler) createBotStream(c echo.Context, ownerID string, ownerFrom
 	if !ok {
 		return echo.NewHTTPError(http.StatusInternalServerError, "streaming not supported")
 	}
-	if h.workspaceSetup == nil {
+	if h.workspaceSetup == nil || h.managedWorkspaces == nil {
 		return echo.NewHTTPError(http.StatusInternalServerError, "workspace lifecycle not configured")
 	}
 
@@ -560,6 +569,12 @@ func (h *UsersHandler) createBotStream(c echo.Context, ownerID string, ownerFrom
 	bot, err := h.createOrReplay(c.Request().Context(), ownerID, req, resent)
 	if err != nil {
 		return createBotHTTPError(err, ownerFromToken)
+	}
+	// The reconciler is keyed by the bot's managed computer, which the create
+	// bound in the same transaction as the bot row.
+	workspaceID, err := h.managedWorkspaces.ManagedWorkspaceID(c.Request().Context(), bot.ID)
+	if err != nil {
+		return errs.Wrap(err, "resolve managed workspace", slog.String("bot_id", bot.ID))
 	}
 
 	setSSEHeaders(c)
@@ -582,14 +597,14 @@ func (h *UsersHandler) createBotStream(c echo.Context, ownerID string, ownerFrom
 	}
 	send(createBotStreamBotEvent{Type: "bot_created", Bot: scrubBotForResponse(bot)})
 
-	events, unsubscribe := h.workspaceSetup.Subscribe(bot.ID)
+	events, unsubscribe := h.workspaceSetup.Subscribe(workspaceID)
 	defer unsubscribe()
 	h.workspaceSetup.Kick()
 
 	streamCtx, cancel := context.WithTimeout(context.WithoutCancel(c.Request().Context()), workspaceStreamBudget)
 	defer cancel()
 	outcome := streamWorkspaceProvisioning(streamCtx, send, events, func(ctx context.Context) (botworkspace.Workspace, error) {
-		return h.workspaceSetup.Await(ctx, bot.ID, 0)
+		return h.workspaceSetup.Await(ctx, workspaceID, 0)
 	}, httpx.RequestID(c))
 	if outcome.Disconnected {
 		return nil

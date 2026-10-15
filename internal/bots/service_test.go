@@ -58,10 +58,12 @@ func (d *fakeDBTX) QueryRow(ctx context.Context, sql string, args ...any) pgx.Ro
 // chat_model_id, search_provider_id, memory_provider_id,
 // compaction_enabled, compaction_threshold, compaction_target_percent, compaction_model_id,
 // metadata, created_at, updated_at.
+// makeBotRow answers bot reads; any query of another shape (the managed
+// computer record the checks look up) finds no row.
 func makeBotRow(botID, ownerUserID pgtype.UUID) *fakeRow {
 	return &fakeRow{
 		scanFunc: func(dest ...any) error {
-			if len(dest) < 19 {
+			if len(dest) != 19 {
 				return pgx.ErrNoRows
 			}
 			*dest[0].(*pgtype.UUID) = botID
@@ -225,7 +227,7 @@ func TestListChecksReportsSetupFailureAsSingleIssue(t *testing.T) {
 			switch {
 			case strings.Contains(query, "SELECT id, owner_user_id") && strings.Contains(query, "FROM bots"):
 				return makeGetBotRowWithMetadata(botUUID, ownerUUID, metadata)
-			case strings.Contains(query, "FROM containers"):
+			case strings.Contains(query, "FROM managed_computers"):
 				return &fakeRow{scanFunc: func(_ ...any) error { return pgx.ErrNoRows }}
 			default:
 				t.Fatalf("unexpected query: %s", query)
@@ -549,15 +551,18 @@ func TestRunDeleteLifecycleWaitsForWorkspaceAbsent(t *testing.T) {
 			return pgconn.CommandTag{}, nil
 		},
 	}
+	// The intent is addressed to the bot's managed computer, never the bot id.
+	const computerID = "00000000-0000-0000-0000-0000000000c2"
 	intents := &fakeWorkspaceIntents{outcome: WorkspaceOutcome{Desired: "absent", Observed: WorkspaceObservedAbsent}}
 	svc := NewService(nil, postgresstore.NewQueries(sqlc.New(db)))
 	svc.SetWorkspaceIntents(intents)
+	svc.SetWorkspaceBindings(&fakeWorkspaceBindings{managed: []string{computerID}, calls: &[]string{}})
 
 	if err := svc.runDeleteLifecycle(context.Background(), botID, BotStatusReady); err != nil {
 		t.Fatalf("delete lifecycle should succeed once the workspace is absent: %v", err)
 	}
-	if len(intents.absent) != 1 || intents.absent[0] != botID || intents.preserve[0] {
-		t.Fatalf("delete must request a non-preserving absent workspace, got %v/%v", intents.absent, intents.preserve)
+	if len(intents.absent) != 1 || intents.absent[0] != computerID || intents.preserve[0] {
+		t.Fatalf("delete must request a non-preserving absent workspace for the bot's computer, got %v/%v", intents.absent, intents.preserve)
 	}
 	if len(exec) == 0 || exec[len(exec)-1] != "delete" {
 		t.Fatalf("bot row should be deleted after the workspace is absent; exec=%v", exec)
@@ -588,6 +593,7 @@ func TestRunDeleteLifecycleRevertsToPreviousStatusWhenWorkspaceLingers(t *testin
 	intents := &fakeWorkspaceIntents{outcome: WorkspaceOutcome{Desired: "absent", Observed: "removing", LastError: "operation in flight"}}
 	svc := NewService(nil, postgresstore.NewQueries(sqlc.New(db)))
 	svc.SetWorkspaceIntents(intents)
+	svc.SetWorkspaceBindings(&fakeWorkspaceBindings{managed: []string{"00000000-0000-0000-0000-0000000000c2"}, calls: &[]string{}})
 
 	if err := svc.runDeleteLifecycle(context.Background(), botID, BotStatusFailed); err == nil || !strings.Contains(err.Error(), "did not complete") {
 		t.Fatalf("a lingering workspace must fail the delete unit, got %v", err)
@@ -600,6 +606,7 @@ func TestRunDeleteLifecycleRevertsToPreviousStatusWhenWorkspaceLingers(t *testin
 func TestAwaitCreatedAnswersWithTheWorkspaceFailure(t *testing.T) {
 	svc := NewService(nil, postgresstore.NewQueries(sqlc.New(&fakeDBTX{})))
 	svc.SetWorkspaceIntents(&fakeWorkspaceIntents{outcome: WorkspaceOutcome{Observed: WorkspaceObservedFailed, LastErrorPhase: WorkspacePhaseBootstrap, LastError: "write AGENTS.md: permission denied"}})
+	svc.SetWorkspaceBindings(&fakeWorkspaceBindings{managed: []string{"00000000-0000-0000-0000-0000000000c2"}, calls: &[]string{}})
 
 	_, err := svc.AwaitCreated(context.Background(), Bot{ID: "00000000-0000-0000-0000-000000000002"}, CreateBotRequest{WaitForReady: true})
 	if !errors.Is(err, workspace.ErrWorkspaceTemplateBootstrapFailed) {

@@ -797,82 +797,6 @@ CREATE INDEX IF NOT EXISTS idx_user_input_prompt_external
   ON user_input_requests(prompt_external_message_id)
   WHERE prompt_external_message_id != '';
 
-CREATE TABLE IF NOT EXISTS containers (
-  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  bot_id UUID NOT NULL REFERENCES bots(id) ON DELETE CASCADE,
-  container_id TEXT NOT NULL,
-  container_name TEXT NOT NULL,
-  image TEXT NOT NULL,
-  status TEXT NOT NULL DEFAULT 'created',
-  namespace TEXT NOT NULL DEFAULT 'default',
-  auto_start BOOLEAN NOT NULL DEFAULT true,
-  container_path TEXT NOT NULL DEFAULT '/data',
-  workspace_backend TEXT NOT NULL DEFAULT 'container',
-  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-  last_started_at TIMESTAMPTZ,
-  last_stopped_at TIMESTAMPTZ,
-  CONSTRAINT containers_container_id_unique UNIQUE (container_id),
-  CONSTRAINT containers_container_name_unique UNIQUE (container_name)
-);
-
-CREATE INDEX IF NOT EXISTS idx_containers_bot_id ON containers(bot_id);
-
--- bot_workspace_resource_limits: desired per-bot workspace resource limits.
--- A value of 0 means unlimited for that resource.
-CREATE TABLE IF NOT EXISTS bot_workspace_resource_limits (
-  bot_id UUID PRIMARY KEY REFERENCES bots(id) ON DELETE CASCADE,
-  cpu_millicores BIGINT NOT NULL DEFAULT 0,
-  memory_bytes BIGINT NOT NULL DEFAULT 0,
-  storage_bytes BIGINT NOT NULL DEFAULT 0,
-  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-  updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-  CONSTRAINT bot_workspace_resource_limits_cpu_check CHECK (cpu_millicores >= 0),
-  CONSTRAINT bot_workspace_resource_limits_memory_check CHECK (memory_bytes >= 0),
-  CONSTRAINT bot_workspace_resource_limits_storage_check CHECK (storage_bytes >= 0)
-);
-
-CREATE TABLE IF NOT EXISTS snapshots (
-  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  container_id TEXT NOT NULL REFERENCES containers(container_id) ON DELETE CASCADE,
-  runtime_snapshot_name TEXT NOT NULL,
-  display_name TEXT,
-  parent_runtime_snapshot_name TEXT,
-  snapshotter TEXT NOT NULL,
-  source TEXT NOT NULL,
-  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
-);
-
-CREATE UNIQUE INDEX IF NOT EXISTS idx_snapshots_container_runtime_name
-  ON snapshots(container_id, runtime_snapshot_name);
-CREATE INDEX IF NOT EXISTS idx_snapshots_container_created_at
-  ON snapshots(container_id, created_at DESC);
-CREATE INDEX IF NOT EXISTS idx_snapshots_runtime_name
-  ON snapshots(runtime_snapshot_name);
-
-CREATE TABLE IF NOT EXISTS container_versions (
-  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  container_id TEXT NOT NULL REFERENCES containers(container_id) ON DELETE CASCADE,
-  snapshot_id UUID NOT NULL REFERENCES snapshots(id) ON DELETE RESTRICT,
-  version INTEGER NOT NULL,
-  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-  UNIQUE (container_id, version)
-);
-
-CREATE INDEX IF NOT EXISTS idx_container_versions_container_id ON container_versions(container_id);
-CREATE INDEX IF NOT EXISTS idx_container_versions_snapshot_id ON container_versions(snapshot_id);
-
-CREATE TABLE IF NOT EXISTS lifecycle_events (
-  id TEXT PRIMARY KEY,
-  container_id TEXT NOT NULL REFERENCES containers(container_id) ON DELETE CASCADE,
-  event_type TEXT NOT NULL,
-  payload JSONB NOT NULL DEFAULT '{}'::jsonb,
-  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
-);
-
-CREATE INDEX IF NOT EXISTS idx_lifecycle_events_container_id ON lifecycle_events(container_id);
-CREATE INDEX IF NOT EXISTS idx_lifecycle_events_event_type ON lifecycle_events(event_type);
-
 CREATE TABLE IF NOT EXISTS schedule (
   max_run_seconds integer NOT NULL DEFAULT 3600 CHECK (max_run_seconds BETWEEN 300 AND 86400),
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -1259,14 +1183,10 @@ ALTER TABLE IF EXISTS public.bot_session_events ADD COLUMN IF NOT EXISTS team_id
 ALTER TABLE IF EXISTS public.bot_sessions ADD COLUMN IF NOT EXISTS team_id uuid;
 ALTER TABLE IF EXISTS public.bot_storage_bindings ADD COLUMN IF NOT EXISTS team_id uuid;
 ALTER TABLE IF EXISTS public.bot_user_grants ADD COLUMN IF NOT EXISTS team_id uuid;
-ALTER TABLE IF EXISTS public.bot_workspace_resource_limits ADD COLUMN IF NOT EXISTS team_id uuid;
 ALTER TABLE IF EXISTS public.bots ADD COLUMN IF NOT EXISTS team_id uuid;
 ALTER TABLE IF EXISTS public.channel_identities ADD COLUMN IF NOT EXISTS team_id uuid;
 ALTER TABLE IF EXISTS public.channel_link_codes ADD COLUMN IF NOT EXISTS team_id uuid;
-ALTER TABLE IF EXISTS public.container_versions ADD COLUMN IF NOT EXISTS team_id uuid;
-ALTER TABLE IF EXISTS public.containers ADD COLUMN IF NOT EXISTS team_id uuid;
 ALTER TABLE IF EXISTS public.fetch_providers ADD COLUMN IF NOT EXISTS team_id uuid;
-ALTER TABLE IF EXISTS public.lifecycle_events ADD COLUMN IF NOT EXISTS team_id uuid;
 ALTER TABLE IF EXISTS public.mcp_connections ADD COLUMN IF NOT EXISTS team_id uuid;
 ALTER TABLE IF EXISTS public.mcp_oauth_tokens ADD COLUMN IF NOT EXISTS team_id uuid;
 ALTER TABLE IF EXISTS public.media_assets ADD COLUMN IF NOT EXISTS team_id uuid;
@@ -1280,7 +1200,6 @@ ALTER TABLE IF EXISTS public.providers ADD COLUMN IF NOT EXISTS team_id uuid;
 ALTER TABLE IF EXISTS public.schedule ADD COLUMN IF NOT EXISTS team_id uuid;
 ALTER TABLE IF EXISTS public.schedule_logs ADD COLUMN IF NOT EXISTS team_id uuid;
 ALTER TABLE IF EXISTS public.search_providers ADD COLUMN IF NOT EXISTS team_id uuid;
-ALTER TABLE IF EXISTS public.snapshots ADD COLUMN IF NOT EXISTS team_id uuid;
 ALTER TABLE IF EXISTS public.storage_providers ADD COLUMN IF NOT EXISTS team_id uuid;
 ALTER TABLE IF EXISTS public.tasks ADD COLUMN IF NOT EXISTS team_id uuid;
 ALTER TABLE IF EXISTS public.tool_approval_requests ADD COLUMN IF NOT EXISTS team_id uuid;
@@ -1317,14 +1236,10 @@ ALTER TABLE IF EXISTS public.bot_session_events ALTER COLUMN team_id SET DEFAULT
 ALTER TABLE IF EXISTS public.bot_sessions ALTER COLUMN team_id SET DEFAULT public.memoh_current_team_id();
 ALTER TABLE IF EXISTS public.bot_storage_bindings ALTER COLUMN team_id SET DEFAULT public.memoh_current_team_id();
 ALTER TABLE IF EXISTS public.bot_user_grants ALTER COLUMN team_id SET DEFAULT public.memoh_current_team_id();
-ALTER TABLE IF EXISTS public.bot_workspace_resource_limits ALTER COLUMN team_id SET DEFAULT public.memoh_current_team_id();
 ALTER TABLE IF EXISTS public.bots ALTER COLUMN team_id SET DEFAULT public.memoh_current_team_id();
 ALTER TABLE IF EXISTS public.channel_identities ALTER COLUMN team_id SET DEFAULT public.memoh_current_team_id();
 ALTER TABLE IF EXISTS public.channel_link_codes ALTER COLUMN team_id SET DEFAULT public.memoh_current_team_id();
-ALTER TABLE IF EXISTS public.container_versions ALTER COLUMN team_id SET DEFAULT public.memoh_current_team_id();
-ALTER TABLE IF EXISTS public.containers ALTER COLUMN team_id SET DEFAULT public.memoh_current_team_id();
 ALTER TABLE IF EXISTS public.fetch_providers ALTER COLUMN team_id SET DEFAULT public.memoh_current_team_id();
-ALTER TABLE IF EXISTS public.lifecycle_events ALTER COLUMN team_id SET DEFAULT public.memoh_current_team_id();
 ALTER TABLE IF EXISTS public.mcp_connections ALTER COLUMN team_id SET DEFAULT public.memoh_current_team_id();
 ALTER TABLE IF EXISTS public.mcp_oauth_tokens ALTER COLUMN team_id SET DEFAULT public.memoh_current_team_id();
 ALTER TABLE IF EXISTS public.media_assets ALTER COLUMN team_id SET DEFAULT public.memoh_current_team_id();
@@ -1338,7 +1253,6 @@ ALTER TABLE IF EXISTS public.providers ALTER COLUMN team_id SET DEFAULT public.m
 ALTER TABLE IF EXISTS public.schedule ALTER COLUMN team_id SET DEFAULT public.memoh_current_team_id();
 ALTER TABLE IF EXISTS public.schedule_logs ALTER COLUMN team_id SET DEFAULT public.memoh_current_team_id();
 ALTER TABLE IF EXISTS public.search_providers ALTER COLUMN team_id SET DEFAULT public.memoh_current_team_id();
-ALTER TABLE IF EXISTS public.snapshots ALTER COLUMN team_id SET DEFAULT public.memoh_current_team_id();
 ALTER TABLE IF EXISTS public.storage_providers ALTER COLUMN team_id SET DEFAULT public.memoh_current_team_id();
 ALTER TABLE IF EXISTS public.tasks ALTER COLUMN team_id SET DEFAULT public.memoh_current_team_id();
 ALTER TABLE IF EXISTS public.tool_approval_requests ALTER COLUMN team_id SET DEFAULT public.memoh_current_team_id();
@@ -1630,10 +1544,6 @@ DROP INDEX IF EXISTS idx_session_events_dedup;
 CREATE UNIQUE INDEX idx_session_events_dedup
     ON public.bot_session_events (team_id, session_id, event_kind, external_message_id)
     WHERE ((external_message_id IS NOT NULL) AND (external_message_id <> ''::text));
-
-DROP INDEX IF EXISTS idx_snapshots_container_runtime_name;
-CREATE UNIQUE INDEX idx_snapshots_container_runtime_name
-    ON public.snapshots (team_id, container_id, runtime_snapshot_name);
 
 -- ---------------------------------------------------------------------------
 -- Team row-level security
@@ -2975,70 +2885,6 @@ CREATE POLICY agent_authorizations_team ON public.agent_authorizations
     USING (team_id = public.memoh_current_team_id())
     WITH CHECK (team_id = public.memoh_current_team_id());
 
--- Declarative workspace state for bots, converged by the internal/botworkspace reconciler.
--- desired_* is written only by the API layer; observed_* and the lease only by
--- the reconciler. ever_ready gates whether any automated step may delete the
--- workspace's data.
-CREATE TABLE IF NOT EXISTS public.bot_workspaces (
-    bot_id              UUID        PRIMARY KEY,
-    team_id             UUID        NOT NULL DEFAULT public.memoh_current_team_id()
-                                    REFERENCES public.teams(id) ON DELETE RESTRICT,
-    desired_state       TEXT        NOT NULL,
-    desired_generation  BIGINT      NOT NULL DEFAULT 1,
-    image               TEXT        NOT NULL DEFAULT '',
-    preserve_data       BOOLEAN     NOT NULL DEFAULT false,
-    observed_state      TEXT        NOT NULL DEFAULT 'absent',
-    observed_generation BIGINT      NOT NULL DEFAULT 0,
-    ever_ready          BOOLEAN     NOT NULL DEFAULT false,
-    last_error          TEXT        NOT NULL DEFAULT '',
-    last_error_code     TEXT        NOT NULL DEFAULT '',
-    last_error_phase    TEXT        NOT NULL DEFAULT '',
-    attempts            INTEGER     NOT NULL DEFAULT 0,
-    next_attempt_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
-    lease_owner         TEXT        NOT NULL DEFAULT '',
-    lease_until         TIMESTAMPTZ,
-    version             BIGINT      NOT NULL DEFAULT 1,
-    created_at          TIMESTAMPTZ NOT NULL DEFAULT now(),
-    updated_at          TIMESTAMPTZ NOT NULL DEFAULT now(),
-    CONSTRAINT memoh_team_key_7443107a7495 UNIQUE (team_id, bot_id),
-    CONSTRAINT bot_workspaces_desired_state_check
-        CHECK (desired_state IN ('present', 'absent')),
-    CONSTRAINT bot_workspaces_observed_state_check
-        CHECK (observed_state IN ('absent', 'provisioning', 'running', 'stopped', 'failed', 'removing')),
-    CONSTRAINT bot_workspaces_last_error_phase_check
-        CHECK (last_error_phase IN ('', 'image_prepare', 'start', 'bridge', 'bootstrap', 'teardown'))
-);
-
-ALTER TABLE public.bot_workspaces
-    DROP CONSTRAINT IF EXISTS bot_workspaces_bot_id_fkey;
-ALTER TABLE public.bot_workspaces
-    ADD CONSTRAINT bot_workspaces_bot_id_fkey
-    FOREIGN KEY (team_id, bot_id)
-    REFERENCES public.bots(team_id, id) ON DELETE CASCADE
-    NOT VALID;
-
-CREATE INDEX IF NOT EXISTS idx_bot_workspaces_due
-    ON public.bot_workspaces (team_id, next_attempt_at);
-
-ALTER TABLE public.bot_workspaces ENABLE ROW LEVEL SECURITY;
-ALTER TABLE public.bot_workspaces FORCE ROW LEVEL SECURITY;
-
-DROP POLICY IF EXISTS bot_workspaces_team_select ON public.bot_workspaces;
-DROP POLICY IF EXISTS bot_workspaces_team_insert ON public.bot_workspaces;
-DROP POLICY IF EXISTS bot_workspaces_team_update ON public.bot_workspaces;
-DROP POLICY IF EXISTS bot_workspaces_team_delete ON public.bot_workspaces;
-
-CREATE POLICY bot_workspaces_team_select ON public.bot_workspaces
-    FOR SELECT USING (team_id = public.memoh_current_team_id());
-CREATE POLICY bot_workspaces_team_insert ON public.bot_workspaces
-    FOR INSERT WITH CHECK (team_id = public.memoh_current_team_id());
-CREATE POLICY bot_workspaces_team_update ON public.bot_workspaces
-    FOR UPDATE
-    USING (team_id = public.memoh_current_team_id())
-    WITH CHECK (team_id = public.memoh_current_team_id());
-CREATE POLICY bot_workspaces_team_delete ON public.bot_workspaces
-    FOR DELETE USING (team_id = public.memoh_current_team_id());
-
 -- Usage ledger for memory LLM calls (extract / decide / compact), which never
 -- produce a chat message. bots.memory_llm_model_id picks their model.
 CREATE TABLE IF NOT EXISTS public.bot_memory_usage (
@@ -3092,7 +2938,8 @@ CREATE POLICY bot_memory_usage_team_delete ON public.bot_memory_usage
 
 -- Computers a team knows about. A Bot is bound to workspaces instead of
 -- owning one container: kind 'managed' is the workspace the server provisions
--- for a bot (its bot_workspaces row is the provisioning slot), kind 'user' is
+-- for a bot (its managed_computers row is the provisioning slot and instance
+-- record, see the end of this file), kind 'user' is
 -- a machine paired through Remote Runtime and shares the user_runtimes id.
 -- These two tables stay at the end of the file so fresh installs and the 0167
 -- upgrade produce the same constraint set (0112 re-derives team helper keys
@@ -3209,3 +3056,273 @@ ALTER TABLE public.bot_workdirs
     FOREIGN KEY (team_id, remote_binding_id)
     REFERENCES public.bot_workspace_bindings(team_id, id) ON DELETE CASCADE
     NOT VALID;
+
+-- Managed computers: the server-provisioned workspace of a bot, keyed by the
+-- workspace id. One row merges the reconciler's intent / observation slot and
+-- the container instance record; snapshots, versions, lifecycle events and
+-- resource limits hang off the same key. These tables follow workspaces /
+-- bot_workspace_bindings at the end of the file so a fresh install and the
+-- 0168 upgrade end with identical constraint and index names (the helper keys
+-- are md5('<table>:<table>_pkey') the way 0112 derives them).
+CREATE TABLE IF NOT EXISTS public.managed_computers (
+    workspace_id        UUID        PRIMARY KEY,
+    team_id             UUID        NOT NULL DEFAULT public.memoh_current_team_id()
+                                    REFERENCES public.teams(id) ON DELETE RESTRICT,
+    desired_state       TEXT        NOT NULL,
+    desired_generation  BIGINT      NOT NULL DEFAULT 1,
+    image               TEXT        NOT NULL DEFAULT '',
+    preserve_data       BOOLEAN     NOT NULL DEFAULT false,
+    observed_state      TEXT        NOT NULL DEFAULT 'absent',
+    observed_generation BIGINT      NOT NULL DEFAULT 0,
+    ever_ready          BOOLEAN     NOT NULL DEFAULT false,
+    last_error          TEXT        NOT NULL DEFAULT '',
+    last_error_code     TEXT        NOT NULL DEFAULT '',
+    last_error_phase    TEXT        NOT NULL DEFAULT '',
+    attempts            INTEGER     NOT NULL DEFAULT 0,
+    next_attempt_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
+    lease_owner         TEXT        NOT NULL DEFAULT '',
+    lease_until         TIMESTAMPTZ,
+    version             BIGINT      NOT NULL DEFAULT 1,
+    instance_id         TEXT        NOT NULL DEFAULT '',
+    instance_name       TEXT        NOT NULL DEFAULT '',
+    instance_status     TEXT        NOT NULL DEFAULT '',
+    namespace           TEXT        NOT NULL DEFAULT 'default',
+    auto_start          BOOLEAN     NOT NULL DEFAULT true,
+    container_path      TEXT        NOT NULL DEFAULT '/data',
+    last_started_at     TIMESTAMPTZ,
+    last_stopped_at     TIMESTAMPTZ,
+    created_at          TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at          TIMESTAMPTZ NOT NULL DEFAULT now(),
+    CONSTRAINT memoh_team_key_8ad0a56db6a1 UNIQUE (team_id, workspace_id),
+    CONSTRAINT managed_computers_desired_state_check
+        CHECK (desired_state IN ('present', 'absent')),
+    CONSTRAINT managed_computers_observed_state_check
+        CHECK (observed_state IN ('absent', 'provisioning', 'running', 'stopped', 'failed', 'removing')),
+    CONSTRAINT managed_computers_last_error_phase_check
+        CHECK (last_error_phase IN ('', 'image_prepare', 'start', 'bridge', 'bootstrap', 'teardown'))
+);
+
+ALTER TABLE public.managed_computers
+    DROP CONSTRAINT IF EXISTS managed_computers_workspace_id_fkey;
+ALTER TABLE public.managed_computers
+    ADD CONSTRAINT managed_computers_workspace_id_fkey
+    FOREIGN KEY (team_id, workspace_id)
+    REFERENCES public.workspaces(team_id, id) ON DELETE CASCADE
+    NOT VALID;
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_managed_computers_instance_id
+    ON public.managed_computers (team_id, instance_id)
+    WHERE instance_id <> '';
+CREATE UNIQUE INDEX IF NOT EXISTS idx_managed_computers_instance_name
+    ON public.managed_computers (team_id, instance_name)
+    WHERE instance_name <> '';
+CREATE INDEX IF NOT EXISTS idx_managed_computers_due
+    ON public.managed_computers (team_id, next_attempt_at);
+
+ALTER TABLE public.managed_computers ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.managed_computers FORCE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS managed_computers_team_select ON public.managed_computers;
+DROP POLICY IF EXISTS managed_computers_team_insert ON public.managed_computers;
+DROP POLICY IF EXISTS managed_computers_team_update ON public.managed_computers;
+DROP POLICY IF EXISTS managed_computers_team_delete ON public.managed_computers;
+
+CREATE POLICY managed_computers_team_select ON public.managed_computers
+    FOR SELECT USING (team_id = public.memoh_current_team_id());
+CREATE POLICY managed_computers_team_insert ON public.managed_computers
+    FOR INSERT WITH CHECK (team_id = public.memoh_current_team_id());
+CREATE POLICY managed_computers_team_update ON public.managed_computers
+    FOR UPDATE
+    USING (team_id = public.memoh_current_team_id())
+    WITH CHECK (team_id = public.memoh_current_team_id());
+CREATE POLICY managed_computers_team_delete ON public.managed_computers
+    FOR DELETE USING (team_id = public.memoh_current_team_id());
+
+-- Snapshots taken on a managed computer. container_id is the instance the
+-- snapshot was taken on; the row belongs to the workspace.
+CREATE TABLE IF NOT EXISTS public.managed_computer_snapshots (
+    id                           UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+    container_id                 TEXT        NOT NULL,
+    runtime_snapshot_name        TEXT        NOT NULL,
+    display_name                 TEXT,
+    parent_runtime_snapshot_name TEXT,
+    snapshotter                  TEXT        NOT NULL,
+    source                       TEXT        NOT NULL,
+    created_at                   TIMESTAMPTZ NOT NULL DEFAULT now(),
+    team_id                      UUID        NOT NULL DEFAULT public.memoh_current_team_id()
+                                             REFERENCES public.teams(id) ON DELETE RESTRICT,
+    workspace_id                 UUID        NOT NULL,
+    CONSTRAINT memoh_team_key_78dc0d778ed1 UNIQUE (team_id, id)
+);
+
+ALTER TABLE public.managed_computer_snapshots
+    DROP CONSTRAINT IF EXISTS managed_computer_snapshots_workspace_id_fkey;
+ALTER TABLE public.managed_computer_snapshots
+    ADD CONSTRAINT managed_computer_snapshots_workspace_id_fkey
+    FOREIGN KEY (team_id, workspace_id)
+    REFERENCES public.managed_computers(team_id, workspace_id) ON DELETE CASCADE
+    NOT VALID;
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_managed_computer_snapshots_workspace_runtime_name
+    ON public.managed_computer_snapshots (team_id, workspace_id, runtime_snapshot_name);
+CREATE INDEX IF NOT EXISTS idx_managed_computer_snapshots_workspace_created_at
+    ON public.managed_computer_snapshots (team_id, workspace_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_managed_computer_snapshots_runtime_name
+    ON public.managed_computer_snapshots (team_id, runtime_snapshot_name);
+
+ALTER TABLE public.managed_computer_snapshots ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.managed_computer_snapshots FORCE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS managed_computer_snapshots_team_select ON public.managed_computer_snapshots;
+DROP POLICY IF EXISTS managed_computer_snapshots_team_insert ON public.managed_computer_snapshots;
+DROP POLICY IF EXISTS managed_computer_snapshots_team_update ON public.managed_computer_snapshots;
+DROP POLICY IF EXISTS managed_computer_snapshots_team_delete ON public.managed_computer_snapshots;
+
+CREATE POLICY managed_computer_snapshots_team_select ON public.managed_computer_snapshots
+    FOR SELECT USING (team_id = public.memoh_current_team_id());
+CREATE POLICY managed_computer_snapshots_team_insert ON public.managed_computer_snapshots
+    FOR INSERT WITH CHECK (team_id = public.memoh_current_team_id());
+CREATE POLICY managed_computer_snapshots_team_update ON public.managed_computer_snapshots
+    FOR UPDATE
+    USING (team_id = public.memoh_current_team_id())
+    WITH CHECK (team_id = public.memoh_current_team_id());
+CREATE POLICY managed_computer_snapshots_team_delete ON public.managed_computer_snapshots
+    FOR DELETE USING (team_id = public.memoh_current_team_id());
+
+-- Version numbers count per computer, not per container instance.
+CREATE TABLE IF NOT EXISTS public.managed_computer_versions (
+    id           UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+    container_id TEXT        NOT NULL,
+    snapshot_id  UUID        NOT NULL,
+    version      INTEGER     NOT NULL,
+    created_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+    team_id      UUID        NOT NULL DEFAULT public.memoh_current_team_id()
+                             REFERENCES public.teams(id) ON DELETE RESTRICT,
+    workspace_id UUID        NOT NULL,
+    CONSTRAINT memoh_team_key_71818849b2d9 UNIQUE (team_id, id),
+    CONSTRAINT managed_computer_versions_workspace_id_version_key
+        UNIQUE (team_id, workspace_id, version),
+    CONSTRAINT managed_computer_versions_snapshot_id_fkey
+        FOREIGN KEY (team_id, snapshot_id)
+        REFERENCES public.managed_computer_snapshots(team_id, id) ON DELETE RESTRICT
+);
+
+ALTER TABLE public.managed_computer_versions
+    DROP CONSTRAINT IF EXISTS managed_computer_versions_workspace_id_fkey;
+ALTER TABLE public.managed_computer_versions
+    ADD CONSTRAINT managed_computer_versions_workspace_id_fkey
+    FOREIGN KEY (team_id, workspace_id)
+    REFERENCES public.managed_computers(team_id, workspace_id) ON DELETE CASCADE
+    NOT VALID;
+
+CREATE INDEX IF NOT EXISTS idx_managed_computer_versions_workspace_id
+    ON public.managed_computer_versions (team_id, workspace_id);
+CREATE INDEX IF NOT EXISTS idx_managed_computer_versions_snapshot_id
+    ON public.managed_computer_versions (team_id, snapshot_id);
+
+ALTER TABLE public.managed_computer_versions ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.managed_computer_versions FORCE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS managed_computer_versions_team_select ON public.managed_computer_versions;
+DROP POLICY IF EXISTS managed_computer_versions_team_insert ON public.managed_computer_versions;
+DROP POLICY IF EXISTS managed_computer_versions_team_update ON public.managed_computer_versions;
+DROP POLICY IF EXISTS managed_computer_versions_team_delete ON public.managed_computer_versions;
+
+CREATE POLICY managed_computer_versions_team_select ON public.managed_computer_versions
+    FOR SELECT USING (team_id = public.memoh_current_team_id());
+CREATE POLICY managed_computer_versions_team_insert ON public.managed_computer_versions
+    FOR INSERT WITH CHECK (team_id = public.memoh_current_team_id());
+CREATE POLICY managed_computer_versions_team_update ON public.managed_computer_versions
+    FOR UPDATE
+    USING (team_id = public.memoh_current_team_id())
+    WITH CHECK (team_id = public.memoh_current_team_id());
+CREATE POLICY managed_computer_versions_team_delete ON public.managed_computer_versions
+    FOR DELETE USING (team_id = public.memoh_current_team_id());
+
+-- Lifecycle events of a managed computer (snapshot / version operations).
+CREATE TABLE IF NOT EXISTS public.managed_computer_events (
+    id           TEXT        PRIMARY KEY,
+    container_id TEXT        NOT NULL,
+    event_type   TEXT        NOT NULL,
+    payload      JSONB       NOT NULL DEFAULT '{}'::jsonb,
+    created_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+    team_id      UUID        NOT NULL DEFAULT public.memoh_current_team_id()
+                             REFERENCES public.teams(id) ON DELETE RESTRICT,
+    workspace_id UUID        NOT NULL,
+    CONSTRAINT memoh_team_key_2e51805b8402 UNIQUE (team_id, id)
+);
+
+ALTER TABLE public.managed_computer_events
+    DROP CONSTRAINT IF EXISTS managed_computer_events_workspace_id_fkey;
+ALTER TABLE public.managed_computer_events
+    ADD CONSTRAINT managed_computer_events_workspace_id_fkey
+    FOREIGN KEY (team_id, workspace_id)
+    REFERENCES public.managed_computers(team_id, workspace_id) ON DELETE CASCADE
+    NOT VALID;
+
+CREATE INDEX IF NOT EXISTS idx_managed_computer_events_workspace_id
+    ON public.managed_computer_events (team_id, workspace_id);
+CREATE INDEX IF NOT EXISTS idx_managed_computer_events_event_type
+    ON public.managed_computer_events (team_id, event_type);
+
+ALTER TABLE public.managed_computer_events ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.managed_computer_events FORCE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS managed_computer_events_team_select ON public.managed_computer_events;
+DROP POLICY IF EXISTS managed_computer_events_team_insert ON public.managed_computer_events;
+DROP POLICY IF EXISTS managed_computer_events_team_update ON public.managed_computer_events;
+DROP POLICY IF EXISTS managed_computer_events_team_delete ON public.managed_computer_events;
+
+CREATE POLICY managed_computer_events_team_select ON public.managed_computer_events
+    FOR SELECT USING (team_id = public.memoh_current_team_id());
+CREATE POLICY managed_computer_events_team_insert ON public.managed_computer_events
+    FOR INSERT WITH CHECK (team_id = public.memoh_current_team_id());
+CREATE POLICY managed_computer_events_team_update ON public.managed_computer_events
+    FOR UPDATE
+    USING (team_id = public.memoh_current_team_id())
+    WITH CHECK (team_id = public.memoh_current_team_id());
+CREATE POLICY managed_computer_events_team_delete ON public.managed_computer_events
+    FOR DELETE USING (team_id = public.memoh_current_team_id());
+
+-- Desired resource limits of a managed computer. 0 means unlimited.
+CREATE TABLE IF NOT EXISTS public.managed_computer_resource_limits (
+    workspace_id   UUID        PRIMARY KEY,
+    team_id        UUID        NOT NULL DEFAULT public.memoh_current_team_id()
+                               REFERENCES public.teams(id) ON DELETE RESTRICT,
+    cpu_millicores BIGINT      NOT NULL DEFAULT 0,
+    memory_bytes   BIGINT      NOT NULL DEFAULT 0,
+    storage_bytes  BIGINT      NOT NULL DEFAULT 0,
+    created_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
+    CONSTRAINT memoh_team_key_4256efe79722 UNIQUE (team_id, workspace_id),
+    CONSTRAINT managed_computer_resource_limits_cpu_check CHECK (cpu_millicores >= 0),
+    CONSTRAINT managed_computer_resource_limits_memory_check CHECK (memory_bytes >= 0),
+    CONSTRAINT managed_computer_resource_limits_storage_check CHECK (storage_bytes >= 0)
+);
+
+ALTER TABLE public.managed_computer_resource_limits
+    DROP CONSTRAINT IF EXISTS managed_computer_resource_limits_workspace_id_fkey;
+ALTER TABLE public.managed_computer_resource_limits
+    ADD CONSTRAINT managed_computer_resource_limits_workspace_id_fkey
+    FOREIGN KEY (team_id, workspace_id)
+    REFERENCES public.managed_computers(team_id, workspace_id) ON DELETE CASCADE
+    NOT VALID;
+
+ALTER TABLE public.managed_computer_resource_limits ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.managed_computer_resource_limits FORCE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS managed_computer_resource_limits_team_select ON public.managed_computer_resource_limits;
+DROP POLICY IF EXISTS managed_computer_resource_limits_team_insert ON public.managed_computer_resource_limits;
+DROP POLICY IF EXISTS managed_computer_resource_limits_team_update ON public.managed_computer_resource_limits;
+DROP POLICY IF EXISTS managed_computer_resource_limits_team_delete ON public.managed_computer_resource_limits;
+
+CREATE POLICY managed_computer_resource_limits_team_select ON public.managed_computer_resource_limits
+    FOR SELECT USING (team_id = public.memoh_current_team_id());
+CREATE POLICY managed_computer_resource_limits_team_insert ON public.managed_computer_resource_limits
+    FOR INSERT WITH CHECK (team_id = public.memoh_current_team_id());
+CREATE POLICY managed_computer_resource_limits_team_update ON public.managed_computer_resource_limits
+    FOR UPDATE
+    USING (team_id = public.memoh_current_team_id())
+    WITH CHECK (team_id = public.memoh_current_team_id());
+CREATE POLICY managed_computer_resource_limits_team_delete ON public.managed_computer_resource_limits
+    FOR DELETE USING (team_id = public.memoh_current_team_id());

@@ -407,7 +407,9 @@ func (s *Service) collectWorkspaceResourceLimits(ctx context.Context, botID stri
 	if err != nil {
 		return backupWorkspaceResourceLimits{}, err
 	}
-	row, err := s.queries.GetBotWorkspaceResourceLimits(ctx, pgBotID)
+	// The limits belong to the bot's managed computer, reached through its
+	// bindings.
+	row, err := s.queries.GetManagedComputerResourceLimitsByBotID(ctx, pgBotID)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return backupWorkspaceResourceLimits{}, nil
@@ -417,7 +419,7 @@ func (s *Service) collectWorkspaceResourceLimits(ctx context.Context, botID stri
 	return backupWorkspaceResourceLimitsFromRow(row), nil
 }
 
-func backupWorkspaceResourceLimitsFromRow(row dbsqlc.BotWorkspaceResourceLimit) backupWorkspaceResourceLimits {
+func backupWorkspaceResourceLimitsFromRow(row dbsqlc.ManagedComputerResourceLimit) backupWorkspaceResourceLimits {
 	return backupWorkspaceResourceLimits{
 		CPUMillicores: row.CpuMillicores,
 		MemoryBytes:   row.MemoryBytes,

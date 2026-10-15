@@ -8,6 +8,7 @@ import (
 
 	"github.com/jackc/pgx/v5/pgconn"
 
+	"github.com/felinics/memoh/internal/db"
 	"github.com/felinics/memoh/internal/db/postgres/sqlc"
 	postgresstore "github.com/felinics/memoh/internal/db/postgres/store"
 	dbstore "github.com/felinics/memoh/internal/db/store"
@@ -23,9 +24,19 @@ type fakeWorkspaceBindings struct {
 	calls      *[]string
 }
 
-func (f *fakeWorkspaceBindings) BindManaged(_ context.Context, _ dbstore.Queries, botID, ownerUserID, name string) error {
+func (f *fakeWorkspaceBindings) BindManaged(_ context.Context, _ dbstore.Queries, botID, ownerUserID, name string) (string, error) {
 	*f.calls = append(*f.calls, "bind:"+botID+":"+ownerUserID+":"+name)
-	return nil
+	return "00000000-0000-0000-0000-000000000077", nil
+}
+
+// ManagedWorkspaceID answers from the configured managed workspaces without
+// recording a call: resolving the computer is not a lifecycle step. listErr
+// is the listing failure inside the delete transaction, not a resolution one.
+func (f *fakeWorkspaceBindings) ManagedWorkspaceID(context.Context, dbstore.Queries, string) (string, error) {
+	if len(f.managed) == 0 {
+		return "", db.ErrNoManagedWorkspaceBinding
+	}
+	return f.managed[0], nil
 }
 
 func (f *fakeWorkspaceBindings) ManagedWorkspaceIDs(_ context.Context, _ dbstore.Queries, botID string) ([]string, error) {

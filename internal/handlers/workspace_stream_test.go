@@ -96,12 +96,13 @@ func (m *restoreWorkspaceManager) GetContainerInfo(context.Context, string) (*wo
 func newRestoreContainerHandler(t *testing.T, ownerID, botID string, manager containerWorkspace, ws workspaceIntents) *ContainerdHandler {
 	t.Helper()
 	return &ContainerdHandler{
-		logger:         slog.Default(),
-		manager:        manager,
-		cfg:            config.WorkspaceConfig{Snapshotter: "overlayfs"},
-		workspaces:     ws,
-		botService:     bots.NewService(nil, postgresstore.NewQueries(sqlc.New(&createBotStreamDB{ownerID: ownerID, botID: botID}))),
-		accountService: newTestCreateBotAccountService(ownerID),
+		logger:            slog.Default(),
+		manager:           manager,
+		cfg:               config.WorkspaceConfig{Snapshotter: "overlayfs"},
+		managedWorkspaces: identityManagedWorkspaces{},
+		workspaces:        ws,
+		botService:        bots.NewService(nil, postgresstore.NewQueries(sqlc.New(&createBotStreamDB{ownerID: ownerID, botID: botID}))),
+		accountService:    newTestCreateBotAccountService(ownerID),
 	}
 }
 

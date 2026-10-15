@@ -14,16 +14,29 @@ import (
 )
 
 // workspaceIntents is the slice of the botworkspace reconciler the HTTP layer
-// uses: record an intent, follow its progress, wait for the outcome.
+// uses: record an intent, follow its progress, wait for the outcome. The
+// reconciler is keyed by the managed computer's workspace id; handlers resolve
+// a bot through managedWorkspaces first.
 type workspaceIntents interface {
-	EnsurePresent(ctx context.Context, botID, image string) (botworkspace.Workspace, error)
-	RequestAbsent(ctx context.Context, botID string, preserve bool) (botworkspace.Workspace, error)
-	CancelRemoval(ctx context.Context, botID string) error
-	Get(ctx context.Context, botID string) (botworkspace.Workspace, error)
-	Subscribe(botID string) (<-chan botworkspace.ProgressEvent, func())
+	EnsurePresent(ctx context.Context, workspaceID, image string) (botworkspace.Workspace, error)
+	RequestAbsent(ctx context.Context, workspaceID string, preserve bool) (botworkspace.Workspace, error)
+	CancelRemoval(ctx context.Context, workspaceID string) error
+	Get(ctx context.Context, workspaceID string) (botworkspace.Workspace, error)
+	Subscribe(workspaceID string) (<-chan botworkspace.ProgressEvent, func())
 	Kick()
-	Await(ctx context.Context, botID string, generation int64) (botworkspace.Workspace, error)
-	Observe(ctx context.Context, botID string) (botworkspace.Workspace, error)
+	Await(ctx context.Context, workspaceID string, generation int64) (botworkspace.Workspace, error)
+	Observe(ctx context.Context, workspaceID string) (botworkspace.Workspace, error)
+}
+
+// managedWorkspaces resolves a bot to its managed computer through the bot's
+// bindings. The workspace id of a bot created after 0167 is not the bot id.
+type managedWorkspaces interface {
+	// ManagedWorkspaceID returns db.ErrNoManagedWorkspaceBinding when the bot
+	// has no managed computer.
+	ManagedWorkspaceID(ctx context.Context, botID string) (string, error)
+	// EnsureManaged returns the bot's managed computer, creating and binding
+	// one for a bot that never had a workspace record.
+	EnsureManaged(ctx context.Context, botID, ownerUserID, name string) (string, error)
 }
 
 // workspaceStatus is the manager slice that describes a settled workspace for

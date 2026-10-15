@@ -259,6 +259,90 @@ func (s *BindingService) UpdateToolApproval(ctx context.Context, botID, bindingI
 	return record, err
 }
 
+// ManagedWorkspaceID returns the bot's managed computer: the workspace behind
+// its first managed binding. Every bot -> computer mapping goes through the
+// bindings; a bot created after 0167 has a workspace id that is not the bot
+// id. db.ErrNoManagedWorkspaceBinding when the bot has none.
+func (s *BindingService) ManagedWorkspaceID(ctx context.Context, botID string) (string, error) {
+	if err := s.ready(); err != nil {
+		return "", err
+	}
+	botID, ok := canonicalWorkspaceUUID(botID)
+	if !ok {
+		return "", db.ErrNoManagedWorkspaceBinding
+	}
+	records, err := s.workspaces.ListWorkspacesByBot(ctx, botID)
+	if err != nil {
+		return "", err
+	}
+	for _, record := range records {
+		if record.Kind == WorkspaceKindManaged {
+			return record.ID, nil
+		}
+	}
+	return "", db.ErrNoManagedWorkspaceBinding
+}
+
+// BoundBots lists the bots bound to the workspace, in binding order. It is
+// the botworkspace.BoundBots port: the reconciler derives bots.status for
+// every bot bound to a managed computer.
+func (s *BindingService) BoundBots(ctx context.Context, workspaceID string) ([]string, error) {
+	if err := s.ready(); err != nil {
+		return nil, err
+	}
+	workspaceID, ok := canonicalWorkspaceUUID(workspaceID)
+	if !ok {
+		return nil, ErrWorkspaceNotFound
+	}
+	bindings, err := s.bindings.ListBotWorkspaceBindingsByWorkspace(ctx, workspaceID)
+	if err != nil {
+		return nil, err
+	}
+	bots := make([]string, 0, len(bindings))
+	for _, binding := range bindings {
+		bots = append(bots, binding.BotID)
+	}
+	return bots, nil
+}
+
+// EnsureManaged returns the bot's managed computer, creating and binding one
+// when the bot has none: bots that predate workspace records and never had a
+// workspace slot get theirs on the first workspace create. The new binding is
+// primary only when the bot has no primary target yet.
+func (s *BindingService) EnsureManaged(ctx context.Context, botID, ownerUserID, name string) (string, error) {
+	workspaceID, err := s.ManagedWorkspaceID(ctx, botID)
+	if err == nil {
+		return workspaceID, nil
+	}
+	if !errors.Is(err, db.ErrNoManagedWorkspaceBinding) {
+		return "", err
+	}
+	botID, botOK := canonicalWorkspaceUUID(botID)
+	ownerUserID, ownerOK := canonicalWorkspaceUUID(ownerUserID)
+	if !botOK || !ownerOK {
+		return "", ErrWorkspaceNotFound
+	}
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return "", ErrInvalidWorkspaceName
+	}
+	workspace, err := s.workspaces.CreateWorkspace(ctx, dbstore.CreateWorkspaceInput{
+		OwnerUserID: ownerUserID, Kind: WorkspaceKindManaged, Name: name,
+	})
+	if err != nil {
+		return "", err
+	}
+	_, primaryErr := s.Primary(ctx, botID)
+	primary := errors.Is(primaryErr, ErrNoPrimaryWorkspace)
+	if primaryErr != nil && !primary {
+		return "", primaryErr
+	}
+	if _, err := s.Bind(ctx, botID, workspace.ID, primary); err != nil {
+		return "", err
+	}
+	return workspace.ID, nil
+}
+
 // ResolvePrimary returns the bot's primary binding together with the
 // workspace it points at: the managed workspace when "native" is primary, a
 // user workspace when a remote mount is. A bot without a primary binding

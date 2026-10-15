@@ -145,6 +145,27 @@ func (q *Queries) DeleteWorkspaceIfUnbound(ctx context.Context, id pgtype.UUID) 
 	return result.RowsAffected(), nil
 }
 
+const getBotManagedWorkspaceID = `-- name: GetBotManagedWorkspaceID :one
+SELECT w.id
+FROM workspaces w
+JOIN bot_workspace_bindings binding
+  ON binding.team_id = w.team_id
+ AND binding.workspace_id = w.id
+WHERE w.team_id = public.memoh_current_team_id()
+  AND binding.bot_id = $1
+  AND w.kind = 'managed'
+ORDER BY binding.created_at ASC, binding.id ASC
+LIMIT 1
+`
+
+// The bot's managed computer: the workspace behind its first managed binding.
+func (q *Queries) GetBotManagedWorkspaceID(ctx context.Context, botID pgtype.UUID) (pgtype.UUID, error) {
+	row := q.db.QueryRow(ctx, getBotManagedWorkspaceID, botID)
+	var id pgtype.UUID
+	err := row.Scan(&id)
+	return id, err
+}
+
 const getBotWorkspaceBinding = `-- name: GetBotWorkspaceBinding :one
 SELECT id, team_id, bot_id, workspace_id, is_primary, tool_approval_config, created_at, updated_at FROM bot_workspace_bindings
 WHERE team_id = public.memoh_current_team_id()

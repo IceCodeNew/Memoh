@@ -23,7 +23,9 @@ func (s *Service) workspaceRuntimeStatus(ctx context.Context, botID string) Work
 	if err != nil {
 		return WorkspaceRuntimeStatus{State: "unknown", Message: "invalid bot id"}
 	}
-	row, err := s.queries.GetContainerByBotID(ctx, pgBotID)
+	// The bot's managed computer, reached through its bindings; a computer
+	// without an instance yet is as good as no record.
+	row, err := s.queries.GetManagedComputerByBotID(ctx, pgBotID)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return WorkspaceRuntimeStatus{State: "workspace_missing"}
@@ -32,15 +34,19 @@ func (s *Service) workspaceRuntimeStatus(ctx context.Context, botID string) Work
 			slog.String("bot_id", botID), slog.Any("error", err))
 		return WorkspaceRuntimeStatus{State: "unknown", Message: "workspace status is unavailable"}
 	}
+	containerID := strings.TrimSpace(row.InstanceID)
+	if containerID == "" {
+		return WorkspaceRuntimeStatus{State: "workspace_missing"}
+	}
 	out := WorkspaceRuntimeStatus{
 		State:       "task_stopped",
-		ContainerID: strings.TrimSpace(row.ContainerID),
+		ContainerID: containerID,
 	}
 	if s.runtime == nil {
 		out.State = "runtime_unavailable"
 		return out
 	}
-	task, err := s.runtime.GetTaskInfo(ctx, row.ContainerID)
+	task, err := s.runtime.GetTaskInfo(ctx, containerID)
 	if err != nil {
 		if ctr.IsNotFound(err) {
 			out.State = "task_stopped"
@@ -48,7 +54,7 @@ func (s *Service) workspaceRuntimeStatus(ctx context.Context, botID string) Work
 		}
 		s.logger.WarnContext(ctx, "workspace runtime status query failed",
 			slog.String("bot_id", botID),
-			slog.String("container_id", row.ContainerID),
+			slog.String("container_id", containerID),
 			slog.Any("error", err))
 		return WorkspaceRuntimeStatus{State: "unknown", Message: "runtime status is unavailable"}
 	}
@@ -94,25 +100,29 @@ func (s *Service) buildAttachmentRequest(ctx context.Context, botID string, cfg 
 	if err != nil {
 		return AttachmentRequest{}, err
 	}
-	row, err := s.queries.GetContainerByBotID(ctx, pgBotID)
+	row, err := s.queries.GetManagedComputerByBotID(ctx, pgBotID)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return AttachmentRequest{}, ErrWorkspaceContainerMissing
 		}
 		return AttachmentRequest{}, err
 	}
+	containerID := strings.TrimSpace(row.InstanceID)
+	if containerID == "" {
+		return AttachmentRequest{}, ErrWorkspaceContainerMissing
+	}
 	req := AttachmentRequest{
 		BotID:       botID,
-		ContainerID: row.ContainerID,
+		ContainerID: containerID,
 		Runtime: RuntimeNetworkRequest{
-			ContainerID: row.ContainerID,
+			ContainerID: containerID,
 		},
 		Overlay: cfg,
 	}
 	if s.runtime == nil {
 		return req, nil
 	}
-	task, err := s.runtime.GetTaskInfo(ctx, row.ContainerID)
+	task, err := s.runtime.GetTaskInfo(ctx, containerID)
 	if err == nil && strings.TrimSpace(task.NetworkJoinTarget.Value) != "" {
 		req.Runtime.JoinTarget = NetworkJoinTarget{
 			Kind: task.NetworkJoinTarget.Kind,

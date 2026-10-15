@@ -1,11 +1,12 @@
-// Package botworkspace owns the declarative lifecycle of a bot's workspace.
+// Package botworkspace owns the declarative lifecycle of a managed computer:
+// the workspace the server provisions for a bot, keyed by its workspace id.
 //
 // The API layer records intent (present / absent) and the reconciler in this
 // package keeps the observed state converging toward it: provisioning,
-// retrying with backoff, tearing down, and deriving bots.status. Every backend
-// operation is idempotent and every write of an observation happens on a
-// fresh context, so a lost request context or a crashed Server never strands
-// a bot in a transitional status.
+// retrying with backoff, tearing down, and deriving bots.status for every bot
+// bound to the computer. Every backend operation is idempotent and every
+// write of an observation happens on a fresh context, so a lost request
+// context or a crashed Server never strands a bot in a transitional status.
 package botworkspace
 
 import (
@@ -49,9 +50,9 @@ const (
 	BotStatusFailed   = "failed"
 )
 
-// Workspace is one row of bot_workspaces.
+// Workspace is the reconciler's view of one managed_computers row.
 type Workspace struct {
-	BotID              string
+	WorkspaceID        string
 	TeamID             string
 	Desired            string
 	DesiredGeneration  int64
@@ -161,8 +162,8 @@ const (
 	EventError = "error"
 )
 
-// Inspection is the backend's answer to "does this bot's workspace exist and
-// is it running".
+// Inspection is the backend's answer to "does this computer's container exist
+// and is it running".
 type Inspection struct {
 	Exists  bool
 	Running bool
@@ -202,7 +203,7 @@ func (e *StepError) Unwrap() error { return e.Err }
 
 // ErrVersionConflict is returned by the repository when the row changed under
 // the caller. The caller drops the pass; the next one re-reads and re-decides.
-var ErrVersionConflict = errors.New("bot workspace changed concurrently")
+var ErrVersionConflict = errors.New("managed computer changed concurrently")
 
-// ErrNotFound is returned when the bot has no workspace row.
-var ErrNotFound = errors.New("bot workspace not found")
+// ErrNotFound is returned when the computer has no managed_computers row.
+var ErrNotFound = errors.New("managed computer not found")

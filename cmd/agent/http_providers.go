@@ -113,8 +113,9 @@ func provideBotAgentsHandler(log *slog.Logger, service *botagents.Service, botSe
 	return handlers.NewBotAgentsHandler(log, service, botService, accountService, runtimes)
 }
 
-func provideUsersHandler(log *slog.Logger, accountService *accounts.Service, botService *bots.Service, routeService *route.DBService, channelStore *channel.Store, channelRuntime channel.Runtime, registry *channel.Registry, workspaces *botworkspace.Service, manager *workspace.Manager, acpPool *acpagent.SessionPool, agentDrivers external.Drivers, credentialService *agentcredential.Service) *handlers.UsersHandler {
+func provideUsersHandler(log *slog.Logger, accountService *accounts.Service, botService *bots.Service, routeService *route.DBService, channelStore *channel.Store, channelRuntime channel.Runtime, registry *channel.Registry, workspaces *botworkspace.Service, bindings *workspace.BindingService, manager *workspace.Manager, acpPool *acpagent.SessionPool, agentDrivers external.Drivers, credentialService *agentcredential.Service) *handlers.UsersHandler {
 	handler := handlers.NewUsersHandler(log, accountService, botService, routeService, channelStore, channelRuntime, registry, workspaces)
+	handler.SetManagedWorkspaces(bindings)
 	handler.SetWorkspaceStatus(manager)
 	handler.SetRuntimeResetService(botRuntimeResets{pool: acpPool, agents: agentDrivers})
 	handler.SetCredentialService(credentialService)

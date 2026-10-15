@@ -175,12 +175,14 @@ func TestCreateBotStreamReportsABotItCouldNotLoadOnceReady(t *testing.T) {
 	}}
 	logs := captureLogs()
 	handler := &UsersHandler{
-		logger:         logs.logger,
-		service:        newTestCreateBotAccountService(ownerID),
-		botService:     bots.NewService(nil, postgresstore.NewQueries(sqlc.New(db))),
-		workspaceSetup: readyLoadFailsWorkspace{createBotStreamWorkspace: inner, db: db},
+		logger:            logs.logger,
+		service:           newTestCreateBotAccountService(ownerID),
+		botService:        bots.NewService(nil, postgresstore.NewQueries(sqlc.New(db))),
+		managedWorkspaces: identityManagedWorkspaces{},
+		workspaceSetup:    readyLoadFailsWorkspace{createBotStreamWorkspace: inner, db: db},
 	}
 	handler.botService.SetWorkspaceIntents(createBotIntents{w: inner})
+	handler.botService.SetWorkspaceBindings(identityWorkspaceBindings{})
 	req := httptest.NewRequest(http.MethodPost, "/bots", strings.NewReader(`{"name":"ready-bot","display_name":"Ready Bot","acl_preset":"allow_all","wait_for_ready":true}`))
 	req.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
 	req.Header.Set(echo.HeaderAccept, "text/event-stream")

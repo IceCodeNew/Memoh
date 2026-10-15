@@ -25,11 +25,22 @@ DROP TABLE IF EXISTS media_assets CASCADE;
 DROP TABLE IF EXISTS bot_storage_bindings CASCADE;
 DROP TABLE IF EXISTS storage_providers CASCADE;
 DROP TABLE IF EXISTS schedule CASCADE;
+DROP TABLE IF EXISTS managed_computer_events CASCADE;
+DROP TABLE IF EXISTS managed_computer_versions CASCADE;
+DROP TABLE IF EXISTS managed_computer_snapshots CASCADE;
+DROP TABLE IF EXISTS managed_computer_resource_limits CASCADE;
+DROP TABLE IF EXISTS managed_computers CASCADE;
+-- The 0168/0169/0170 down migrations recreate these legacy tables, which a
+-- fresh 0001 no longer creates. Drop them too so a full down leaves nothing
+-- behind for the next up to collide with at 0168.
 DROP TABLE IF EXISTS lifecycle_events CASCADE;
 DROP TABLE IF EXISTS container_versions CASCADE;
 DROP TABLE IF EXISTS snapshots CASCADE;
 DROP TABLE IF EXISTS bot_workspace_resource_limits CASCADE;
+DROP TABLE IF EXISTS bot_workspaces CASCADE;
 DROP TABLE IF EXISTS containers CASCADE;
+DROP TABLE IF EXISTS bot_dependency_installations CASCADE;
+DROP TABLE IF EXISTS user_runtimes CASCADE;
 DROP TABLE IF EXISTS user_input_requests CASCADE;
 DROP TABLE IF EXISTS tool_approval_requests CASCADE;
 DROP VIEW IF EXISTS bot_visible_history_messages CASCADE;

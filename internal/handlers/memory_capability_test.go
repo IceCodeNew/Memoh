@@ -36,8 +36,8 @@ func (q *memoryCapabilityQueries) GetBotByID(_ context.Context, _ pgtype.UUID) (
 	return q.bot, nil
 }
 
-func (*memoryCapabilityQueries) GetContainerByBotID(context.Context, pgtype.UUID) (sqlc.Container, error) {
-	return sqlc.Container{}, pgx.ErrNoRows
+func (*memoryCapabilityQueries) GetManagedComputerByBotID(context.Context, pgtype.UUID) (sqlc.ManagedComputer, error) {
+	return sqlc.ManagedComputer{}, pgx.ErrNoRows
 }
 
 func (q *memoryCapabilityQueries) GetSettingsByBotID(_ context.Context, _ pgtype.UUID) (sqlc.GetSettingsByBotIDRow, error) {

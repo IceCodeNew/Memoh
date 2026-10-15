@@ -21,20 +21,19 @@ import (
 )
 
 // Backend performs the workspace operations for one runtime (containerd,
-// docker, apple, Cloud builtin). Every method is idempotent.
+// docker, apple, Cloud builtin), keyed by the managed computer's workspace
+// id. Every method is idempotent.
 type Backend interface {
-	// Provision brings the bot's workspace to running: image, container,
-	// start, bridge readiness, template bootstrap. An empty image means "the
-	// backend's default for this bot". Failures are *StepError.
-	Provision(ctx context.Context, botID, image string, progress func(ProgressEvent)) error
-	// Teardown removes the workspace; a missing workspace is success. With
-	// preserve the data is exported before deletion and a failed export aborts
-	// the teardown.
-	Teardown(ctx context.Context, botID string, preserve bool) error
-	// Inspect reports the backend's view of the workspace.
-	Inspect(ctx context.Context, botID string) (Inspection, error)
-	// HasPreservedData reports whether an exported data archive exists.
-	HasPreservedData(botID string) bool
+	// Provision brings the computer to running: image, container, start,
+	// bridge readiness, template bootstrap. An empty image means "the
+	// backend's default for this computer". Failures are *StepError.
+	Provision(ctx context.Context, workspaceID, image string, progress func(ProgressEvent)) error
+	// Teardown removes the computer's container; a missing container is
+	// success. With preserve the data is exported before deletion and a
+	// failed export aborts the teardown.
+	Teardown(ctx context.Context, workspaceID string, preserve bool) error
+	// Inspect reports the backend's view of the computer.
+	Inspect(ctx context.Context, workspaceID string) (Inspection, error)
 }
 
 // BotStatusWriter derives bots.status from the workspace state. Implemented by
@@ -42,6 +41,13 @@ type Backend interface {
 // it.
 type BotStatusWriter interface {
 	SetBotStatusFromWorkspace(ctx context.Context, botID, status string) error
+}
+
+// BoundBots answers which bots are bound to a managed computer, so the
+// reconciler can derive their status. Implemented by the workspace binding
+// service; injected as an interface so this package does not import it.
+type BoundBots interface {
+	BoundBots(ctx context.Context, workspaceID string) ([]string, error)
 }
 
 // Options tune the reconciler. Zero values take the defaults.
@@ -131,6 +137,7 @@ type Service struct {
 
 	statusMu sync.RWMutex
 	status   BotStatusWriter
+	bound    BoundBots
 
 	subsMu sync.Mutex
 	subs   map[string]map[chan ProgressEvent]struct{}
@@ -175,15 +182,24 @@ func (s *Service) SetBotStatusWriter(w BotStatusWriter) {
 	s.status = w
 }
 
+// SetBoundBots wires the binding lookup that says which bots a computer's
+// status is derived for (setter injection avoids an import cycle with the
+// workspace package).
+func (s *Service) SetBoundBots(b BoundBots) {
+	s.statusMu.Lock()
+	defer s.statusMu.Unlock()
+	s.bound = b
+}
+
 // Owner is this instance's lease owner id.
 func (s *Service) Owner() string { return s.opts.Owner }
 
 // ─── Intent API ──────────────────────────────────────────────────────────────
 
-// EnsurePresent records that the bot should have a running workspace built
-// from image (empty keeps the previous / default image) and wakes the loop.
-func (s *Service) EnsurePresent(ctx context.Context, botID, image string) (Workspace, error) {
-	w, err := s.repo.Upsert(ctx, botID, DesiredPresent, strings.TrimSpace(image), false)
+// EnsurePresent records that the computer should be running, built from
+// image (empty keeps the previous / default image), and wakes the loop.
+func (s *Service) EnsurePresent(ctx context.Context, workspaceID, image string) (Workspace, error) {
+	w, err := s.repo.Upsert(ctx, workspaceID, DesiredPresent, strings.TrimSpace(image), false)
 	if err != nil {
 		return Workspace{}, err
 	}
@@ -191,10 +207,10 @@ func (s *Service) EnsurePresent(ctx context.Context, botID, image string) (Works
 	return w, nil
 }
 
-// RequestAbsent records that the bot's workspace should be removed. preserve
+// RequestAbsent records that the computer should be removed. preserve
 // exports the data archive before deletion.
-func (s *Service) RequestAbsent(ctx context.Context, botID string, preserve bool) (Workspace, error) {
-	w, err := s.repo.Upsert(ctx, botID, DesiredAbsent, "", preserve)
+func (s *Service) RequestAbsent(ctx context.Context, workspaceID string, preserve bool) (Workspace, error) {
+	w, err := s.repo.Upsert(ctx, workspaceID, DesiredAbsent, "", preserve)
 	if err != nil {
 		return Workspace{}, err
 	}
@@ -206,12 +222,12 @@ func (s *Service) RequestAbsent(ctx context.Context, botID string, preserve bool
 // alone, the backend may already be deleting. The workspace is recorded as it
 // stands, not provisioned: that would restore a preserved archive over newer
 // data and start a workspace the user had stopped.
-func (s *Service) CancelRemoval(ctx context.Context, botID string) error {
-	insp, err := s.backend.Inspect(ctx, botID)
+func (s *Service) CancelRemoval(ctx context.Context, workspaceID string) error {
+	insp, err := s.backend.Inspect(ctx, workspaceID)
 	if err != nil {
 		return err
 	}
-	w, err := s.repo.CancelRemoval(ctx, botID, insp.observed())
+	w, err := s.repo.CancelRemoval(ctx, workspaceID, insp.observed())
 	if errors.Is(err, ErrNotFound) {
 		return nil
 	}
@@ -223,8 +239,8 @@ func (s *Service) CancelRemoval(ctx context.Context, botID string) error {
 }
 
 // Get returns the row.
-func (s *Service) Get(ctx context.Context, botID string) (Workspace, error) {
-	return s.repo.Get(ctx, botID)
+func (s *Service) Get(ctx context.Context, workspaceID string) (Workspace, error) {
+	return s.repo.Get(ctx, workspaceID)
 }
 
 // Kick wakes the loop for an immediate pass.
@@ -235,25 +251,25 @@ func (s *Service) Kick() {
 	}
 }
 
-// Subscribe streams progress and terminal events for a bot to an in-process
-// listener. Events are dropped when the listener falls behind; Await is the
+// Subscribe streams progress and terminal events for a computer to an
+// in-process listener. Events are dropped when the listener falls behind; Await is the
 // reliable way to learn the outcome.
-func (s *Service) Subscribe(botID string) (<-chan ProgressEvent, func()) {
+func (s *Service) Subscribe(workspaceID string) (<-chan ProgressEvent, func()) {
 	ch := make(chan ProgressEvent, 64)
 	s.subsMu.Lock()
-	if s.subs[botID] == nil {
-		s.subs[botID] = make(map[chan ProgressEvent]struct{})
+	if s.subs[workspaceID] == nil {
+		s.subs[workspaceID] = make(map[chan ProgressEvent]struct{})
 	}
-	s.subs[botID][ch] = struct{}{}
+	s.subs[workspaceID][ch] = struct{}{}
 	s.subsMu.Unlock()
 	var once sync.Once
 	return ch, func() {
 		once.Do(func() {
 			s.subsMu.Lock()
-			if set, ok := s.subs[botID]; ok {
+			if set, ok := s.subs[workspaceID]; ok {
 				delete(set, ch)
 				if len(set) == 0 {
-					delete(s.subs, botID)
+					delete(s.subs, workspaceID)
 				}
 			}
 			s.subsMu.Unlock()
@@ -261,10 +277,10 @@ func (s *Service) Subscribe(botID string) (<-chan ProgressEvent, func()) {
 	}
 }
 
-func (s *Service) publish(botID string, ev ProgressEvent) {
+func (s *Service) publish(workspaceID string, ev ProgressEvent) {
 	s.subsMu.Lock()
 	defer s.subsMu.Unlock()
-	for ch := range s.subs[botID] {
+	for ch := range s.subs[workspaceID] {
 		select {
 		case ch <- ev:
 		default:
@@ -277,11 +293,11 @@ func (s *Service) publish(botID string, ev ProgressEvent) {
 // fast retry budget is not final: Await keeps waiting so a transient error
 // that recovers on the next attempt never reaches the caller as a failure.
 // It works across Server instances.
-func (s *Service) Await(ctx context.Context, botID string, generation int64) (Workspace, error) {
+func (s *Service) Await(ctx context.Context, workspaceID string, generation int64) (Workspace, error) {
 	ticker := time.NewTicker(400 * time.Millisecond)
 	defer ticker.Stop()
 	for {
-		w, err := s.repo.Get(ctx, botID)
+		w, err := s.repo.Get(ctx, workspaceID)
 		if err != nil {
 			return Workspace{}, err
 		}
@@ -296,10 +312,10 @@ func (s *Service) Await(ctx context.Context, botID string, generation int64) (Wo
 	}
 }
 
-// Observe refreshes the observation for one bot from the backend (after a
-// user-driven start or stop). It never provisions or tears down.
-func (s *Service) Observe(ctx context.Context, botID string) (Workspace, error) {
-	w, err := s.repo.Get(ctx, botID)
+// Observe refreshes the observation for one computer from the backend (after
+// a user-driven start or stop). It never provisions or tears down.
+func (s *Service) Observe(ctx context.Context, workspaceID string) (Workspace, error) {
+	w, err := s.repo.Get(ctx, workspaceID)
 	if err != nil {
 		return Workspace{}, err
 	}
@@ -308,16 +324,16 @@ func (s *Service) Observe(ctx context.Context, botID string) (Workspace, error) 
 	if w.Desired == DesiredAbsent {
 		return w, nil
 	}
-	w, err = s.repo.ClaimOne(ctx, botID, s.opts.Owner, s.opts.Lease)
+	w, err = s.repo.ClaimOne(ctx, workspaceID, s.opts.Owner, s.opts.Lease)
 	if err != nil {
 		return Workspace{}, err
 	}
-	defer s.release(ctx, botID)
+	defer s.release(ctx, workspaceID)
 	switch w.Observed {
 	case ObservedProvisioning, ObservedRemoving:
 		return w, nil
 	}
-	insp, err := s.backend.Inspect(ctx, botID)
+	insp, err := s.backend.Inspect(ctx, workspaceID)
 	if err != nil {
 		return w, err
 	}
@@ -420,7 +436,7 @@ func (s *Service) reconcileOnce(ctx context.Context, wg *sync.WaitGroup) (int, e
 	}
 	started := 0
 	for _, w := range rows {
-		if !s.markRunning(w.BotID) {
+		if !s.markRunning(w.WorkspaceID) {
 			// This instance is still processing the row (its lease expired but
 			// the goroutine is alive). Do not release: Release matches by
 			// owner and would strip the lease from the running goroutine. The
@@ -432,7 +448,7 @@ func (s *Service) reconcileOnce(ctx context.Context, wg *sync.WaitGroup) (int, e
 		wg.Add(1)
 		go func(w Workspace) {
 			defer wg.Done()
-			defer s.unmarkRunning(w.BotID)
+			defer s.unmarkRunning(w.WorkspaceID)
 			s.reconcileOne(ctx, w)
 		}(w)
 	}
@@ -455,20 +471,20 @@ func (s *Service) freeSlots() int32 {
 	return int32(free) //nolint:gosec // free <= Batch, which is an int32
 }
 
-func (s *Service) markRunning(botID string) bool {
+func (s *Service) markRunning(workspaceID string) bool {
 	s.runMu.Lock()
 	defer s.runMu.Unlock()
-	if _, ok := s.running[botID]; ok {
+	if _, ok := s.running[workspaceID]; ok {
 		return false
 	}
-	s.running[botID] = struct{}{}
+	s.running[workspaceID] = struct{}{}
 	return true
 }
 
-func (s *Service) unmarkRunning(botID string) {
+func (s *Service) unmarkRunning(workspaceID string) {
 	s.runMu.Lock()
 	defer s.runMu.Unlock()
-	delete(s.running, botID)
+	delete(s.running, workspaceID)
 }
 
 func (s *Service) reconcileOne(ctx context.Context, w Workspace) {
@@ -479,13 +495,13 @@ func (s *Service) reconcileOne(ctx context.Context, w Workspace) {
 				Observed: w.Observed, ObservedGeneration: w.DesiredGeneration,
 				Attempts: 0, NextAttemptAt: s.now(), ReleaseLease: true,
 			}); err != nil {
-				s.event(ctx, "catch up generation failed", errs.Wrap(err, "catch up observed generation"), slog.String("bot_id", w.BotID))
+				s.event(ctx, "catch up generation failed", errs.Wrap(err, "catch up observed generation"), slog.String("workspace_id", w.WorkspaceID))
 			}
 			return
 		}
-		s.release(ctx, w.BotID)
+		s.release(ctx, w.WorkspaceID)
 	case ActionWait:
-		s.release(ctx, w.BotID)
+		s.release(ctx, w.WorkspaceID)
 	case ActionProvision:
 		_ = job.Run(ctx, s.log, "workspace.provision", job.Options{}, func(ctx context.Context) error {
 			return s.provision(ctx, w)
@@ -499,7 +515,7 @@ func (s *Service) reconcileOne(ctx context.Context, w Workspace) {
 
 func workspaceAttrs(w Workspace) []slog.Attr {
 	return []slog.Attr{
-		slog.String("bot_id", w.BotID), slog.String("desired", w.Desired),
+		slog.String("workspace_id", w.WorkspaceID), slog.String("desired", w.Desired),
 		slog.String("observed", w.Observed), slog.Int64("generation", w.DesiredGeneration),
 	}
 }
@@ -525,7 +541,7 @@ func (s *Service) provision(ctx context.Context, w Workspace) error {
 		Attempts: w.Attempts, NextAttemptAt: s.now(), ReleaseLease: false,
 	})
 	if err != nil {
-		s.release(ctx, w.BotID)
+		s.release(ctx, w.WorkspaceID)
 		if superseded(ctx, err) {
 			return nil
 		}
@@ -533,14 +549,14 @@ func (s *Service) provision(ctx context.Context, w Workspace) error {
 	}
 	s.deriveBotStatus(ctx, cur)
 
-	opCtx, cancel := s.leasedContext(ctx, w.BotID, s.opts.ProvisionTimeout)
+	opCtx, cancel := s.leasedContext(ctx, w.WorkspaceID, s.opts.ProvisionTimeout)
 	defer cancel()
 
 	if err := s.replaceStaleContainer(opCtx, cur); err != nil {
 		return s.fail(ctx, cur, asStep(err, PhaseTeardown))
 	}
 
-	err = s.backend.Provision(opCtx, w.BotID, w.Image, func(ev ProgressEvent) { s.publish(w.BotID, ev) })
+	err = s.backend.Provision(opCtx, w.WorkspaceID, w.Image, func(ev ProgressEvent) { s.publish(w.WorkspaceID, ev) })
 	if err != nil {
 		step := asStep(err, PhaseStart)
 		if opCtx.Err() != nil && step.Err == nil {
@@ -554,14 +570,14 @@ func (s *Service) provision(ctx context.Context, w Workspace) error {
 		Attempts: 0, NextAttemptAt: s.now(), ReleaseLease: true,
 	})
 	if err != nil {
-		s.release(ctx, w.BotID)
+		s.release(ctx, w.WorkspaceID)
 		if superseded(ctx, err) {
 			return nil
 		}
 		return errs.Wrap(err, "record running")
 	}
 	s.deriveBotStatus(ctx, final)
-	s.publish(w.BotID, ProgressEvent{Type: EventReady, Workspace: &final})
+	s.publish(w.WorkspaceID, ProgressEvent{Type: EventReady, Workspace: &final})
 	return nil
 }
 
@@ -590,14 +606,14 @@ func (s *Service) fail(ctx context.Context, w Workspace, step *StepError) error 
 		Attempts: attempts, NextAttemptAt: next, ReleaseLease: true,
 	})
 	if err != nil {
-		s.event(ctx, "record failure failed", errs.Wrap(err, "record provisioning failure"), slog.String("bot_id", w.BotID))
-		s.release(ctx, w.BotID)
+		s.event(ctx, "record failure failed", errs.Wrap(err, "record provisioning failure"), slog.String("workspace_id", w.WorkspaceID))
+		s.release(ctx, w.WorkspaceID)
 	} else {
 		s.deriveBotStatus(ctx, final)
 		// The failure text stays on the unit's result record; the event carries
 		// the phase and the error so a subscriber can classify it without the
 		// row.
-		s.publish(w.BotID, ProgressEvent{Type: EventError, Phase: step.Phase, Err: step.Err, Workspace: &final})
+		s.publish(w.WorkspaceID, ProgressEvent{Type: EventError, Phase: step.Phase, Err: step.Err, Workspace: &final})
 	}
 	// The unit's result names the same code the row records.
 	failure := apperror.Wrap(FailureCode(step), errs.Wrap(step.Err, "provision workspace",
@@ -618,12 +634,12 @@ func asStep(err error, phase string) *StepError {
 	return &StepError{Phase: phase, Retryable: true, Err: err}
 }
 
-// gone reports that the backend holds no workspace for the bot. A backend that
-// cannot say is taken to still hold one.
-func (s *Service) gone(ctx context.Context, botID string) bool {
+// gone reports that the backend holds no container for the computer. A
+// backend that cannot say is taken to still hold one.
+func (s *Service) gone(ctx context.Context, workspaceID string) bool {
 	ictx, cancel := context.WithTimeout(context.WithoutCancel(ctx), s.opts.WriteTimeout)
 	defer cancel()
-	insp, err := s.backend.Inspect(ictx, botID)
+	insp, err := s.backend.Inspect(ictx, workspaceID)
 	return err == nil && !insp.Exists
 }
 
@@ -633,24 +649,24 @@ func (s *Service) teardown(ctx context.Context, w Workspace) error {
 		Attempts: w.Attempts, NextAttemptAt: s.now(), ReleaseLease: false,
 	})
 	if err != nil {
-		s.release(ctx, w.BotID)
+		s.release(ctx, w.WorkspaceID)
 		if superseded(ctx, err) {
 			return nil
 		}
 		return errs.Wrap(err, "enter removing")
 	}
 
-	opCtx, cancel := s.leasedContext(ctx, w.BotID, s.opts.TeardownTimeout)
+	opCtx, cancel := s.leasedContext(ctx, w.WorkspaceID, s.opts.TeardownTimeout)
 	defer cancel()
 
-	if err := s.backend.Teardown(opCtx, w.BotID, w.PreserveData); err != nil {
+	if err := s.backend.Teardown(opCtx, w.WorkspaceID, w.PreserveData); err != nil {
 		step := asStep(err, PhaseTeardown)
 		attempts := cur.Attempts + 1
 		observed := ObservedRemoving
 		next := s.nextAttempt(attempts)
 		willRetry := step.Retryable && attempts < s.opts.MaxAttempts
 		if !willRetry {
-			if s.gone(ctx, w.BotID) {
+			if s.gone(ctx, w.WorkspaceID) {
 				// Nothing is left for the user to keep; the leftovers are
 				// cleaned up in the background.
 				next, willRetry = s.slowRetryAt(), true
@@ -666,8 +682,8 @@ func (s *Service) teardown(ctx context.Context, w Workspace) error {
 			LastErrorCode: string(apperror.CodeWorkspaceTeardownFailed), LastErrorPhase: PhaseTeardown,
 			Attempts: attempts, NextAttemptAt: next, ReleaseLease: true,
 		}); werr != nil {
-			s.event(ctx, "record teardown failure failed", errs.Wrap(werr, "record teardown failure"), slog.String("bot_id", w.BotID))
-			s.release(ctx, w.BotID)
+			s.event(ctx, "record teardown failure failed", errs.Wrap(werr, "record teardown failure"), slog.String("workspace_id", w.WorkspaceID))
+			s.release(ctx, w.WorkspaceID)
 		}
 		// The unit's result names the same code the row records.
 		failure := apperror.Wrap(apperror.CodeWorkspaceTeardownFailed, errs.Wrap(err, "tear down workspace",
@@ -683,13 +699,13 @@ func (s *Service) teardown(ctx context.Context, w Workspace) error {
 		Attempts: 0, NextAttemptAt: s.now(), ReleaseLease: true,
 	})
 	if err != nil {
-		s.release(ctx, w.BotID)
+		s.release(ctx, w.WorkspaceID)
 		if superseded(ctx, err) {
 			return nil
 		}
 		return errs.Wrap(err, "record absent")
 	}
-	s.publish(w.BotID, ProgressEvent{Type: EventReady, Workspace: &final})
+	s.publish(w.WorkspaceID, ProgressEvent{Type: EventReady, Workspace: &final})
 	return nil
 }
 
@@ -720,8 +736,8 @@ func (s *Service) detectDriftIn(ctx context.Context, observed string) {
 			continue
 		}
 		obsCtx, cancel := context.WithTimeout(ctx, s.opts.WriteTimeout)
-		if _, err := s.Observe(obsCtx, w.BotID); err != nil && !errors.Is(err, ErrNotFound) {
-			s.event(ctx, "drift observe failed", errs.Wrap(err, "observe workspace"), slog.String("bot_id", w.BotID))
+		if _, err := s.Observe(obsCtx, w.WorkspaceID); err != nil && !errors.Is(err, ErrNotFound) {
+			s.event(ctx, "drift observe failed", errs.Wrap(err, "observe workspace"), slog.String("workspace_id", w.WorkspaceID))
 		}
 		cancel()
 	}
@@ -755,7 +771,7 @@ func (s *Service) jittered(d time.Duration) time.Duration {
 // writeObserved persists an observation on a fresh short-lived context so an
 // exhausted operation context can never lose the outcome.
 func (s *Service) writeObserved(ctx context.Context, w Workspace, write ObservedWrite) (Workspace, error) {
-	write.BotID = w.BotID
+	write.WorkspaceID = w.WorkspaceID
 	write.Owner = s.opts.Owner
 	write.ExpectedVersion = w.Version
 	wctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), s.opts.WriteTimeout)
@@ -763,11 +779,11 @@ func (s *Service) writeObserved(ctx context.Context, w Workspace, write Observed
 	return s.repo.WriteObserved(wctx, write)
 }
 
-func (s *Service) release(ctx context.Context, botID string) {
+func (s *Service) release(ctx context.Context, workspaceID string) {
 	rctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), s.opts.WriteTimeout)
 	defer cancel()
-	if err := s.repo.Release(rctx, botID, s.opts.Owner); err != nil {
-		s.event(ctx, "release lease failed", errs.Wrap(err, "release workspace lease"), slog.String("bot_id", botID))
+	if err := s.repo.Release(rctx, workspaceID, s.opts.Owner); err != nil {
+		s.event(ctx, "release lease failed", errs.Wrap(err, "release workspace lease"), slog.String("workspace_id", workspaceID))
 	}
 }
 
@@ -775,7 +791,7 @@ func (s *Service) release(ctx context.Context, botID string) {
 // renewing the row's lease while the operation runs, and cancels the context
 // as soon as a renewal fails (another instance took the row over), so two
 // instances never drive the same workspace at once.
-func (s *Service) leasedContext(parent context.Context, botID string, timeout time.Duration) (context.Context, context.CancelFunc) {
+func (s *Service) leasedContext(parent context.Context, workspaceID string, timeout time.Duration) (context.Context, context.CancelFunc) {
 	ctx, cancel := context.WithTimeout(parent, timeout)
 	interval := s.opts.Lease / 3
 	if interval < time.Second {
@@ -790,10 +806,10 @@ func (s *Service) leasedContext(parent context.Context, botID string, timeout ti
 				return
 			case <-ticker.C:
 				rctx, rcancel := context.WithTimeout(context.WithoutCancel(ctx), s.opts.WriteTimeout)
-				err := s.repo.Renew(rctx, botID, s.opts.Owner, s.opts.Lease)
+				err := s.repo.Renew(rctx, workspaceID, s.opts.Owner, s.opts.Lease)
 				rcancel()
 				if err != nil {
-					s.event(parent, "lease lost; abandoning operation", errs.Wrap(err, "renew workspace lease"), slog.String("bot_id", botID))
+					s.event(parent, "lease lost; abandoning operation", errs.Wrap(err, "renew workspace lease"), slog.String("workspace_id", workspaceID))
 					cancel()
 					return
 				}
@@ -814,7 +830,7 @@ func (s *Service) replaceStaleContainer(ctx context.Context, w Workspace) error 
 	if w.EverReady || strings.TrimSpace(w.Image) == "" {
 		return nil
 	}
-	insp, err := s.backend.Inspect(ctx, w.BotID)
+	insp, err := s.backend.Inspect(ctx, w.WorkspaceID)
 	if err != nil {
 		return err
 	}
@@ -822,16 +838,16 @@ func (s *Service) replaceStaleContainer(ctx context.Context, w Workspace) error 
 	if !insp.Exists || insp.Image == "" || config.NormalizeImageRef(insp.Image) == requested {
 		return nil
 	}
-	s.log.InfoContext(ctx, "replacing container built from a different image", slog.String("bot_id", w.BotID),
+	s.log.InfoContext(ctx, "replacing container built from a different image", slog.String("workspace_id", w.WorkspaceID),
 		slog.String("current_image", insp.Image), slog.String("requested_image", w.Image))
-	return s.backend.Teardown(ctx, w.BotID, true)
+	return s.backend.Teardown(ctx, w.WorkspaceID, true)
 }
 
 func (s *Service) deriveBotStatus(ctx context.Context, w Workspace) {
 	s.statusMu.RLock()
-	writer := s.status
+	writer, bound := s.status, s.bound
 	s.statusMu.RUnlock()
-	if writer == nil {
+	if writer == nil || bound == nil {
 		return
 	}
 	status, ok := DeriveBotStatus(w)
@@ -840,8 +856,21 @@ func (s *Service) deriveBotStatus(ctx context.Context, w Workspace) {
 	}
 	wctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), s.opts.WriteTimeout)
 	defer cancel()
-	if err := writer.SetBotStatusFromWorkspace(wctx, w.BotID, status); err != nil {
-		s.event(ctx, "derive bot status failed", errs.Wrap(err, "write bot status"), slog.String("bot_id", w.BotID), slog.String("status", status))
+	bots, err := bound.BoundBots(wctx, w.WorkspaceID)
+	if err != nil {
+		s.event(ctx, "derive bot status failed", errs.Wrap(err, "list bound bots"), slog.String("workspace_id", w.WorkspaceID), slog.String("status", status))
+		return
+	}
+	if len(bots) == 0 {
+		// A computer nothing is bound to has no bot whose status could
+		// follow it; the observation itself is already recorded.
+		s.log.DebugContext(ctx, "managed computer has no bound bot", slog.String("workspace_id", w.WorkspaceID), slog.String("status", status))
+		return
+	}
+	for _, botID := range bots {
+		if err := writer.SetBotStatusFromWorkspace(wctx, botID, status); err != nil {
+			s.event(ctx, "derive bot status failed", errs.Wrap(err, "write bot status"), slog.String("workspace_id", w.WorkspaceID), slog.String("bot_id", botID), slog.String("status", status))
+		}
 	}
 }
 
@@ -853,5 +882,5 @@ func (s *Service) event(ctx context.Context, msg string, err error, attrs ...slo
 
 // String renders a workspace for logs.
 func (w Workspace) String() string {
-	return fmt.Sprintf("bot=%s desired=%s/%d observed=%s/%d attempts=%d", w.BotID, w.Desired, w.DesiredGeneration, w.Observed, w.ObservedGeneration, w.Attempts)
+	return fmt.Sprintf("workspace=%s desired=%s/%d observed=%s/%d attempts=%d", w.WorkspaceID, w.Desired, w.DesiredGeneration, w.Observed, w.ObservedGeneration, w.Attempts)
 }

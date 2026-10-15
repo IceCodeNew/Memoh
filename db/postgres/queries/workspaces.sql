@@ -161,3 +161,16 @@ WHERE team_id = public.memoh_current_team_id()
 DELETE FROM bot_workspace_bindings
 WHERE team_id = public.memoh_current_team_id()
   AND workspace_id = sqlc.arg(workspace_id);
+
+-- name: GetBotManagedWorkspaceID :one
+-- The bot's managed computer: the workspace behind its first managed binding.
+SELECT w.id
+FROM workspaces w
+JOIN bot_workspace_bindings binding
+  ON binding.team_id = w.team_id
+ AND binding.workspace_id = w.id
+WHERE w.team_id = public.memoh_current_team_id()
+  AND binding.bot_id = sqlc.arg(bot_id)
+  AND w.kind = 'managed'
+ORDER BY binding.created_at ASC, binding.id ASC
+LIMIT 1;

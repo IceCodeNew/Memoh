@@ -70,8 +70,12 @@ func (q failingQueries) CreateBotACLRule(context.Context, dbsqlc.CreateBotACLRul
 	return dbsqlc.BotAclRule{}, q.result("CreateBotACLRule")
 }
 
-func (q failingQueries) UpsertBotWorkspaceResourceLimits(context.Context, dbsqlc.UpsertBotWorkspaceResourceLimitsParams) (dbsqlc.BotWorkspaceResourceLimit, error) {
-	return dbsqlc.BotWorkspaceResourceLimit{}, q.result("UpsertBotWorkspaceResourceLimits")
+func (failingQueries) GetBotManagedWorkspaceID(context.Context, pgtype.UUID) (pgtype.UUID, error) {
+	return pgtype.UUID{Bytes: [16]byte{0xb1}, Valid: true}, nil
+}
+
+func (q failingQueries) UpsertManagedComputerResourceLimits(context.Context, dbsqlc.UpsertManagedComputerResourceLimitsParams) (dbsqlc.ManagedComputerResourceLimit, error) {
+	return dbsqlc.ManagedComputerResourceLimit{}, q.result("UpsertManagedComputerResourceLimits")
 }
 
 type failingWorkspace struct{}
@@ -330,7 +334,7 @@ func newResourceLimitsImportState(t *testing.T, createMode bool) *importState {
 func TestRestoreStepRecordsCauseOnce(t *testing.T) {
 	t.Parallel()
 
-	queries := failingQueries{failing: "UpsertBotWorkspaceResourceLimits"}
+	queries := failingQueries{failing: "UpsertManagedComputerResourceLimits"}
 	// The workspace section brings the resource limits along; the bundle has
 	// no workspace archive, so nothing else is restored.
 	opts := ImportOptions{Mode: ImportModeOverwrite, Sections: map[Section]ImportStrategy{SectionWorkspace: StrategyMerge}}

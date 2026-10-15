@@ -161,9 +161,10 @@ func (s *Service) Create(ctx context.Context, ownerUserID string, req CreateBotR
 		return Bot{}, err
 	}
 	status := BotStatusCreating
-	if s.workspaceIntents == nil {
-		// No workspace subsystem is wired (tests, partial deployments). Keep
-		// the bot usable instead of leaving it in creating with nothing that
+	if s.workspaceIntents == nil || s.workspaceBindings == nil {
+		// No workspace subsystem is wired (tests, partial deployments): no
+		// managed computer is recorded, so no intent can be either. Keep the
+		// bot usable instead of leaving it in creating with nothing that
 		// would ever change that status.
 		status = BotStatusReady
 	}
@@ -192,19 +193,22 @@ func (s *Service) Create(ctx context.Context, ownerUserID string, req CreateBotR
 		if err := acl.ApplyPreset(ctx, q, botID, ownerID, aclPresetKey); err != nil {
 			return fmt.Errorf("apply acl preset: %w", err)
 		}
-		if s.workspaceIntents != nil {
-			// The workspace is provisioned by the reconciler; the request only
-			// records the intent. A failed provisioning leaves the bot in
-			// status failed with its diagnostics, never stranded in creating.
-			if err := s.workspaceIntents.RecordPresent(ctx, q, botID, workspaceImageFromMetadata(metadata)); err != nil {
-				return fmt.Errorf("record workspace intent: %w", err)
-			}
-		}
 		if s.workspaceBindings != nil {
 			// The bot's computer is a record of its own, bound to the bot as
-			// the primary target; the reconciler above provisions it.
-			if err := s.workspaceBindings.BindManaged(ctx, q, botID, ownerID, botName); err != nil {
+			// the primary target. The reconciler is keyed by that computer,
+			// so the intent is recorded under its workspace id.
+			workspaceID, err := s.workspaceBindings.BindManaged(ctx, q, botID, ownerID, botName)
+			if err != nil {
 				return fmt.Errorf("bind managed workspace: %w", err)
+			}
+			if s.workspaceIntents != nil {
+				// The workspace is provisioned by the reconciler; the request
+				// only records the intent. A failed provisioning leaves the
+				// bot in status failed with its diagnostics, never stranded
+				// in creating.
+				if err := s.workspaceIntents.RecordPresent(ctx, q, workspaceID, workspaceImageFromMetadata(metadata)); err != nil {
+					return fmt.Errorf("record workspace intent: %w", err)
+				}
 			}
 		}
 		row = created
@@ -234,7 +238,15 @@ func (s *Service) AwaitCreated(ctx context.Context, bot Bot, req CreateBotReques
 	}
 	waitCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), botLifecycleOperationTimeout)
 	defer cancel()
-	outcome, err := s.workspaceIntents.AwaitSettled(waitCtx, bot.ID, 0)
+	workspaceID, err := s.managedWorkspaceID(waitCtx, bot.ID)
+	if err != nil {
+		if errors.Is(err, db.ErrNoManagedWorkspaceBinding) {
+			// Nothing was recorded for this bot; there is nothing to wait for.
+			return bot, nil
+		}
+		return Bot{}, fmt.Errorf("resolve managed workspace: %w", err)
+	}
+	outcome, err := s.workspaceIntents.AwaitSettled(waitCtx, workspaceID, 0)
 	if err != nil {
 		return Bot{}, fmt.Errorf("wait for workspace: %w", err)
 	}
@@ -242,6 +254,16 @@ func (s *Service) AwaitCreated(ctx context.Context, bot Bot, req CreateBotReques
 		return Bot{}, workspaceOutcomeError(outcome)
 	}
 	return s.Get(waitCtx, bot.ID)
+}
+
+// managedWorkspaceID resolves the bot's managed computer through its
+// bindings; the reconciler is keyed by that id, never by the bot id. A service
+// without bindings knows no managed computers.
+func (s *Service) managedWorkspaceID(ctx context.Context, botID string) (string, error) {
+	if s.workspaceBindings == nil {
+		return "", db.ErrNoManagedWorkspaceBinding
+	}
+	return s.workspaceBindings.ManagedWorkspaceID(ctx, s.queries, botID)
 }
 
 // inTx runs fn in one transaction; test stores without InTx run it directly.
@@ -797,19 +819,27 @@ func (s *Service) runDeleteLifecycle(ctx context.Context, botID, revertStatus st
 	// the budget runs out the bot returns to its previous status; deleting
 	// again retries.
 	if s.workspaceIntents != nil {
-		generation, err := s.workspaceIntents.RequestAbsent(lifecycleCtx, botID, false)
-		if err != nil {
-			return revert(errs.Wrap(err, "record workspace removal intent"))
-		}
-		outcome, err := s.workspaceIntents.AwaitSettled(lifecycleCtx, botID, generation)
-		if err != nil {
-			return revert(errs.Wrap(err, "await workspace removal", slog.String("observed", outcome.Observed), slog.String("last_error", outcome.LastError)))
-		}
-		if outcome.Observed != WorkspaceObservedAbsent {
-			return revert(errs.New("workspace removal did not complete within the delete budget",
-				slog.String("observed", outcome.Observed),
-				slog.String("last_error", outcome.LastError),
-			))
+		workspaceID, err := s.managedWorkspaceID(lifecycleCtx, botID)
+		switch {
+		case errors.Is(err, db.ErrNoManagedWorkspaceBinding):
+			// The bot has no managed computer: nothing to remove.
+		case err != nil:
+			return revert(errs.Wrap(err, "resolve managed workspace"))
+		default:
+			generation, err := s.workspaceIntents.RequestAbsent(lifecycleCtx, workspaceID, false)
+			if err != nil {
+				return revert(errs.Wrap(err, "record workspace removal intent"))
+			}
+			outcome, err := s.workspaceIntents.AwaitSettled(lifecycleCtx, workspaceID, generation)
+			if err != nil {
+				return revert(errs.Wrap(err, "await workspace removal", slog.String("observed", outcome.Observed), slog.String("last_error", outcome.LastError)))
+			}
+			if outcome.Observed != WorkspaceObservedAbsent {
+				return revert(errs.New("workspace removal did not complete within the delete budget",
+					slog.String("observed", outcome.Observed),
+					slog.String("last_error", outcome.LastError),
+				))
+			}
 		}
 	}
 
@@ -1112,9 +1142,14 @@ func (s *Service) buildRuntimeChecks(ctx context.Context, row sqlc.Bot, includeD
 	}
 	checks = append(checks, initCheck)
 
-	containerRow, err := s.queries.GetContainerByBotID(ctx, row.ID)
-	if err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
+	// The record is the bot's managed computer; a computer without an
+	// instance yet (instance_id empty) is as good as no record.
+	containerRow, err := s.queries.GetManagedComputerByBotID(ctx, row.ID)
+	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+		return nil, err
+	}
+	if err != nil || strings.TrimSpace(containerRow.InstanceID) == "" {
+		{
 			recordCheck := BotCheck{
 				ID:       BotCheckTypeContainerRecord,
 				Type:     BotCheckTypeContainerRecord,
@@ -1151,7 +1186,6 @@ func (s *Service) buildRuntimeChecks(ctx context.Context, row sqlc.Bot, includeD
 			}
 			return checks, nil
 		}
-		return nil, err
 	}
 
 	checks = append(checks, BotCheck{
@@ -1160,15 +1194,15 @@ func (s *Service) buildRuntimeChecks(ctx context.Context, row sqlc.Bot, includeD
 		TitleKey: "bots.checks.titles.containerRecord",
 		Status:   BotCheckStatusOK,
 		Summary:  "Workspace runtime record exists.",
-		Detail:   fmt.Sprintf("runtime_id=%s", strings.TrimSpace(containerRow.ContainerID)),
+		Detail:   fmt.Sprintf("runtime_id=%s", strings.TrimSpace(containerRow.InstanceID)),
 		Metadata: map[string]any{
-			"container_id": strings.TrimSpace(containerRow.ContainerID),
+			"container_id": strings.TrimSpace(containerRow.InstanceID),
 			"namespace":    strings.TrimSpace(containerRow.Namespace),
 			"image":        strings.TrimSpace(containerRow.Image),
 		},
 	})
 
-	taskStatus := strings.TrimSpace(strings.ToLower(containerRow.Status))
+	taskStatus := strings.TrimSpace(strings.ToLower(containerRow.InstanceStatus))
 	taskCheck := BotCheck{
 		ID:       BotCheckTypeContainerTask,
 		Type:     BotCheckTypeContainerTask,
@@ -1276,7 +1310,14 @@ func (s *Service) workspaceOutcome(ctx context.Context, botID string) (Workspace
 	if s.workspaceIntents == nil {
 		return WorkspaceOutcome{}, false
 	}
-	outcome, ok, err := s.workspaceIntents.Current(ctx, botID)
+	workspaceID, err := s.managedWorkspaceID(ctx, botID)
+	if err != nil {
+		if !errors.Is(err, db.ErrNoManagedWorkspaceBinding) {
+			s.logger.WarnContext(ctx, "resolve managed workspace failed", slog.String("bot_id", botID), slog.Any("error", err))
+		}
+		return WorkspaceOutcome{}, false
+	}
+	outcome, ok, err := s.workspaceIntents.Current(ctx, workspaceID)
 	if err != nil {
 		s.logger.WarnContext(ctx, "load workspace observation failed", slog.String("bot_id", botID), slog.Any("error", err))
 		return WorkspaceOutcome{}, false

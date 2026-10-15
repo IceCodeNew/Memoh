@@ -417,3 +417,96 @@ func TestWorkspaceServiceValidatesInput(t *testing.T) {
 		t.Fatalf("ListByOwner() = %v, %v; want empty", owned, err)
 	}
 }
+
+// The reconciler and the manager reach a bot's computer only through its
+// bindings: the first managed binding wins, user workspaces never count, and
+// the computer answers which bots follow it.
+func TestBindingServiceResolvesManagedComputerThroughBindings(t *testing.T) {
+	ctx := context.Background()
+	store := &fakeWorkspaceStore{}
+	svc := NewBindingService(store, store)
+
+	if _, err := svc.ManagedWorkspaceID(ctx, wsTestBotID); !errors.Is(err, db.ErrNoManagedWorkspaceBinding) {
+		t.Fatalf("ManagedWorkspaceID() without bindings = %v, want ErrNoManagedWorkspaceBinding", err)
+	}
+
+	// A user workspace bound first is not the managed computer.
+	user, err := store.CreateWorkspace(ctx, dbstore.CreateWorkspaceInput{ID: wsTestRuntimeID, OwnerUserID: wsTestOwnerID, Kind: WorkspaceKindUser, Name: "Office Mac"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.Bind(ctx, wsTestBotID, user.ID, true); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.ManagedWorkspaceID(ctx, wsTestBotID); !errors.Is(err, db.ErrNoManagedWorkspaceBinding) {
+		t.Fatalf("ManagedWorkspaceID() with only a user workspace = %v, want ErrNoManagedWorkspaceBinding", err)
+	}
+
+	managed, err := store.CreateWorkspace(ctx, dbstore.CreateWorkspaceInput{ID: wsTestManagedID, OwnerUserID: wsTestOwnerID, Kind: WorkspaceKindManaged, Name: "bot"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.Bind(ctx, wsTestBotID, managed.ID, false); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := svc.ManagedWorkspaceID(ctx, wsTestBotID); err != nil || got != wsTestManagedID {
+		t.Fatalf("ManagedWorkspaceID() = %q, %v; want %s", got, err, wsTestManagedID)
+	}
+	if bots, err := svc.BoundBots(ctx, wsTestManagedID); err != nil || len(bots) != 1 || bots[0] != wsTestBotID {
+		t.Fatalf("BoundBots() = %v, %v; want [%s]", bots, err, wsTestBotID)
+	}
+	if bots, err := svc.BoundBots(ctx, wsTestUnknownUUID); err != nil || len(bots) != 0 {
+		t.Fatalf("BoundBots() of an unbound computer = %v, %v; want none", bots, err)
+	}
+
+	// EnsureManaged returns the existing computer and never makes a second one.
+	if got, err := svc.EnsureManaged(ctx, wsTestBotID, wsTestOwnerID, "bot"); err != nil || got != wsTestManagedID {
+		t.Fatalf("EnsureManaged() with a computer = %q, %v; want %s", got, err, wsTestManagedID)
+	}
+	if n := len(store.workspaces); n != 2 {
+		t.Fatalf("EnsureManaged() created a workspace, have %d", n)
+	}
+}
+
+// A bot that predates workspace records gets its computer on demand; the new
+// binding is primary only when the bot has no primary target yet.
+func TestBindingServiceEnsureManagedCreatesAndBinds(t *testing.T) {
+	ctx := context.Background()
+	store := &fakeWorkspaceStore{}
+	svc := NewBindingService(store, store)
+	const otherBot = "11111111-1111-4111-8111-111111111112"
+
+	created, err := svc.EnsureManaged(ctx, wsTestBotID, wsTestOwnerID, "legacy-bot")
+	if err != nil {
+		t.Fatalf("EnsureManaged(): %v", err)
+	}
+	if created == wsTestBotID {
+		t.Fatal("the computer must get its own id, never the bot id")
+	}
+	binding, workspace, err := svc.ResolvePrimary(ctx, wsTestBotID)
+	if err != nil || binding.WorkspaceID != created || workspace.Kind != WorkspaceKindManaged || workspace.Name != "legacy-bot" {
+		t.Fatalf("ResolvePrimary() = %+v, %+v, %v; want the new managed computer as primary", binding, workspace, err)
+	}
+
+	// A bot whose primary is a remote mount keeps it.
+	user, err := store.CreateWorkspace(ctx, dbstore.CreateWorkspaceInput{ID: wsTestRuntimeID, OwnerUserID: wsTestOwnerID, Kind: WorkspaceKindUser, Name: "Office Mac"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.Bind(ctx, otherBot, user.ID, true); err != nil {
+		t.Fatal(err)
+	}
+	managed, err := svc.EnsureManaged(ctx, otherBot, wsTestOwnerID, "other")
+	if err != nil {
+		t.Fatalf("EnsureManaged() for a bot with a remote primary: %v", err)
+	}
+	if primary, err := svc.Primary(ctx, otherBot); err != nil || primary.WorkspaceID != user.ID {
+		t.Fatalf("Primary() after EnsureManaged = %+v, %v; want the remote mount kept", primary, err)
+	}
+	if got, err := svc.ManagedWorkspaceID(ctx, otherBot); err != nil || got != managed {
+		t.Fatalf("ManagedWorkspaceID() = %q, %v; want %s", got, err, managed)
+	}
+	if _, err := svc.EnsureManaged(ctx, otherBot, wsTestOwnerID, ""); err != nil {
+		t.Fatalf("EnsureManaged() with an existing computer must not validate the name: %v", err)
+	}
+}

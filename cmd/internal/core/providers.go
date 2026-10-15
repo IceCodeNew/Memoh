@@ -404,9 +404,15 @@ func provideHooksService(log *slog.Logger, provider bridge.Provider) *hookspkg.S
 	return hookspkg.NewService(log, provider)
 }
 
-func provideWorkspaceManager(log *slog.Logger, service ctr.Service, networkController netctl.Controller, cfg config.Config, conn *pgxpool.Pool, queries dbstore.Queries, remote *workspace.RemoteWorkspaceService) (*workspace.Manager, error) {
+func provideWorkspaceManager(log *slog.Logger, service ctr.Service, networkController netctl.Controller, cfg config.Config, conn *pgxpool.Pool, queries dbstore.Queries, remote *workspace.RemoteWorkspaceService, bindings *workspace.BindingService, postgresStore *postgresstore.Store) (*workspace.Manager, error) {
 	mgr := workspace.NewManager(log, service, networkController, cfg.Workspace, cfg.Containerd.Namespace, conn, queries)
 	mgr.SetRemoteWorkspaceService(remote)
+	// Managed computer records are keyed by workspace id; the manager resolves
+	// bot ids through the bindings and keeps its records in the store.
+	mgr.SetBindingService(bindings)
+	if postgresStore != nil {
+		mgr.SetManagedComputerStore(postgresStore)
+	}
 	tlsOpts, err := workspace.BridgeTLSRuntimeOptionsFromConfig(cfg)
 	if err != nil {
 		return nil, err
@@ -605,11 +611,15 @@ func provideBotWorkspaceService(log *slog.Logger, queries dbstore.Queries, manag
 }
 
 // injectBotWorkspaceIntents connects the bots service and the reconciler in
-// both directions: bots records intents, the reconciler derives bots.status.
-func injectBotWorkspaceIntents(botService *bots.Service, workspaces *botworkspace.Service, containerdHandler *handlers.ContainerdHandler) {
+// both directions: bots records intents, the reconciler derives bots.status
+// for every bot bound to a computer. The HTTP layer resolves bots to their
+// managed computer through the bindings before addressing the reconciler.
+func injectBotWorkspaceIntents(botService *bots.Service, workspaces *botworkspace.Service, containerdHandler *handlers.ContainerdHandler, bindings *workspace.BindingService) {
 	botService.SetWorkspaceIntents(botWorkspaceIntents{svc: workspaces})
 	workspaces.SetBotStatusWriter(botService)
+	workspaces.SetBoundBots(bindings)
 	containerdHandler.SetWorkspaceIntents(workspaces)
+	containerdHandler.SetManagedWorkspaces(bindings)
 }
 
 // injectWorkspaceLifecycle keeps workspace records in step with bot creation
@@ -620,13 +630,14 @@ func injectWorkspaceLifecycle(botService *bots.Service, runtimes *userruntime.Se
 }
 
 // botWorkspaceIntents adapts the reconciler to the bots.WorkspaceIntents port
-// without either package importing the other.
+// without either package importing the other. Both sides are keyed by the
+// managed computer's workspace id.
 type botWorkspaceIntents struct {
 	svc *botworkspace.Service
 }
 
-func (botWorkspaceIntents) RecordPresent(ctx context.Context, q dbstore.Queries, botID, image string) error {
-	_, err := botworkspace.NewRepository(q).Upsert(ctx, botID, botworkspace.DesiredPresent, strings.TrimSpace(image), false)
+func (botWorkspaceIntents) RecordPresent(ctx context.Context, q dbstore.Queries, workspaceID, image string) error {
+	_, err := botworkspace.NewRepository(q).Upsert(ctx, workspaceID, botworkspace.DesiredPresent, strings.TrimSpace(image), false)
 	return err
 }
 
@@ -634,21 +645,21 @@ func (a botWorkspaceIntents) Wake(context.Context) {
 	a.svc.Kick()
 }
 
-func (a botWorkspaceIntents) RequestAbsent(ctx context.Context, botID string, preserve bool) (int64, error) {
-	w, err := a.svc.RequestAbsent(ctx, botID, preserve)
+func (a botWorkspaceIntents) RequestAbsent(ctx context.Context, workspaceID string, preserve bool) (int64, error) {
+	w, err := a.svc.RequestAbsent(ctx, workspaceID, preserve)
 	if err != nil {
 		return 0, err
 	}
 	return w.DesiredGeneration, nil
 }
 
-func (a botWorkspaceIntents) AwaitSettled(ctx context.Context, botID string, generation int64) (bots.WorkspaceOutcome, error) {
-	w, err := a.svc.Await(ctx, botID, generation)
+func (a botWorkspaceIntents) AwaitSettled(ctx context.Context, workspaceID string, generation int64) (bots.WorkspaceOutcome, error) {
+	w, err := a.svc.Await(ctx, workspaceID, generation)
 	return toWorkspaceOutcome(w), err
 }
 
-func (a botWorkspaceIntents) Current(ctx context.Context, botID string) (bots.WorkspaceOutcome, bool, error) {
-	w, err := a.svc.Get(ctx, botID)
+func (a botWorkspaceIntents) Current(ctx context.Context, workspaceID string) (bots.WorkspaceOutcome, bool, error) {
+	w, err := a.svc.Get(ctx, workspaceID)
 	if err != nil {
 		if errors.Is(err, botworkspace.ErrNotFound) {
 			return bots.WorkspaceOutcome{}, false, nil

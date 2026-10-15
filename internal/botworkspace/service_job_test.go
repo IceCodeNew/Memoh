@@ -71,7 +71,7 @@ func TestProvisionAttemptIsOneUnitMarkedWhileRetrying(t *testing.T) {
 	svc, repo, _, clk := newTestService(t, backend)
 	buf := withJobLog(svc)
 	ctx := context.Background()
-	_, _ = svc.EnsurePresent(ctx, bot, "")
+	_, _ = svc.EnsurePresent(ctx, computer, "")
 
 	for attempt, wantRetry := range []bool{true, true, false} {
 		if attempt > 0 {
@@ -79,7 +79,7 @@ func TestProvisionAttemptIsOneUnitMarkedWhileRetrying(t *testing.T) {
 		}
 		_, _ = svc.ReconcileOnce(ctx)
 		record := oneJob(t, buf, "workspace.provision")
-		if record["bot_id"] != bot || record["desired"] != DesiredPresent {
+		if record["workspace_id"] != computer || record["desired"] != DesiredPresent {
 			t.Fatalf("attempt %d record = %v, want the workspace's fields", attempt+1, record)
 		}
 		if got, _ := record["will_retry"].(bool); got != wantRetry {
@@ -90,7 +90,7 @@ func TestProvisionAttemptIsOneUnitMarkedWhileRetrying(t *testing.T) {
 		}
 	}
 	// The row keeps the code; the step's text lives in the unit's record.
-	if got := repo.get(bot); got.LastError != "" || got.LastErrorCode != "workspace_setup_failed" {
+	if got := repo.get(computer); got.LastError != "" || got.LastErrorCode != "workspace_setup_failed" {
 		t.Fatalf("last_error/code = %q/%q, want empty/workspace_setup_failed", got.LastError, got.LastErrorCode)
 	}
 }
@@ -102,14 +102,14 @@ func TestProvisionImageNotFoundNamesTheCodeInTheResult(t *testing.T) {
 	svc, repo, _, _ := newTestService(t, backend)
 	buf := withJobLog(svc)
 	ctx := context.Background()
-	_, _ = svc.EnsurePresent(ctx, bot, "")
+	_, _ = svc.EnsurePresent(ctx, computer, "")
 	_, _ = svc.ReconcileOnce(ctx)
 
 	record := oneJob(t, buf, "workspace.provision")
 	if record["reason"] != "workspace.image_not_found" {
 		t.Fatalf("record reason = %v, want workspace.image_not_found", record["reason"])
 	}
-	if got := repo.get(bot).LastErrorCode; got != "workspace.image_not_found" {
+	if got := repo.get(computer).LastErrorCode; got != "workspace.image_not_found" {
 		t.Fatalf("last_error_code = %q, want workspace.image_not_found", got)
 	}
 }
@@ -118,7 +118,7 @@ func TestProvisionSuccessIsOneInfoUnit(t *testing.T) {
 	svc, _, _, _ := newTestService(t, &fakeBackend{})
 	buf := withJobLog(svc)
 	ctx := context.Background()
-	_, _ = svc.EnsurePresent(ctx, bot, "")
+	_, _ = svc.EnsurePresent(ctx, computer, "")
 	_, _ = svc.ReconcileOnce(ctx)
 
 	if record := oneJob(t, buf, "workspace.provision"); record["level"] != "INFO" {
@@ -132,7 +132,7 @@ func TestSupersededProvisionIsASkip(t *testing.T) {
 	svc, repo, _, _ := newTestService(t, &fakeBackend{})
 	buf := withJobLog(svc)
 	ctx := context.Background()
-	_, _ = svc.EnsurePresent(ctx, bot, "")
+	_, _ = svc.EnsurePresent(ctx, computer, "")
 	repo.beforeWrite = func(w *Workspace) { w.Version++ }
 	_, _ = svc.ReconcileOnce(ctx)
 
@@ -146,11 +146,11 @@ func TestTeardownAttemptIsOneUnitMarkedWhileRetrying(t *testing.T) {
 	backend := &fakeBackend{}
 	svc, repo, _, clk := newTestService(t, backend)
 	ctx := context.Background()
-	_, _ = svc.EnsurePresent(ctx, bot, "")
+	_, _ = svc.EnsurePresent(ctx, computer, "")
 	_, _ = svc.ReconcileOnce(ctx)
 	buf := withJobLog(svc)
 	backend.teardownErr = errors.New("remove failed")
-	if _, err := svc.RequestAbsent(ctx, bot, false); err != nil {
+	if _, err := svc.RequestAbsent(ctx, computer, false); err != nil {
 		t.Fatal(err)
 	}
 
@@ -172,7 +172,7 @@ func TestTeardownAttemptIsOneUnitMarkedWhileRetrying(t *testing.T) {
 
 	// The row carries the catalog code, not the backend's message: ListChecks
 	// hands LastError straight to the bot checks panel.
-	row := repo.get(bot)
+	row := repo.get(computer)
 	if row.LastErrorCode != string(apperror.CodeWorkspaceTeardownFailed) {
 		t.Fatalf("last_error_code = %q, want %q", row.LastErrorCode, apperror.CodeWorkspaceTeardownFailed)
 	}

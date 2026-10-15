@@ -7,11 +7,9 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/jackc/pgx/v5"
-
 	"github.com/felinics/memoh/internal/container"
 	"github.com/felinics/memoh/internal/db"
-	dbsqlc "github.com/felinics/memoh/internal/db/postgres/sqlc"
+	dbstore "github.com/felinics/memoh/internal/db/store"
 	"github.com/felinics/memoh/internal/workspace/bridge"
 )
 
@@ -68,30 +66,35 @@ func validateResourceLimits(limits container.ResourceLimits) error {
 	return nil
 }
 
-func workspaceResourceLimitsFromRow(row dbsqlc.BotWorkspaceResourceLimit) container.ResourceLimits {
+func workspaceResourceLimitsFromRecord(limits dbstore.ManagedComputerResourceLimits) container.ResourceLimits {
 	return container.ResourceLimits{
-		CPUMillicores: row.CpuMillicores,
-		MemoryBytes:   row.MemoryBytes,
-		StorageBytes:  row.StorageBytes,
+		CPUMillicores: limits.CPUMillicores,
+		MemoryBytes:   limits.MemoryBytes,
+		StorageBytes:  limits.StorageBytes,
 	}
 }
 
+// desiredResourceLimits reads the limits saved for the bot's managed
+// computer; a bot without a computer or without saved limits has none.
 func (m *Manager) desiredResourceLimits(ctx context.Context, botID string) (container.ResourceLimits, error) {
-	if m.queries == nil {
+	if m.computers == nil {
 		return container.ResourceLimits{}, nil
 	}
-	pgBotID, err := db.ParseUUID(botID)
+	workspaceID, err := m.managedWorkspaceID(ctx, botID)
 	if err != nil {
+		if errors.Is(err, db.ErrNoManagedWorkspaceBinding) {
+			return container.ResourceLimits{}, nil
+		}
 		return container.ResourceLimits{}, err
 	}
-	row, err := m.queries.GetBotWorkspaceResourceLimits(ctx, pgBotID)
-	if err == nil {
-		return workspaceResourceLimitsFromRow(row), nil
+	limits, err := m.computers.GetManagedComputerResourceLimits(ctx, workspaceID)
+	if err != nil {
+		if errors.Is(err, db.ErrNotFound) {
+			return container.ResourceLimits{}, nil
+		}
+		return container.ResourceLimits{}, err
 	}
-	if errors.Is(err, pgx.ErrNoRows) {
-		return container.ResourceLimits{}, nil
-	}
-	return container.ResourceLimits{}, err
+	return workspaceResourceLimitsFromRecord(limits), nil
 }
 
 func (m *Manager) SetResourceLimits(ctx context.Context, botID string, limits container.ResourceLimits) (*ResourceLimitsResult, error) {
@@ -101,16 +104,15 @@ func (m *Manager) SetResourceLimits(ctx context.Context, botID string, limits co
 	if err := validateResourceLimits(limits); err != nil {
 		return nil, err
 	}
-	if m.queries == nil {
+	if m.computers == nil {
 		return nil, container.ErrNotSupported
 	}
-	pgBotID, err := db.ParseUUID(botID)
+	workspaceID, err := m.managedWorkspaceID(ctx, botID)
 	if err != nil {
 		return nil, err
 	}
-	if _, err := m.queries.UpsertBotWorkspaceResourceLimits(ctx, dbsqlc.UpsertBotWorkspaceResourceLimitsParams{
-		BotID:         pgBotID,
-		CpuMillicores: limits.CPUMillicores,
+	if err := m.computers.UpsertManagedComputerResourceLimits(ctx, workspaceID, dbstore.ManagedComputerResourceLimits{
+		CPUMillicores: limits.CPUMillicores,
 		MemoryBytes:   limits.MemoryBytes,
 		StorageBytes:  limits.StorageBytes,
 	}); err != nil {

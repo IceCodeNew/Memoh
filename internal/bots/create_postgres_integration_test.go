@@ -52,6 +52,9 @@ func TestPostgresBotCreate(t *testing.T) {
 	newService := func(intents postgresIntents) *Service {
 		svc := NewService(nil, store)
 		svc.SetWorkspaceIntents(intents)
+		// The intent is recorded under the bot's managed computer, which the
+		// create binds in the same transaction.
+		svc.SetWorkspaceBindings(workspace.NewWorkspaceLifecycle())
 		return svc
 	}
 	count := func(query string, args ...any) (n int64) {
@@ -60,8 +63,13 @@ func TestPostgresBotCreate(t *testing.T) {
 		}
 		return n
 	}
+	// The intent lives on the bot's managed computer, reached through its
+	// binding: the computer's id is never the bot id.
 	generation := func(botID string) int64 {
-		return count("SELECT COALESCE(max(desired_generation), 0) FROM bot_workspaces WHERE bot_id = $1", botID)
+		return count(`SELECT COALESCE(max(mc.desired_generation), 0)
+			FROM managed_computers mc
+			JOIN bot_workspace_bindings b ON b.workspace_id = mc.workspace_id
+			WHERE b.bot_id = $1 AND mc.workspace_id <> b.bot_id`, botID)
 	}
 
 	t.Run("concurrent creates with one key make one bot and one intent", func(t *testing.T) {
@@ -116,7 +124,6 @@ func TestPostgresBotCreate(t *testing.T) {
 
 	t.Run("a create binds a fresh managed workspace as primary", func(t *testing.T) {
 		svc := newService(postgresIntents{})
-		svc.SetWorkspaceBindings(workspace.NewWorkspaceLifecycle())
 		bot, err := svc.Create(ctx, owner.String(), CreateBotRequest{DisplayName: "小猫", AclPreset: "allow_all"})
 		if err != nil {
 			t.Fatal(err)
@@ -162,8 +169,8 @@ type postgresIntents struct {
 	fail             bool
 }
 
-func (i postgresIntents) RecordPresent(ctx context.Context, q dbstore.Queries, botID, image string) error {
-	if _, err := botworkspace.NewRepository(q).Upsert(ctx, botID, botworkspace.DesiredPresent, image, false); err != nil || !i.fail {
+func (i postgresIntents) RecordPresent(ctx context.Context, q dbstore.Queries, workspaceID, image string) error {
+	if _, err := botworkspace.NewRepository(q).Upsert(ctx, workspaceID, botworkspace.DesiredPresent, image, false); err != nil || !i.fail {
 		return err
 	}
 	return errors.New("store went away")

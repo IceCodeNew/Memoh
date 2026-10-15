@@ -141,8 +141,8 @@ ALTER TABLE public.bots NO FORCE ROW LEVEL SECURITY;
 ALTER TABLE public.bots DISABLE ROW LEVEL SECURITY;
 ALTER TABLE public.bot_workspaces NO FORCE ROW LEVEL SECURITY;
 ALTER TABLE public.bot_workspaces DISABLE ROW LEVEL SECURITY;
-ALTER TABLE public.containers NO FORCE ROW LEVEL SECURITY;
-ALTER TABLE public.containers DISABLE ROW LEVEL SECURITY;
+ALTER TABLE IF EXISTS public.containers NO FORCE ROW LEVEL SECURITY;
+ALTER TABLE IF EXISTS public.containers DISABLE ROW LEVEL SECURITY;
 ALTER TABLE public.user_runtimes NO FORCE ROW LEVEL SECURITY;
 ALTER TABLE public.user_runtimes DISABLE ROW LEVEL SECURITY;
 ALTER TABLE IF EXISTS public.bot_remote_runtime_bindings NO FORCE ROW LEVEL SECURITY;
@@ -155,12 +155,27 @@ ALTER TABLE public.bot_workspace_bindings DISABLE ROW LEVEL SECURITY;
 -- 1. Managed workspaces: one per bot that has a workspace slot or a container
 --    record. The workspace keeps the bot id so the slot and the computer stay
 --    one-to-one for this stage. Bots created from now on get a fresh id.
-INSERT INTO public.workspaces (id, team_id, owner_user_id, kind, name, created_at, updated_at)
-SELECT b.id, b.team_id, b.owner_user_id, 'managed', b.name, b.created_at, b.updated_at
-FROM public.bots b
-WHERE EXISTS (SELECT 1 FROM public.bot_workspaces w WHERE w.bot_id = b.id)
-   OR EXISTS (SELECT 1 FROM public.containers c WHERE c.bot_id = b.id)
-ON CONFLICT (id) DO NOTHING;
+--    containers is consulted only where it exists: a fresh install built from
+--    a 0001 that post-dates 0168 keeps the record in managed_computers and
+--    has nothing to backfill here.
+DO $$
+BEGIN
+    IF to_regclass('public.containers') IS NOT NULL THEN
+        INSERT INTO public.workspaces (id, team_id, owner_user_id, kind, name, created_at, updated_at)
+        SELECT b.id, b.team_id, b.owner_user_id, 'managed', b.name, b.created_at, b.updated_at
+        FROM public.bots b
+        WHERE EXISTS (SELECT 1 FROM public.bot_workspaces w WHERE w.bot_id = b.id)
+           OR EXISTS (SELECT 1 FROM public.containers c WHERE c.bot_id = b.id)
+        ON CONFLICT (id) DO NOTHING;
+    ELSE
+        INSERT INTO public.workspaces (id, team_id, owner_user_id, kind, name, created_at, updated_at)
+        SELECT b.id, b.team_id, b.owner_user_id, 'managed', b.name, b.created_at, b.updated_at
+        FROM public.bots b
+        WHERE EXISTS (SELECT 1 FROM public.bot_workspaces w WHERE w.bot_id = b.id)
+        ON CONFLICT (id) DO NOTHING;
+    END IF;
+END
+$$;
 
 -- 2. User workspaces: one per paired computer, revoked ones included so the
 --    history behind their old mounts stays resolvable.
@@ -210,8 +225,8 @@ ALTER TABLE IF EXISTS public.bot_remote_runtime_bindings ENABLE ROW LEVEL SECURI
 ALTER TABLE IF EXISTS public.bot_remote_runtime_bindings FORCE ROW LEVEL SECURITY;
 ALTER TABLE public.user_runtimes ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.user_runtimes FORCE ROW LEVEL SECURITY;
-ALTER TABLE public.containers ENABLE ROW LEVEL SECURITY;
-ALTER TABLE public.containers FORCE ROW LEVEL SECURITY;
+ALTER TABLE IF EXISTS public.containers ENABLE ROW LEVEL SECURITY;
+ALTER TABLE IF EXISTS public.containers FORCE ROW LEVEL SECURITY;
 ALTER TABLE public.bot_workspaces ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.bot_workspaces FORCE ROW LEVEL SECURITY;
 ALTER TABLE public.bots ENABLE ROW LEVEL SECURITY;

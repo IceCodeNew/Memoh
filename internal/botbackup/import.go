@@ -1054,8 +1054,17 @@ func (s *Service) restoreWorkspaceResourceLimits(ctx context.Context, botID stri
 	if err != nil {
 		return err
 	}
-	if _, err := s.queries.UpsertBotWorkspaceResourceLimits(ctx, sqlc.UpsertBotWorkspaceResourceLimitsParams{
-		BotID:         pgBotID,
+	// The limits belong to the bot's managed computer, reached through its
+	// bindings; a bot without one has nowhere to keep them.
+	workspaceID, err := s.queries.GetBotManagedWorkspaceID(ctx, pgBotID)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return errors.New("bot has no managed workspace")
+		}
+		return err
+	}
+	if _, err := s.queries.UpsertManagedComputerResourceLimits(ctx, sqlc.UpsertManagedComputerResourceLimitsParams{
+		WorkspaceID:   workspaceID,
 		CpuMillicores: limits.CPUMillicores,
 		MemoryBytes:   limits.MemoryBytes,
 		StorageBytes:  limits.StorageBytes,

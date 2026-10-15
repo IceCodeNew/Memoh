@@ -26,31 +26,45 @@ func NewWorkspaceLifecycle() *WorkspaceLifecycle {
 }
 
 // BindManaged creates the bot's managed workspace (a fresh id, never the bot
-// id) and binds it as the bot's primary target.
-func (*WorkspaceLifecycle) BindManaged(ctx context.Context, q dbstore.Queries, botID, ownerUserID, name string) error {
+// id), binds it as the bot's primary target and returns the workspace id the
+// caller records its intent under.
+func (*WorkspaceLifecycle) BindManaged(ctx context.Context, q dbstore.Queries, botID, ownerUserID, name string) (string, error) {
 	if q == nil {
-		return errors.New("workspace lifecycle requires transaction queries")
+		return "", errors.New("workspace lifecycle requires transaction queries")
 	}
 	botUUID, err := db.ParseUUID(botID)
 	if err != nil {
-		return err
+		return "", err
 	}
 	name = strings.TrimSpace(name)
 	if name == "" {
-		return ErrInvalidWorkspaceName
+		return "", ErrInvalidWorkspaceName
 	}
 	workspace, err := postgresstore.CreateWorkspaceWith(ctx, q, dbstore.CreateWorkspaceInput{
 		OwnerUserID: ownerUserID, Kind: WorkspaceKindManaged, Name: name,
 	})
 	if err != nil {
-		return fmt.Errorf("create managed workspace: %w", err)
+		return "", fmt.Errorf("create managed workspace: %w", err)
 	}
 	if _, err := q.UpsertBotWorkspaceBinding(ctx, dbsqlc.UpsertBotWorkspaceBindingParams{
 		BotID: botUUID, WorkspaceID: workspace.ID, IsPrimary: true,
 	}); err != nil {
-		return fmt.Errorf("bind managed workspace: %w", err)
+		return "", fmt.Errorf("bind managed workspace: %w", err)
 	}
-	return nil
+	return workspace.ID.String(), nil
+}
+
+// ManagedWorkspaceID returns the bot's managed computer (the workspace behind
+// its first managed binding) or db.ErrNoManagedWorkspaceBinding.
+func (l *WorkspaceLifecycle) ManagedWorkspaceID(ctx context.Context, q dbstore.Queries, botID string) (string, error) {
+	ids, err := l.ManagedWorkspaceIDs(ctx, q, botID)
+	if err != nil {
+		return "", err
+	}
+	if len(ids) == 0 {
+		return "", db.ErrNoManagedWorkspaceBinding
+	}
+	return ids[0], nil
 }
 
 // ManagedWorkspaceIDs lists the managed workspaces bound to the bot.

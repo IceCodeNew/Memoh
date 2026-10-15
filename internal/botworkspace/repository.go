@@ -16,7 +16,7 @@ import (
 
 // ObservedWrite is one observation written by a lease holder.
 type ObservedWrite struct {
-	BotID              string
+	WorkspaceID        string
 	Owner              string
 	ExpectedVersion    int64
 	Observed           string
@@ -30,19 +30,19 @@ type ObservedWrite struct {
 	ReleaseLease       bool
 }
 
-// Repository is the persistence port. The postgres implementation is thin;
-// the interface exists so the reconciler can be tested against an in-memory
-// fake.
+// Repository is the persistence port over managed_computers, keyed by the
+// workspace id. The postgres implementation is thin; the interface exists so
+// the reconciler can be tested against an in-memory fake.
 type Repository interface {
-	Upsert(ctx context.Context, botID, desired, image string, preserveData bool) (Workspace, error)
-	// CancelRemoval returns ErrNotFound when the bot has no failed removal.
-	CancelRemoval(ctx context.Context, botID, observed string) (Workspace, error)
-	Get(ctx context.Context, botID string) (Workspace, error)
+	Upsert(ctx context.Context, workspaceID, desired, image string, preserveData bool) (Workspace, error)
+	// CancelRemoval returns ErrNotFound when the computer has no failed removal.
+	CancelRemoval(ctx context.Context, workspaceID, observed string) (Workspace, error)
+	Get(ctx context.Context, workspaceID string) (Workspace, error)
 	Claim(ctx context.Context, owner string, lease time.Duration, limit int32) ([]Workspace, error)
-	ClaimOne(ctx context.Context, botID, owner string, lease time.Duration) (Workspace, error)
-	Renew(ctx context.Context, botID, owner string, lease time.Duration) error
+	ClaimOne(ctx context.Context, workspaceID, owner string, lease time.Duration) (Workspace, error)
+	Renew(ctx context.Context, workspaceID, owner string, lease time.Duration) error
 	WriteObserved(ctx context.Context, w ObservedWrite) (Workspace, error)
-	Release(ctx context.Context, botID, owner string) error
+	Release(ctx context.Context, workspaceID, owner string) error
 	ListByObserved(ctx context.Context, observed string, limit int32) ([]Workspace, error)
 }
 
@@ -55,13 +55,13 @@ func NewRepository(queries dbstore.Queries) Repository {
 	return &postgresRepository{queries: queries}
 }
 
-func (r *postgresRepository) Upsert(ctx context.Context, botID, desired, image string, preserveData bool) (Workspace, error) {
-	id, err := db.ParseUUID(botID)
+func (r *postgresRepository) Upsert(ctx context.Context, workspaceID, desired, image string, preserveData bool) (Workspace, error) {
+	id, err := db.ParseUUID(workspaceID)
 	if err != nil {
 		return Workspace{}, err
 	}
-	row, err := r.queries.UpsertBotWorkspaceIntent(ctx, dbsqlc.UpsertBotWorkspaceIntentParams{
-		BotID:        id,
+	row, err := r.queries.UpsertManagedComputerIntent(ctx, dbsqlc.UpsertManagedComputerIntentParams{
+		WorkspaceID:  id,
 		DesiredState: desired,
 		Image:        image,
 		PreserveData: preserveData,
@@ -72,14 +72,14 @@ func (r *postgresRepository) Upsert(ctx context.Context, botID, desired, image s
 	return fromRow(row), nil
 }
 
-func (r *postgresRepository) CancelRemoval(ctx context.Context, botID, observed string) (Workspace, error) {
-	id, err := db.ParseUUID(botID)
+func (r *postgresRepository) CancelRemoval(ctx context.Context, workspaceID, observed string) (Workspace, error) {
+	id, err := db.ParseUUID(workspaceID)
 	if err != nil {
 		return Workspace{}, err
 	}
-	row, err := r.queries.CancelBotWorkspaceRemoval(ctx, dbsqlc.CancelBotWorkspaceRemovalParams{
+	row, err := r.queries.CancelManagedComputerRemoval(ctx, dbsqlc.CancelManagedComputerRemovalParams{
 		ObservedState: observed,
-		BotID:         id,
+		WorkspaceID:   id,
 	})
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -90,12 +90,12 @@ func (r *postgresRepository) CancelRemoval(ctx context.Context, botID, observed 
 	return fromRow(row), nil
 }
 
-func (r *postgresRepository) Get(ctx context.Context, botID string) (Workspace, error) {
-	id, err := db.ParseUUID(botID)
+func (r *postgresRepository) Get(ctx context.Context, workspaceID string) (Workspace, error) {
+	id, err := db.ParseUUID(workspaceID)
 	if err != nil {
 		return Workspace{}, err
 	}
-	row, err := r.queries.GetBotWorkspace(ctx, id)
+	row, err := r.queries.GetManagedComputer(ctx, id)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return Workspace{}, ErrNotFound
@@ -106,7 +106,7 @@ func (r *postgresRepository) Get(ctx context.Context, botID string) (Workspace, 
 }
 
 func (r *postgresRepository) Claim(ctx context.Context, owner string, lease time.Duration, limit int32) ([]Workspace, error) {
-	rows, err := r.queries.ClaimBotWorkspaces(ctx, dbsqlc.ClaimBotWorkspacesParams{
+	rows, err := r.queries.ClaimManagedComputers(ctx, dbsqlc.ClaimManagedComputersParams{
 		LeaseOwner:   owner,
 		LeaseSeconds: lease.Seconds(),
 		Lim:          limit,
@@ -121,15 +121,15 @@ func (r *postgresRepository) Claim(ctx context.Context, owner string, lease time
 	return out, nil
 }
 
-func (r *postgresRepository) ClaimOne(ctx context.Context, botID, owner string, lease time.Duration) (Workspace, error) {
-	id, err := db.ParseUUID(botID)
+func (r *postgresRepository) ClaimOne(ctx context.Context, workspaceID, owner string, lease time.Duration) (Workspace, error) {
+	id, err := db.ParseUUID(workspaceID)
 	if err != nil {
 		return Workspace{}, err
 	}
-	row, err := r.queries.ClaimBotWorkspace(ctx, dbsqlc.ClaimBotWorkspaceParams{
+	row, err := r.queries.ClaimManagedComputer(ctx, dbsqlc.ClaimManagedComputerParams{
 		LeaseOwner:   owner,
 		LeaseSeconds: lease.Seconds(),
-		BotID:        id,
+		WorkspaceID:  id,
 	})
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -140,14 +140,14 @@ func (r *postgresRepository) ClaimOne(ctx context.Context, botID, owner string, 
 	return fromRow(row), nil
 }
 
-func (r *postgresRepository) Renew(ctx context.Context, botID, owner string, lease time.Duration) error {
-	id, err := db.ParseUUID(botID)
+func (r *postgresRepository) Renew(ctx context.Context, workspaceID, owner string, lease time.Duration) error {
+	id, err := db.ParseUUID(workspaceID)
 	if err != nil {
 		return err
 	}
-	n, err := r.queries.RenewBotWorkspaceLease(ctx, dbsqlc.RenewBotWorkspaceLeaseParams{
+	n, err := r.queries.RenewManagedComputerLease(ctx, dbsqlc.RenewManagedComputerLeaseParams{
 		LeaseSeconds: lease.Seconds(),
-		BotID:        id,
+		WorkspaceID:  id,
 		LeaseOwner:   owner,
 	})
 	if err != nil {
@@ -160,11 +160,11 @@ func (r *postgresRepository) Renew(ctx context.Context, botID, owner string, lea
 }
 
 func (r *postgresRepository) WriteObserved(ctx context.Context, w ObservedWrite) (Workspace, error) {
-	id, err := db.ParseUUID(w.BotID)
+	id, err := db.ParseUUID(w.WorkspaceID)
 	if err != nil {
 		return Workspace{}, err
 	}
-	row, err := r.queries.UpdateBotWorkspaceObserved(ctx, dbsqlc.UpdateBotWorkspaceObservedParams{
+	row, err := r.queries.UpdateManagedComputerObserved(ctx, dbsqlc.UpdateManagedComputerObservedParams{
 		ObservedState:      w.Observed,
 		ObservedGeneration: w.ObservedGeneration,
 		MarkReady:          w.MarkReady,
@@ -174,7 +174,7 @@ func (r *postgresRepository) WriteObserved(ctx context.Context, w ObservedWrite)
 		Attempts:           w.Attempts,
 		NextAttemptAt:      pgtype.Timestamptz{Time: w.NextAttemptAt, Valid: true},
 		ReleaseLease:       w.ReleaseLease,
-		BotID:              id,
+		WorkspaceID:        id,
 		LeaseOwner:         w.Owner,
 		ExpectedVersion:    w.ExpectedVersion,
 	})
@@ -187,20 +187,20 @@ func (r *postgresRepository) WriteObserved(ctx context.Context, w ObservedWrite)
 	return fromRow(row), nil
 }
 
-func (r *postgresRepository) Release(ctx context.Context, botID, owner string) error {
-	id, err := db.ParseUUID(botID)
+func (r *postgresRepository) Release(ctx context.Context, workspaceID, owner string) error {
+	id, err := db.ParseUUID(workspaceID)
 	if err != nil {
 		return err
 	}
-	_, err = r.queries.ReleaseBotWorkspaceLease(ctx, dbsqlc.ReleaseBotWorkspaceLeaseParams{
-		BotID:      id,
-		LeaseOwner: owner,
+	_, err = r.queries.ReleaseManagedComputerLease(ctx, dbsqlc.ReleaseManagedComputerLeaseParams{
+		WorkspaceID: id,
+		LeaseOwner:  owner,
 	})
 	return err
 }
 
 func (r *postgresRepository) ListByObserved(ctx context.Context, observed string, limit int32) ([]Workspace, error) {
-	rows, err := r.queries.ListBotWorkspacesByObservedState(ctx, dbsqlc.ListBotWorkspacesByObservedStateParams{
+	rows, err := r.queries.ListManagedComputersByObservedState(ctx, dbsqlc.ListManagedComputersByObservedStateParams{
 		ObservedState: observed,
 		Lim:           limit,
 	})
@@ -214,9 +214,9 @@ func (r *postgresRepository) ListByObserved(ctx context.Context, observed string
 	return out, nil
 }
 
-func fromRow(row dbsqlc.BotWorkspace) Workspace {
+func fromRow(row dbsqlc.ManagedComputer) Workspace {
 	w := Workspace{
-		BotID:              uuidString(row.BotID),
+		WorkspaceID:        uuidString(row.WorkspaceID),
 		TeamID:             uuidString(row.TeamID),
 		Desired:            row.DesiredState,
 		DesiredGeneration:  row.DesiredGeneration,

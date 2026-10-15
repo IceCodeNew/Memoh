@@ -481,9 +481,17 @@ CREATE UNIQUE INDEX idx_session_events_dedup
     ON public.bot_session_events (team_id, session_id, event_kind, external_message_id)
     WHERE ((external_message_id IS NOT NULL) AND (external_message_id <> ''::text));
 
-DROP INDEX IF EXISTS idx_snapshots_container_runtime_name;
-CREATE UNIQUE INDEX idx_snapshots_container_runtime_name
-    ON public.snapshots (team_id, container_id, runtime_snapshot_name);
+-- snapshots only exists on databases that predate 0168 (a fresh install keeps
+-- the record in managed_computer_snapshots).
+DO $$
+BEGIN
+    IF to_regclass('public.snapshots') IS NOT NULL THEN
+        DROP INDEX IF EXISTS idx_snapshots_container_runtime_name;
+        CREATE UNIQUE INDEX idx_snapshots_container_runtime_name
+            ON public.snapshots (team_id, container_id, runtime_snapshot_name);
+    END IF;
+END
+$$;
 
 -- ---------------------------------------------------------------------------
 -- Team row-level security

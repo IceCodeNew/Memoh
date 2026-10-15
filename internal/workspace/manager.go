@@ -112,6 +112,8 @@ type Manager struct {
 	namespace         string
 	db                *pgxpool.Pool
 	queries           dbstore.Queries
+	computers         dbstore.ManagedComputerStore
+	bindings          *BindingService
 	hookService       *hooks.Service
 	logger            *slog.Logger
 	containerLockMu   sync.Mutex
@@ -137,6 +139,12 @@ func NewManager(log *slog.Logger, service runtimeService, networkController netc
 	} else if conn != nil {
 		queries = postgresstore.NewQueries(dbsqlc.New(conn))
 	}
+	// Managed computer records live in the postgres store; a manager without
+	// a pool (tests with fake queries) records nothing unless a store is set.
+	var computers dbstore.ManagedComputerStore
+	if conn != nil {
+		computers = postgresstore.NewWithPool(conn, dbsqlc.New(conn))
+	}
 	m := &Manager{
 		service:           service,
 		networkController: networkController,
@@ -144,6 +152,7 @@ func NewManager(log *slog.Logger, service runtimeService, networkController netc
 		namespace:         namespace,
 		db:                conn,
 		queries:           queries,
+		computers:         computers,
 		logger:            log.With(slog.String("component", "workspace")),
 		containerLocks:    make(map[string]*sync.Mutex),
 		legacyIPs:         make(map[string]string),

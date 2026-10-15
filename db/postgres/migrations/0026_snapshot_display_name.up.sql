@@ -2,5 +2,5 @@
 -- Add user-facing display_name to snapshots while keeping runtime_snapshot_name
 -- as the internal containerd identifier.
 
-ALTER TABLE snapshots
+ALTER TABLE IF EXISTS snapshots
   ADD COLUMN IF NOT EXISTS display_name TEXT;

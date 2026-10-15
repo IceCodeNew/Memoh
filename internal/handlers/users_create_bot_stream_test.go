@@ -40,7 +40,8 @@ func TestCreateBotStreamsLifecycleWhenSSERequested(t *testing.T) {
 			ownerID: ownerID,
 			botID:   botID,
 		}))),
-		workspaceSetup: &createBotStreamWorkspace{},
+		managedWorkspaces: identityManagedWorkspaces{},
+		workspaceSetup:    &createBotStreamWorkspace{},
 	}
 
 	req := httptest.NewRequest(http.MethodPost, "/bots", strings.NewReader(`{
@@ -132,6 +133,7 @@ func TestCreateBotStreamsContainerProgressEvents(t *testing.T) {
 			ownerID: ownerID,
 			botID:   botID,
 		}))),
+		managedWorkspaces: identityManagedWorkspaces{},
 		workspaceSetup: &createBotStreamWorkspace{events: []workspace.ContainerSetupEvent{
 			{Type: "pulling", Image: "debian:bookworm-slim"},
 			{Type: "pull_progress", Layers: []ctr.LayerStatus{{Ref: "layer-1", Offset: 10, Total: 100}}},
@@ -205,10 +207,11 @@ func TestCreateBotStreamReportsSetupErrorAfterCreatedBot(t *testing.T) {
 
 	logs := captureLogs()
 	handler := &UsersHandler{
-		logger:         logs.logger,
-		service:        newTestCreateBotAccountService(ownerID),
-		botService:     bots.NewService(nil, postgresstore.NewQueries(sqlc.New(streamDB))),
-		workspaceSetup: &createBotStreamWorkspace{err: errors.New("image pull failed")},
+		logger:            logs.logger,
+		service:           newTestCreateBotAccountService(ownerID),
+		botService:        bots.NewService(nil, postgresstore.NewQueries(sqlc.New(streamDB))),
+		managedWorkspaces: identityManagedWorkspaces{},
+		workspaceSetup:    &createBotStreamWorkspace{err: errors.New("image pull failed")},
 	}
 
 	req := httptest.NewRequest(http.MethodPost, "/bots", strings.NewReader(`{
@@ -255,9 +258,10 @@ func TestCreateBotStreamReportsStableBootstrapError(t *testing.T) {
 	streamDB := &createBotStreamDB{ownerID: ownerID, botID: botID}
 	logs := captureLogs()
 	handler := &UsersHandler{
-		logger:     logs.logger,
-		service:    newTestCreateBotAccountService(ownerID),
-		botService: bots.NewService(nil, postgresstore.NewQueries(sqlc.New(streamDB))),
+		logger:            logs.logger,
+		service:           newTestCreateBotAccountService(ownerID),
+		botService:        bots.NewService(nil, postgresstore.NewQueries(sqlc.New(streamDB))),
+		managedWorkspaces: identityManagedWorkspaces{},
 		workspaceSetup: &createBotStreamWorkspace{
 			err:   errors.New("write /data/AGENTS.md: permission denied"),
 			phase: botworkspace.PhaseBootstrap,
@@ -302,9 +306,10 @@ func TestCreateBotStreamReportsRecordedWorkspaceCode(t *testing.T) {
 			streamDB := &createBotStreamDB{ownerID: ownerID, botID: botID}
 			logs := captureLogs()
 			handler := &UsersHandler{
-				logger:     logs.logger,
-				service:    newTestCreateBotAccountService(ownerID),
-				botService: bots.NewService(nil, postgresstore.NewQueries(sqlc.New(streamDB))),
+				logger:            logs.logger,
+				service:           newTestCreateBotAccountService(ownerID),
+				botService:        bots.NewService(nil, postgresstore.NewQueries(sqlc.New(streamDB))),
+				managedWorkspaces: identityManagedWorkspaces{},
 				workspaceSetup: &createBotStreamWorkspace{
 					err:   errors.New("registry.example/nope: manifest unknown"),
 					phase: botworkspace.PhaseImagePrepare,
@@ -483,6 +488,39 @@ func (w *createBotStreamWorkspace) Kick() {
 	})
 }
 
+// identityManagedWorkspaces stands in for the binding service: in these
+// tests a bot's managed computer carries the bot's id, so the fake reconciler
+// above, keyed by the computer, can be read with the bot id.
+type identityManagedWorkspaces struct{}
+
+func (identityManagedWorkspaces) ManagedWorkspaceID(_ context.Context, botID string) (string, error) {
+	return botID, nil
+}
+
+func (identityManagedWorkspaces) EnsureManaged(_ context.Context, botID, _, _ string) (string, error) {
+	return botID, nil
+}
+
+// identityWorkspaceBindings is the bots side of the same mapping: the create
+// binds a computer with the bot's id, so the intent is recorded under it.
+type identityWorkspaceBindings struct{}
+
+func (identityWorkspaceBindings) BindManaged(_ context.Context, _ dbstore.Queries, botID, _, _ string) (string, error) {
+	return botID, nil
+}
+
+func (identityWorkspaceBindings) ManagedWorkspaceID(_ context.Context, _ dbstore.Queries, botID string) (string, error) {
+	return botID, nil
+}
+
+func (identityWorkspaceBindings) ManagedWorkspaceIDs(_ context.Context, _ dbstore.Queries, botID string) ([]string, error) {
+	return []string{botID}, nil
+}
+
+func (identityWorkspaceBindings) ReleaseUnbound(context.Context, dbstore.Queries, string) error {
+	return nil
+}
+
 // createBotIntents is the bots side of the same fake, as providers.go wires the
 // real reconciler into both.
 type createBotIntents struct {
@@ -503,12 +541,16 @@ func (createBotIntents) Current(context.Context, string) (bots.WorkspaceOutcome,
 
 func wireCreateBotIntents(h *UsersHandler) {
 	h.botService.SetWorkspaceIntents(createBotIntents{w: h.workspaceSetup.(*createBotStreamWorkspace)})
+	h.botService.SetWorkspaceBindings(identityWorkspaceBindings{})
+	if h.managedWorkspaces == nil {
+		h.managedWorkspaces = identityManagedWorkspaces{}
+	}
 }
 
 func (w *createBotStreamWorkspace) EnsurePresent(_ context.Context, botID, image string) (botworkspace.Workspace, error) {
 	w.record(botID, image)
 	w.Kick()
-	return botworkspace.Workspace{BotID: botID, Desired: botworkspace.DesiredPresent, DesiredGeneration: 1}, nil
+	return botworkspace.Workspace{WorkspaceID: botID, Desired: botworkspace.DesiredPresent, DesiredGeneration: 1}, nil
 }
 
 // record is an intent that waits for Kick, as one Create commits does.
@@ -533,7 +575,7 @@ func (w *createBotStreamWorkspace) record(botID, image string) {
 				DataRestored: ev.DataRestored, HasPreservedData: ev.HasPreservedData,
 			})
 		}
-		final := botworkspace.Workspace{BotID: botID, Desired: botworkspace.DesiredPresent, DesiredGeneration: 1, ObservedGeneration: 1, Image: image}
+		final := botworkspace.Workspace{WorkspaceID: botID, Desired: botworkspace.DesiredPresent, DesiredGeneration: 1, ObservedGeneration: 1, Image: image}
 		if w.err != nil {
 			final.Observed = botworkspace.ObservedFailed
 			final.LastError = w.err.Error()
@@ -751,9 +793,10 @@ func (r *createBotStreamRow) Scan(dest ...any) error {
 
 func newResendHandler(ownerID string, dbFake *createBotStreamDB, ws *createBotStreamWorkspace) *UsersHandler {
 	h := &UsersHandler{
-		service:        newTestCreateBotAccountService(ownerID),
-		botService:     bots.NewService(nil, postgresstore.NewQueries(sqlc.New(dbFake))),
-		workspaceSetup: ws,
+		service:           newTestCreateBotAccountService(ownerID),
+		botService:        bots.NewService(nil, postgresstore.NewQueries(sqlc.New(dbFake))),
+		managedWorkspaces: identityManagedWorkspaces{},
+		workspaceSetup:    ws,
 	}
 	wireCreateBotIntents(h)
 	return h

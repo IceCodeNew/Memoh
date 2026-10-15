@@ -40,7 +40,7 @@ func (r *memRepo) Upsert(_ context.Context, botID, desired, image string, preser
 	defer r.mu.Unlock()
 	w, ok := r.rows[botID]
 	if !ok {
-		w = &Workspace{BotID: botID, DesiredGeneration: 0, Observed: ObservedAbsent, Version: 0}
+		w = &Workspace{WorkspaceID: botID, DesiredGeneration: 0, Observed: ObservedAbsent, Version: 0}
 		r.rows[botID] = w
 	}
 	w.Desired = desired
@@ -154,7 +154,7 @@ func (r *memRepo) Renew(_ context.Context, botID, owner string, lease time.Durat
 func (r *memRepo) WriteObserved(_ context.Context, u ObservedWrite) (Workspace, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	w, ok := r.rows[u.BotID]
+	w, ok := r.rows[u.WorkspaceID]
 	if ok && r.beforeWrite != nil {
 		r.beforeWrite(w)
 	}
@@ -295,6 +295,20 @@ func (c *clock) advance(d time.Duration) {
 	c.t = c.t.Add(d)
 }
 
+// staticBoundBots binds one computer to one bot; every other computer is
+// unbound.
+type staticBoundBots struct {
+	computer string
+	bot      string
+}
+
+func (b staticBoundBots) BoundBots(_ context.Context, workspaceID string) ([]string, error) {
+	if workspaceID == b.computer {
+		return []string{b.bot}, nil
+	}
+	return nil, nil
+}
+
 func newTestService(t *testing.T, backend *fakeBackend) (*Service, *memRepo, *statusRecorder, *clock) {
 	t.Helper()
 	clk := &clock{t: time.Date(2026, 9, 17, 12, 0, 0, 0, time.UTC)}
@@ -304,10 +318,42 @@ func newTestService(t *testing.T, backend *fakeBackend) (*Service, *memRepo, *st
 	svc.rnd = func() float64 { return 0.5 } // jitter factor exactly 1.0
 	status := &statusRecorder{}
 	svc.SetBotStatusWriter(status)
+	svc.SetBoundBots(staticBoundBots{computer: computer, bot: bot})
 	return svc, repo, status, clk
 }
 
-const bot = "00000000-0000-0000-0000-00000000aaaa"
+// computer is the managed computer the tests drive; bot is the bot bound to
+// it, whose status follows the computer. The ids differ on purpose: a bot
+// created after 0167 does not share its id with its computer.
+const (
+	computer = "00000000-0000-0000-0000-00000000cccc"
+	bot      = "00000000-0000-0000-0000-00000000aaaa"
+)
+
+// An unbound computer is reconciled like any other; there is simply no bot
+// whose status could follow it.
+func TestUnboundComputerIsReconciledWithoutBotStatus(t *testing.T) {
+	backend := &fakeBackend{}
+	svc, repo, status, _ := newTestService(t, backend)
+	ctx := context.Background()
+	const orphan = "00000000-0000-0000-0000-00000000dddd"
+
+	if _, err := svc.EnsurePresent(ctx, orphan, "img:1"); err != nil {
+		t.Fatal(err)
+	}
+	if n, err := svc.ReconcileOnce(ctx); err != nil || n != 1 {
+		t.Fatalf("ReconcileOnce() = %d, %v", n, err)
+	}
+	if w := repo.get(orphan); w.Observed != ObservedRunning || !w.EverReady {
+		t.Fatalf("after provision: %+v", w)
+	}
+	if got := status.get(orphan); got != "" {
+		t.Fatalf("an unbound computer must not write any bot status, got %q", got)
+	}
+	if got := status.get(bot); got != "" {
+		t.Fatalf("the orphan must not touch another computer's bot, got %q", got)
+	}
+}
 
 // ─── tests ───────────────────────────────────────────────────────────────────
 
@@ -316,16 +362,16 @@ func TestProvisionHappyPath(t *testing.T) {
 	svc, repo, status, _ := newTestService(t, backend)
 	ctx := context.Background()
 
-	if _, err := svc.EnsurePresent(ctx, bot, "img:1"); err != nil {
+	if _, err := svc.EnsurePresent(ctx, computer, "img:1"); err != nil {
 		t.Fatal(err)
 	}
-	if got := repo.get(bot); got.Desired != DesiredPresent || got.DesiredGeneration != 1 || got.Image != "img:1" {
+	if got := repo.get(computer); got.Desired != DesiredPresent || got.DesiredGeneration != 1 || got.Image != "img:1" {
 		t.Fatalf("intent not recorded: %+v", got)
 	}
 	if n, err := svc.ReconcileOnce(ctx); err != nil || n != 1 {
 		t.Fatalf("ReconcileOnce() = %d, %v", n, err)
 	}
-	w := repo.get(bot)
+	w := repo.get(computer)
 	if w.Observed != ObservedRunning || !w.EverReady || w.ObservedGeneration != 1 || w.LeaseOwner != "" {
 		t.Fatalf("after provision: %+v", w)
 	}
@@ -344,12 +390,12 @@ func TestProvisionRetryableFailureBacksOffThenRecovers(t *testing.T) {
 	}}
 	svc, repo, status, clk := newTestService(t, backend)
 	ctx := context.Background()
-	_, _ = svc.EnsurePresent(ctx, bot, "")
+	_, _ = svc.EnsurePresent(ctx, computer, "")
 
 	if _, err := svc.ReconcileOnce(ctx); err != nil {
 		t.Fatal(err)
 	}
-	w := repo.get(bot)
+	w := repo.get(computer)
 	if w.Observed != ObservedFailed || w.Attempts != 1 || w.LastErrorPhase != PhaseBridge {
 		t.Fatalf("after first failure: %+v", w)
 	}
@@ -367,7 +413,7 @@ func TestProvisionRetryableFailureBacksOffThenRecovers(t *testing.T) {
 	if n, _ := svc.ReconcileOnce(ctx); n != 1 {
 		t.Fatalf("claimed %d rows after backoff, want 1", n)
 	}
-	w = repo.get(bot)
+	w = repo.get(computer)
 	if w.Observed != ObservedRunning || w.Attempts != 0 || !w.EverReady {
 		t.Fatalf("after retry: %+v", w)
 	}
@@ -385,9 +431,9 @@ func TestProvisionNonRetryableFailureSpendsBudgetAndSlowRetries(t *testing.T) {
 	backend := &fakeBackend{provisionErr: &StepError{Phase: PhaseImagePrepare, Retryable: false, Err: errors.New("pull access denied")}}
 	svc, repo, _, clk := newTestService(t, backend)
 	ctx := context.Background()
-	_, _ = svc.EnsurePresent(ctx, bot, "bad:image")
+	_, _ = svc.EnsurePresent(ctx, computer, "bad:image")
 	_, _ = svc.ReconcileOnce(ctx)
-	w := repo.get(bot)
+	w := repo.get(computer)
 	// The whole fast budget is consumed at once so Await answers now, and the
 	// next attempt is on the slow cadence.
 	if w.Observed != ObservedFailed || w.Attempts != 3 || w.RetryPending(3) {
@@ -405,7 +451,7 @@ func TestProvisionNonRetryableFailureSpendsBudgetAndSlowRetries(t *testing.T) {
 	if n, _ := svc.ReconcileOnce(ctx); n != 1 {
 		t.Fatalf("slow retry not claimed (%d)", n)
 	}
-	if w := repo.get(bot); w.Observed != ObservedRunning || w.Attempts != 0 || !w.EverReady {
+	if w := repo.get(computer); w.Observed != ObservedRunning || w.Attempts != 0 || !w.EverReady {
 		t.Fatalf("after slow retry: %+v", w)
 	}
 }
@@ -414,17 +460,17 @@ func TestNewIntentResetsRetryBudget(t *testing.T) {
 	backend := &fakeBackend{provisionErr: &StepError{Phase: PhaseImagePrepare, Retryable: false, Err: errors.New("pull access denied")}}
 	svc, repo, _, _ := newTestService(t, backend)
 	ctx := context.Background()
-	_, _ = svc.EnsurePresent(ctx, bot, "bad:image")
+	_, _ = svc.EnsurePresent(ctx, computer, "bad:image")
 	_, _ = svc.ReconcileOnce(ctx)
 	// A new intent (user changed the image) is due immediately with a fresh budget.
 	backend.provisionErr = nil
-	if _, err := svc.EnsurePresent(ctx, bot, "good:image"); err != nil {
+	if _, err := svc.EnsurePresent(ctx, computer, "good:image"); err != nil {
 		t.Fatal(err)
 	}
 	if n, _ := svc.ReconcileOnce(ctx); n != 1 {
 		t.Fatalf("new intent not claimed (%d)", n)
 	}
-	if w := repo.get(bot); w.Observed != ObservedRunning || w.DesiredGeneration != 2 || w.ObservedGeneration != 2 {
+	if w := repo.get(computer); w.Observed != ObservedRunning || w.DesiredGeneration != 2 || w.ObservedGeneration != 2 {
 		t.Fatalf("after new intent: %+v", w)
 	}
 }
@@ -433,14 +479,14 @@ func TestProvisionExhaustsAttempts(t *testing.T) {
 	backend := &fakeBackend{provisionErr: &StepError{Phase: PhaseStart, Retryable: true, Err: errors.New("start failed")}}
 	svc, repo, _, clk := newTestService(t, backend)
 	ctx := context.Background()
-	_, _ = svc.EnsurePresent(ctx, bot, "")
+	_, _ = svc.EnsurePresent(ctx, computer, "")
 	for i := 0; i < 3; i++ {
 		if i > 0 {
 			clk.advance(time.Hour)
 		}
 		_, _ = svc.ReconcileOnce(ctx)
 	}
-	w := repo.get(bot)
+	w := repo.get(computer)
 	if w.Attempts != 3 || w.RetryPending(3) {
 		t.Fatalf("after max attempts: %+v", w)
 	}
@@ -455,7 +501,7 @@ func TestProvisionExhaustsAttempts(t *testing.T) {
 	if n, _ := svc.ReconcileOnce(ctx); n != 1 {
 		t.Fatalf("slow retry not claimed (%d)", n)
 	}
-	if w := repo.get(bot); w.Attempts != 4 || !w.NextAttemptAt.Equal(clk.now().Add(15*time.Minute)) {
+	if w := repo.get(computer); w.Attempts != 4 || !w.NextAttemptAt.Equal(clk.now().Add(15*time.Minute)) {
 		t.Fatalf("after a failed slow retry: %+v", w)
 	}
 }
@@ -466,21 +512,21 @@ func TestReadyWorkspaceIsNeverReplacedOnRetry(t *testing.T) {
 	backend := &fakeBackend{}
 	svc, repo, _, clk := newTestService(t, backend)
 	ctx := context.Background()
-	_, _ = svc.EnsurePresent(ctx, bot, "")
+	_, _ = svc.EnsurePresent(ctx, computer, "")
 	_, _ = svc.ReconcileOnce(ctx)
-	if !repo.get(bot).EverReady {
+	if !repo.get(computer).EverReady {
 		t.Fatal("precondition: workspace should be ready")
 	}
 	backend.provisionErrs = []error{&StepError{Phase: PhaseStart, Retryable: true, Err: errors.New("restart failed")}, nil}
 	// User asks for a rebuild (new generation) on the same workspace.
-	_, _ = svc.EnsurePresent(ctx, bot, "")
+	_, _ = svc.EnsurePresent(ctx, computer, "")
 	_, _ = svc.ReconcileOnce(ctx)
 	clk.advance(time.Minute)
 	_, _ = svc.ReconcileOnce(ctx)
 	if len(backend.teardowns) != 0 {
 		t.Fatalf("a ready workspace was torn down during retry: %v", backend.teardowns)
 	}
-	if w := repo.get(bot); w.Observed != ObservedRunning {
+	if w := repo.get(computer); w.Observed != ObservedRunning {
 		t.Fatalf("after retry: %+v", w)
 	}
 }
@@ -491,7 +537,7 @@ func TestPreservedArchiveBlocksReplacement(t *testing.T) {
 	}}
 	svc, _, _, clk := newTestService(t, backend)
 	ctx := context.Background()
-	_, _ = svc.EnsurePresent(ctx, bot, "")
+	_, _ = svc.EnsurePresent(ctx, computer, "")
 	_, _ = svc.ReconcileOnce(ctx)
 	clk.advance(time.Minute)
 	_, _ = svc.ReconcileOnce(ctx)
@@ -504,13 +550,13 @@ func TestTeardownOnAbsentIntent(t *testing.T) {
 	backend := &fakeBackend{}
 	svc, repo, status, _ := newTestService(t, backend)
 	ctx := context.Background()
-	_, _ = svc.EnsurePresent(ctx, bot, "")
+	_, _ = svc.EnsurePresent(ctx, computer, "")
 	_, _ = svc.ReconcileOnce(ctx)
-	if _, err := svc.RequestAbsent(ctx, bot, true); err != nil {
+	if _, err := svc.RequestAbsent(ctx, computer, true); err != nil {
 		t.Fatal(err)
 	}
 	_, _ = svc.ReconcileOnce(ctx)
-	w := repo.get(bot)
+	w := repo.get(computer)
 	if w.Observed != ObservedAbsent || w.ObservedGeneration != 2 || !w.Settled() {
 		t.Fatalf("after teardown: %+v", w)
 	}
@@ -527,19 +573,19 @@ func TestTeardownRetriesConflicts(t *testing.T) {
 	backend := &fakeBackend{}
 	svc, repo, _, clk := newTestService(t, backend)
 	ctx := context.Background()
-	_, _ = svc.EnsurePresent(ctx, bot, "")
+	_, _ = svc.EnsurePresent(ctx, computer, "")
 	_, _ = svc.ReconcileOnce(ctx)
 	backend.teardownErr = errors.New("operation in flight")
-	_, _ = svc.RequestAbsent(ctx, bot, false)
+	_, _ = svc.RequestAbsent(ctx, computer, false)
 	_, _ = svc.ReconcileOnce(ctx)
-	w := repo.get(bot)
+	w := repo.get(computer)
 	if w.Observed != ObservedRemoving || w.Attempts != 1 || w.LastErrorPhase != PhaseTeardown {
 		t.Fatalf("after failed teardown: %+v", w)
 	}
 	backend.teardownErr = nil
 	clk.advance(time.Minute)
 	_, _ = svc.ReconcileOnce(ctx)
-	if w := repo.get(bot); w.Observed != ObservedAbsent {
+	if w := repo.get(computer); w.Observed != ObservedAbsent {
 		t.Fatalf("teardown did not converge: %+v", w)
 	}
 }
@@ -550,9 +596,9 @@ func TestExpiredLeaseIsTakenOver(t *testing.T) {
 	backend := &fakeBackend{}
 	svc, repo, _, clk := newTestService(t, backend)
 	ctx := context.Background()
-	_, _ = svc.EnsurePresent(ctx, bot, "")
+	_, _ = svc.EnsurePresent(ctx, computer, "")
 	repo.mu.Lock()
-	row := repo.rows[bot]
+	row := repo.rows[computer]
 	row.Observed = ObservedProvisioning
 	row.ObservedGeneration = 1
 	row.LeaseOwner = "dead-instance"
@@ -562,7 +608,7 @@ func TestExpiredLeaseIsTakenOver(t *testing.T) {
 	if n, _ := svc.ReconcileOnce(ctx); n != 1 {
 		t.Fatalf("expired lease not taken over (%d)", n)
 	}
-	if w := repo.get(bot); w.Observed != ObservedRunning || w.LeaseOwner != "" {
+	if w := repo.get(computer); w.Observed != ObservedRunning || w.LeaseOwner != "" {
 		t.Fatalf("after takeover: %+v", w)
 	}
 }
@@ -571,14 +617,14 @@ func TestObserveDetectsDrift(t *testing.T) {
 	backend := &fakeBackend{}
 	svc, repo, _, _ := newTestService(t, backend)
 	ctx := context.Background()
-	_, _ = svc.EnsurePresent(ctx, bot, "")
+	_, _ = svc.EnsurePresent(ctx, computer, "")
 	_, _ = svc.ReconcileOnce(ctx)
 	// The container vanishes behind our back.
 	backend.exists, backend.running = false, false
-	if _, err := svc.Observe(ctx, bot); err != nil {
+	if _, err := svc.Observe(ctx, computer); err != nil {
 		t.Fatal(err)
 	}
-	w := repo.get(bot)
+	w := repo.get(computer)
 	if w.Observed != ObservedAbsent || !w.EverReady {
 		t.Fatalf("drift not recorded: %+v", w)
 	}
@@ -586,7 +632,7 @@ func TestObserveDetectsDrift(t *testing.T) {
 	if n, _ := svc.ReconcileOnce(ctx); n != 1 {
 		t.Fatalf("drifted row not claimed (%d)", n)
 	}
-	if w := repo.get(bot); w.Observed != ObservedRunning {
+	if w := repo.get(computer); w.Observed != ObservedRunning {
 		t.Fatalf("drift not repaired: %+v", w)
 	}
 	if len(backend.teardowns) != 0 {
@@ -598,13 +644,13 @@ func TestObserveRecordsUserStop(t *testing.T) {
 	backend := &fakeBackend{}
 	svc, repo, status, _ := newTestService(t, backend)
 	ctx := context.Background()
-	_, _ = svc.EnsurePresent(ctx, bot, "")
+	_, _ = svc.EnsurePresent(ctx, computer, "")
 	_, _ = svc.ReconcileOnce(ctx)
 	backend.running = false
-	if _, err := svc.Observe(ctx, bot); err != nil {
+	if _, err := svc.Observe(ctx, computer); err != nil {
 		t.Fatal(err)
 	}
-	if w := repo.get(bot); w.Observed != ObservedStopped {
+	if w := repo.get(computer); w.Observed != ObservedStopped {
 		t.Fatalf("stop not observed: %+v", w)
 	}
 	if n, _ := svc.ReconcileOnce(ctx); n != 0 {
@@ -619,16 +665,16 @@ func TestDriftScanRepairsVanishedStoppedWorkspace(t *testing.T) {
 	backend := &fakeBackend{}
 	svc, repo, _, clk := newTestService(t, backend)
 	ctx := context.Background()
-	_, _ = svc.EnsurePresent(ctx, bot, "")
+	_, _ = svc.EnsurePresent(ctx, computer, "")
 	_, _ = svc.ReconcileOnce(ctx)
 
 	// The user stops the workspace; the row settles as stopped and no pass
 	// touches it again.
 	backend.running = false
-	if _, err := svc.Observe(ctx, bot); err != nil {
+	if _, err := svc.Observe(ctx, computer); err != nil {
 		t.Fatal(err)
 	}
-	if w := repo.get(bot); w.Observed != ObservedStopped {
+	if w := repo.get(computer); w.Observed != ObservedStopped {
 		t.Fatalf("stop not observed: %+v", w)
 	}
 
@@ -636,7 +682,7 @@ func TestDriftScanRepairsVanishedStoppedWorkspace(t *testing.T) {
 	// undo the user's stop.
 	clk.advance(svc.opts.DriftInterval + time.Minute)
 	svc.detectDrift(ctx)
-	if w := repo.get(bot); w.Observed != ObservedStopped {
+	if w := repo.get(computer); w.Observed != ObservedStopped {
 		t.Fatalf("scan disturbed a healthy stopped workspace: %+v", w)
 	}
 
@@ -645,13 +691,13 @@ func TestDriftScanRepairsVanishedStoppedWorkspace(t *testing.T) {
 	backend.exists = false
 	clk.advance(svc.opts.DriftInterval + time.Minute)
 	svc.detectDrift(ctx)
-	if w := repo.get(bot); w.Observed != ObservedAbsent {
+	if w := repo.get(computer); w.Observed != ObservedAbsent {
 		t.Fatalf("drift on a stopped workspace not recorded: %+v", w)
 	}
 	if n, _ := svc.ReconcileOnce(ctx); n != 1 {
 		t.Fatalf("drifted row not claimed (%d)", n)
 	}
-	if w := repo.get(bot); w.Observed != ObservedRunning {
+	if w := repo.get(computer); w.Observed != ObservedRunning {
 		t.Fatalf("drift not repaired: %+v", w)
 	}
 	if len(backend.teardowns) != 0 {
@@ -676,10 +722,10 @@ func TestFailureStoresCodeNotText(t *testing.T) {
 			backend := &fakeBackend{provisionErr: &StepError{Phase: PhaseImagePrepare, Err: tt.err}}
 			svc, repo, _, _ := newTestService(t, backend)
 			ctx := context.Background()
-			_, _ = svc.EnsurePresent(ctx, bot, "img:1")
+			_, _ = svc.EnsurePresent(ctx, computer, "img:1")
 			_, _ = svc.ReconcileOnce(ctx)
 
-			got := repo.get(bot)
+			got := repo.get(computer)
 			if got.LastErrorCode != tt.want || got.LastErrorPhase != PhaseImagePrepare {
 				t.Fatalf("code/phase = %q/%q, want %q/%q", got.LastErrorCode, got.LastErrorPhase, tt.want, PhaseImagePrepare)
 			}
@@ -716,11 +762,11 @@ func TestAwaitAndSubscribe(t *testing.T) {
 	svc, _, _, _ := newTestService(t, backend)
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	events, unsub := svc.Subscribe(bot)
+	events, unsub := svc.Subscribe(computer)
 	defer unsub()
-	w, _ := svc.EnsurePresent(ctx, bot, "")
+	w, _ := svc.EnsurePresent(ctx, computer, "")
 	go func() { _, _ = svc.ReconcileOnce(ctx) }()
-	final, err := svc.Await(ctx, bot, w.DesiredGeneration)
+	final, err := svc.Await(ctx, computer, w.DesiredGeneration)
 	if err != nil || final.Observed != ObservedRunning {
 		t.Fatalf("Await() = %+v, %v", final, err)
 	}
@@ -809,15 +855,15 @@ func TestAwaitWaitsThroughRetryableFailure(t *testing.T) {
 	svc, repo, _, clk := newTestService(t, backend)
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	w, _ := svc.EnsurePresent(ctx, bot, "")
+	w, _ := svc.EnsurePresent(ctx, computer, "")
 
 	_, _ = svc.ReconcileOnce(ctx)
-	if got := repo.get(bot); !got.RetryPending(3) {
+	if got := repo.get(computer); !got.RetryPending(3) {
 		t.Fatalf("precondition: expected a pending retry, got %+v", got)
 	}
 	awaited := make(chan Workspace, 1)
 	go func() {
-		final, err := svc.Await(ctx, bot, w.DesiredGeneration)
+		final, err := svc.Await(ctx, computer, w.DesiredGeneration)
 		if err != nil {
 			t.Errorf("Await() error = %v", err)
 		}
@@ -845,9 +891,9 @@ func TestAwaitReturnsNonRetryableFailure(t *testing.T) {
 	svc, _, _, _ := newTestService(t, backend)
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	w, _ := svc.EnsurePresent(ctx, bot, "bad:image")
+	w, _ := svc.EnsurePresent(ctx, computer, "bad:image")
 	_, _ = svc.ReconcileOnce(ctx)
-	final, err := svc.Await(ctx, bot, w.DesiredGeneration)
+	final, err := svc.Await(ctx, computer, w.DesiredGeneration)
 	if err != nil || final.Observed != ObservedFailed || final.RetryPending(3) {
 		t.Fatalf("Await() = %+v, %v; want the failure without a fast retry pending", final, err)
 	}
@@ -863,14 +909,14 @@ func TestRetryReplacesContainerBuiltFromOtherImagePreservingData(t *testing.T) {
 	}}
 	svc, repo, _, clk := newTestService(t, backend)
 	ctx := context.Background()
-	_, _ = svc.EnsurePresent(ctx, bot, "img:old")
+	_, _ = svc.EnsurePresent(ctx, computer, "img:old")
 	_, _ = svc.ReconcileOnce(ctx)
 	// Simulate the container the failed attempt left behind.
 	backend.exists, backend.image = true, "img:old"
-	if repo.get(bot).EverReady {
+	if repo.get(computer).EverReady {
 		t.Fatal("precondition: workspace must never have been ready")
 	}
-	if _, err := svc.EnsurePresent(ctx, bot, "img:new"); err != nil {
+	if _, err := svc.EnsurePresent(ctx, computer, "img:new"); err != nil {
 		t.Fatal(err)
 	}
 	clk.advance(time.Minute)
@@ -878,7 +924,7 @@ func TestRetryReplacesContainerBuiltFromOtherImagePreservingData(t *testing.T) {
 	if len(backend.teardowns) != 1 || !backend.teardowns[0] {
 		t.Fatalf("teardowns = %v, want exactly one preserving teardown", backend.teardowns)
 	}
-	if w := repo.get(bot); w.Observed != ObservedRunning || backend.image != "img:new" {
+	if w := repo.get(computer); w.Observed != ObservedRunning || backend.image != "img:new" {
 		t.Fatalf("after retry: %+v image=%s", w, backend.image)
 	}
 }
@@ -890,7 +936,7 @@ func TestRetryReusesContainerBuiltFromSameImage(t *testing.T) {
 	}}
 	svc, repo, _, clk := newTestService(t, backend)
 	ctx := context.Background()
-	_, _ = svc.EnsurePresent(ctx, bot, "img:same")
+	_, _ = svc.EnsurePresent(ctx, computer, "img:same")
 	_, _ = svc.ReconcileOnce(ctx)
 	backend.exists, backend.image = true, "img:same"
 	clk.advance(time.Minute)
@@ -898,7 +944,7 @@ func TestRetryReusesContainerBuiltFromSameImage(t *testing.T) {
 	if len(backend.teardowns) != 0 {
 		t.Fatalf("same image must be reused, got teardowns %v", backend.teardowns)
 	}
-	if w := repo.get(bot); w.Observed != ObservedRunning {
+	if w := repo.get(computer); w.Observed != ObservedRunning {
 		t.Fatalf("after retry: %+v", w)
 	}
 }
@@ -910,11 +956,11 @@ func TestAbsentIntentOnUnknownBotStillTearsDown(t *testing.T) {
 	backend := &fakeBackend{exists: true, running: true}
 	svc, repo, _, _ := newTestService(t, backend)
 	ctx := context.Background()
-	w, err := svc.RequestAbsent(ctx, bot, false)
+	w, err := svc.RequestAbsent(ctx, computer, false)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := repo.get(bot); got.Observed != ObservedAbsent || got.ObservedGeneration != 0 {
+	if got := repo.get(computer); got.Observed != ObservedAbsent || got.ObservedGeneration != 0 {
 		t.Fatalf("precondition: fresh row should carry the default observation, got %+v", got)
 	}
 	if n, _ := svc.ReconcileOnce(ctx); n != 1 {
@@ -923,7 +969,7 @@ func TestAbsentIntentOnUnknownBotStillTearsDown(t *testing.T) {
 	if len(backend.teardowns) != 1 {
 		t.Fatalf("teardowns = %v, want one", backend.teardowns)
 	}
-	final := repo.get(bot)
+	final := repo.get(computer)
 	if final.Observed != ObservedAbsent || final.ObservedGeneration != w.DesiredGeneration || !final.Settled() {
 		t.Fatalf("after teardown: %+v", final)
 	}
@@ -975,7 +1021,7 @@ func TestStaleClaimantNeverTouchesBackend(t *testing.T) {
 	backend := &fakeBackend{exists: true, image: "img:old"}
 	svc, repo, _, _ := newTestService(t, backend)
 	ctx := context.Background()
-	_, _ = svc.EnsurePresent(ctx, bot, "img:new")
+	_, _ = svc.EnsurePresent(ctx, computer, "img:new")
 	repo.beforeWrite = func(w *Workspace) {
 		w.LeaseOwner = "other-instance"
 		w.Version++
@@ -995,16 +1041,16 @@ func TestObserveAfterManualStartRecoversFailedBot(t *testing.T) {
 	backend := &fakeBackend{provisionErr: &StepError{Phase: PhaseImagePrepare, Retryable: false, Err: errors.New("pull denied")}}
 	svc, repo, status, _ := newTestService(t, backend)
 	ctx := context.Background()
-	_, _ = svc.EnsurePresent(ctx, bot, "bad:image")
+	_, _ = svc.EnsurePresent(ctx, computer, "bad:image")
 	_, _ = svc.ReconcileOnce(ctx)
 	if status.get(bot) != BotStatusFailed {
 		t.Fatalf("precondition: bot status = %q, want failed", status.get(bot))
 	}
 	backend.exists, backend.running = true, true
-	if _, err := svc.Observe(ctx, bot); err != nil {
+	if _, err := svc.Observe(ctx, computer); err != nil {
 		t.Fatal(err)
 	}
-	w := repo.get(bot)
+	w := repo.get(computer)
 	if w.Observed != ObservedRunning || !w.EverReady || w.Attempts != 0 {
 		t.Fatalf("after observe: %+v", w)
 	}
@@ -1020,18 +1066,18 @@ func TestAwaitReturnsExhaustedTeardownFailure(t *testing.T) {
 	svc, repo, _, clk := newTestService(t, backend)
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	_, _ = svc.EnsurePresent(ctx, bot, "")
+	_, _ = svc.EnsurePresent(ctx, computer, "")
 	_, _ = svc.ReconcileOnce(ctx)
 	backend.teardownErr = errors.New("provider refuses")
-	w, _ := svc.RequestAbsent(ctx, bot, false)
+	w, _ := svc.RequestAbsent(ctx, computer, false)
 	for i := 0; i < 3; i++ { // MaxAttempts in newTestService
 		_, _ = svc.ReconcileOnce(ctx)
 		clk.advance(time.Hour)
 	}
-	if got := repo.get(bot); got.Observed != ObservedFailed || got.LastErrorPhase != PhaseTeardown {
+	if got := repo.get(computer); got.Observed != ObservedFailed || got.LastErrorPhase != PhaseTeardown {
 		t.Fatalf("precondition: teardown should be recorded as failed, got %+v", got)
 	}
-	final, err := svc.Await(ctx, bot, w.DesiredGeneration)
+	final, err := svc.Await(ctx, computer, w.DesiredGeneration)
 	if err != nil || final.Observed != ObservedFailed || final.Desired != DesiredAbsent {
 		t.Fatalf("Await() = %+v, %v; want the teardown failure", final, err)
 	}
@@ -1042,10 +1088,10 @@ func TestAwaitReturnsExhaustedTeardownFailure(t *testing.T) {
 func failRemoval(t *testing.T, svc *Service, backend *fakeBackend, clk *clock) {
 	t.Helper()
 	ctx := context.Background()
-	_, _ = svc.EnsurePresent(ctx, bot, "")
+	_, _ = svc.EnsurePresent(ctx, computer, "")
 	_, _ = svc.ReconcileOnce(ctx)
 	backend.teardownErr = errors.New("provider refuses")
-	_, _ = svc.RequestAbsent(ctx, bot, true)
+	_, _ = svc.RequestAbsent(ctx, computer, true)
 	for i := 0; i < 3; i++ { // MaxAttempts in newTestService
 		_, _ = svc.ReconcileOnce(ctx)
 		clk.advance(time.Hour)
@@ -1062,19 +1108,19 @@ func TestFailedRemovalWaitsForTheUser(t *testing.T) {
 	// Neither time nor a user-driven start brings the removal back.
 	clk.advance(24 * time.Hour)
 	_, _ = svc.ReconcileOnce(ctx)
-	if _, err := svc.Observe(ctx, bot); err != nil {
+	if _, err := svc.Observe(ctx, computer); err != nil {
 		t.Fatal(err)
 	}
 	_, _ = svc.ReconcileOnce(ctx)
-	w := repo.get(bot)
+	w := repo.get(computer)
 	if len(backend.teardowns) != attempts || w.RemovalState() != RemovalFailed || w.LastErrorCode == "" {
 		t.Fatalf("failed removal was touched: teardowns %d -> %d, %+v", attempts, len(backend.teardowns), w)
 	}
 
 	backend.teardownErr = nil
-	_, _ = svc.RequestAbsent(ctx, bot, true)
+	_, _ = svc.RequestAbsent(ctx, computer, true)
 	_, _ = svc.ReconcileOnce(ctx)
-	if w := repo.get(bot); w.Observed != ObservedAbsent || w.RemovalState() != "" {
+	if w := repo.get(computer); w.Observed != ObservedAbsent || w.RemovalState() != "" {
 		t.Fatalf("a new intent should retry the removal: %+v", w)
 	}
 }
@@ -1084,12 +1130,12 @@ func TestRemovalOfVanishedWorkspaceKeepsCleaningUp(t *testing.T) {
 	svc, repo, _, clk := newTestService(t, backend)
 	failRemoval(t, svc, backend, clk)
 	backend.exists, backend.running = false, false
-	_, _ = svc.RequestAbsent(context.Background(), bot, false)
+	_, _ = svc.RequestAbsent(context.Background(), computer, false)
 	for i := 0; i < 5; i++ {
 		_, _ = svc.ReconcileOnce(context.Background())
 		clk.advance(time.Hour)
 	}
-	if w := repo.get(bot); w.RemovalState() != RemovalRemoving || len(backend.teardowns) != 8 {
+	if w := repo.get(computer); w.RemovalState() != RemovalRemoving || len(backend.teardowns) != 8 {
 		t.Fatalf("leftovers of a vanished workspace should be retried past the fast budget: %+v, %d teardowns", w, len(backend.teardowns))
 	}
 }
@@ -1098,12 +1144,12 @@ func TestNonRetryableRemovalFailsAtOnce(t *testing.T) {
 	backend := &fakeBackend{}
 	svc, repo, _, _ := newTestService(t, backend)
 	ctx := context.Background()
-	_, _ = svc.EnsurePresent(ctx, bot, "")
+	_, _ = svc.EnsurePresent(ctx, computer, "")
 	_, _ = svc.ReconcileOnce(ctx)
 	backend.teardownErr = &StepError{Phase: PhaseTeardown, Err: errors.New("too many files")}
-	_, _ = svc.RequestAbsent(ctx, bot, true)
+	_, _ = svc.RequestAbsent(ctx, computer, true)
 	_, _ = svc.ReconcileOnce(ctx)
-	w := repo.get(bot)
+	w := repo.get(computer)
 	if w.RemovalState() != RemovalFailed || w.LastError != "" || w.LastErrorCode != string(apperror.CodeWorkspaceTeardownFailed) || !w.Final(svc.opts.MaxAttempts) {
 		t.Fatalf("after one failed export: %+v", w)
 	}
@@ -1115,13 +1161,13 @@ func TestCancelRemoval(t *testing.T) {
 	ctx := context.Background()
 	failRemoval(t, svc, backend, clk)
 	teardowns, provisions := len(backend.teardowns), backend.provisions
-	if err := svc.CancelRemoval(ctx, bot); err != nil {
+	if err := svc.CancelRemoval(ctx, computer); err != nil {
 		t.Fatal(err)
 	}
 	_, _ = svc.ReconcileOnce(ctx)
 	clk.advance(24 * time.Hour)
 	_, _ = svc.ReconcileOnce(ctx)
-	w := repo.get(bot)
+	w := repo.get(computer)
 	if w.Desired != DesiredPresent || w.Observed != ObservedRunning || w.LastError != "" || !w.Settled() {
 		t.Fatalf("after cancel: %+v", w)
 	}
@@ -1132,12 +1178,12 @@ func TestCancelRemoval(t *testing.T) {
 	}
 
 	// A removal still in flight is not withdrawn.
-	_, _ = svc.RequestAbsent(ctx, bot, true)
+	_, _ = svc.RequestAbsent(ctx, computer, true)
 	_, _ = svc.ReconcileOnce(ctx)
-	if err := svc.CancelRemoval(ctx, bot); err != nil {
+	if err := svc.CancelRemoval(ctx, computer); err != nil {
 		t.Fatal(err)
 	}
-	if w := repo.get(bot); w.RemovalState() != RemovalRemoving {
+	if w := repo.get(computer); w.RemovalState() != RemovalRemoving {
 		t.Fatalf("cancel during a removal: %+v", w)
 	}
 }

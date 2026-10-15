@@ -92,44 +92,53 @@ CREATE POLICY bot_workspaces_team_delete ON public.bot_workspaces
 -- committing.
 ALTER TABLE public.bots NO FORCE ROW LEVEL SECURITY;
 ALTER TABLE public.bots DISABLE ROW LEVEL SECURITY;
-ALTER TABLE public.containers NO FORCE ROW LEVEL SECURITY;
-ALTER TABLE public.containers DISABLE ROW LEVEL SECURITY;
+ALTER TABLE IF EXISTS public.containers NO FORCE ROW LEVEL SECURITY;
+ALTER TABLE IF EXISTS public.containers DISABLE ROW LEVEL SECURITY;
 ALTER TABLE public.bot_workspaces NO FORCE ROW LEVEL SECURITY;
 ALTER TABLE public.bot_workspaces DISABLE ROW LEVEL SECURITY;
 
-INSERT INTO public.bot_workspaces (
-    bot_id, team_id, desired_state, desired_generation, image,
-    observed_state, observed_generation, ever_ready, next_attempt_at
-)
-SELECT
-    b.id,
-    b.team_id,
-    CASE WHEN c.bot_id IS NOT NULL OR b.status = 'creating' THEN 'present' ELSE 'absent' END,
-    1,
-    COALESCE(c.image, b.metadata->'workspace'->>'image', ''),
-    CASE
-        WHEN c.bot_id IS NULL THEN 'absent'
-        WHEN c.status = 'running' THEN 'running'
-        ELSE 'stopped'
-    END,
-    CASE WHEN c.bot_id IS NOT NULL OR b.status <> 'creating' THEN 1 ELSE 0 END,
-    c.bot_id IS NOT NULL,
-    now()
-FROM public.bots b
-LEFT JOIN LATERAL (
-    SELECT bot_id, status, image
-    FROM public.containers
-    WHERE containers.bot_id = b.id
-    ORDER BY updated_at DESC
-    LIMIT 1
-) c ON true
-WHERE b.status <> 'deleting'
-ON CONFLICT (bot_id) DO NOTHING;
+-- containers is referenced only when it exists: a fresh install built from a
+-- 0001 that post-dates 0168 has no containers table (its record lives in
+-- managed_computers) and nothing to backfill here.
+DO $$
+BEGIN
+    IF to_regclass('public.containers') IS NOT NULL THEN
+    INSERT INTO public.bot_workspaces (
+        bot_id, team_id, desired_state, desired_generation, image,
+        observed_state, observed_generation, ever_ready, next_attempt_at
+    )
+    SELECT
+        b.id,
+        b.team_id,
+        CASE WHEN c.bot_id IS NOT NULL OR b.status = 'creating' THEN 'present' ELSE 'absent' END,
+        1,
+        COALESCE(c.image, b.metadata->'workspace'->>'image', ''),
+        CASE
+            WHEN c.bot_id IS NULL THEN 'absent'
+            WHEN c.status = 'running' THEN 'running'
+            ELSE 'stopped'
+        END,
+        CASE WHEN c.bot_id IS NOT NULL OR b.status <> 'creating' THEN 1 ELSE 0 END,
+        c.bot_id IS NOT NULL,
+        now()
+    FROM public.bots b
+    LEFT JOIN LATERAL (
+        SELECT bot_id, status, image
+        FROM public.containers
+        WHERE containers.bot_id = b.id
+        ORDER BY updated_at DESC
+        LIMIT 1
+    ) c ON true
+    WHERE b.status <> 'deleting'
+    ON CONFLICT (bot_id) DO NOTHING;
+    END IF;
+END
+$$;
 
 ALTER TABLE public.bot_workspaces ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.bot_workspaces FORCE ROW LEVEL SECURITY;
-ALTER TABLE public.containers ENABLE ROW LEVEL SECURITY;
-ALTER TABLE public.containers FORCE ROW LEVEL SECURITY;
+ALTER TABLE IF EXISTS public.containers ENABLE ROW LEVEL SECURITY;
+ALTER TABLE IF EXISTS public.containers FORCE ROW LEVEL SECURITY;
 ALTER TABLE public.bots ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.bots FORCE ROW LEVEL SECURITY;
 
