@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import { createDisplayKeyboard } from './display-keyboard'
+import { createDisplayInput } from './display-input'
 
 function key(key: string, modifiers: Partial<KeyboardEvent> = {}) {
   return { key, ctrlKey: false, metaKey: false, altKey: false, shiftKey: false, repeat: false, preventDefault: vi.fn(), ...modifiers }
@@ -155,5 +156,28 @@ describe('remote desktop editing keys', () => {
     const count = send.mock.calls.length
     keyboard.keydown(key('Backspace', { repeat: true }))
     expect(send).toHaveBeenCalledTimes(count)
+  })
+})
+
+
+describe('keyboard with clipboard input barrier', () => {
+  it('restores a physically held modifier after the barrier releases remote keys', async () => {
+    const remote = new Set<number>()
+    const input = createDisplayInput(event => {
+      if (event.type !== 'key') return
+      if (event.down) remote.add(event.keysym as number)
+      else remote.delete(event.keysym as number)
+    }, () => keyboard.reset())
+    const keyboard = createDisplayKeyboard({ mac: false, active: () => true, send: input.input, copy() {}, pasteShortcut() {} })
+    keyboard.keydown(key('Control', { ctrlKey: true }))
+    const sync = Promise.resolve(false)
+    input.waitForClipboard(sync)
+    input.input({ type: 'pointer', button_mask: 1 })
+    input.input({ type: 'pointer', button_mask: 0 })
+    await sync
+    expect(remote.has(0xffe3)).toBe(false)
+    keyboard.keydown(key('a', { ctrlKey: true }))
+    expect(remote.has(0xffe3)).toBe(true)
+    expect(remote.has(97)).toBe(true)
   })
 })

@@ -314,6 +314,7 @@ watch(viewing, (active) => {
 }, { flush: 'sync' })
 
 function releaseKeyboard() {
+  orderedInput.cancel()
   keyboard.release()
   pasteWithShift = false
 }
