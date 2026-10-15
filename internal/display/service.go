@@ -1625,7 +1625,10 @@ func (w processLogWriter) Write(p []byte) (int, error) {
 
 type rfbInputClient struct {
 	mu        sync.Mutex
-	conn      net.Conn
+	conn      net.Conn // Immutable after construction; Close must interrupt writes holding mu.
+	closeOnce sync.Once
+	closeErr  error
+	closed    bool // Guarded by mu.
 	clipboard *rfbClipboard
 }
 
@@ -1639,20 +1642,23 @@ func newRFBInputClient(conn net.Conn) (*rfbInputClient, error) {
 }
 
 func (c *rfbInputClient) Close() error {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if c.conn == nil {
-		return nil
-	}
-	err := c.conn.Close()
-	c.conn = nil
-	return err
+	c.closeOnce.Do(func() {
+		// net.Conn permits concurrent Close and Write. Interrupt I/O before
+		// taking mu, which a blocked input write may still hold.
+		if c.conn != nil {
+			c.closeErr = c.conn.Close()
+		}
+		c.mu.Lock()
+		c.closed = true
+		c.mu.Unlock()
+	})
+	return c.closeErr
 }
 
 func (c *rfbInputClient) Pointer(x, y int, buttonMask uint8) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if c.conn == nil {
+	if c.closed || c.conn == nil {
 		return net.ErrClosed
 	}
 	msg := []byte{5, buttonMask, 0, 0, 0, 0}
@@ -1669,7 +1675,7 @@ func (c *rfbInputClient) Key(keysym uint32, down bool) error {
 }
 
 func (c *rfbInputClient) keyLocked(keysym uint32, down bool) error {
-	if c.conn == nil {
+	if c.closed || c.conn == nil {
 		return net.ErrClosed
 	}
 	msg := []byte{4, 0, 0, 0, 0, 0, 0, 0}

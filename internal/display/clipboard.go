@@ -48,9 +48,7 @@ func (c *rfbInputClient) startClipboard(onText func(string), onError func(error)
 	conn := c.conn
 	go func() {
 		if err := c.readClipboard(conn, onText, onError); err != nil {
-			// Close the underlying stream before taking the write lock, so a
-			// pending write cannot prevent connection cleanup indefinitely.
-			_ = conn.Close()
+			// Close interrupts any concurrent input write before taking its lock.
 			_ = c.Close()
 			onDisconnect(err)
 		}
@@ -134,7 +132,7 @@ func (c *rfbInputClient) handleExtendedClipboard(data []byte) (string, bool, err
 	flags := binary.BigEndian.Uint32(data)
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if c.conn == nil {
+	if c.closed || c.conn == nil {
 		return "", false, io.ErrClosedPipe
 	}
 	if flags&clipboardCaps != 0 {
@@ -246,7 +244,7 @@ func (c *rfbInputClient) SetClipboardText(text string) error {
 }
 
 func (c *rfbInputClient) setClipboardLocked(text string) error {
-	if c.conn == nil || c.clipboard == nil {
+	if c.closed || c.conn == nil || c.clipboard == nil {
 		return errors.New("clipboard unavailable")
 	}
 	if c.clipboard.extended {
