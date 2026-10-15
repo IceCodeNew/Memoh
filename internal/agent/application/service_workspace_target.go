@@ -83,22 +83,56 @@ func (s *Service) prepareWorkspaceRequest(ctx context.Context, req ChatRequest) 
 		}
 		return ctx, req, nil
 	}
+	if prior := req.WorkspaceTarget; prior != nil && bridge.WorkspaceUnavailableFromContext(ctx) &&
+		(requestedTargetID == "" || requestedTargetID == strings.TrimSpace(prior.TargetID)) {
+		// An earlier stage of this turn resolved the target and found the
+		// workspace unavailable; resolving again would only wait for it once
+		// more. The identity it recorded is kept.
+		req.WorkspaceTargetID = strings.TrimSpace(prior.TargetID)
+		return s.withPreparedWorkspaceTarget(ctx, req, *prior), req, nil
+	}
 	resolved, err := s.resolveTurnWorkspaceTarget(ctx, req.BotID, requestedTargetID)
 	if err != nil {
 		return ctx, req, err
 	}
-	req.WorkspaceTargetID = strings.TrimSpace(resolved.TargetID)
-	req.WorkspaceTarget = &WorkspaceTarget{
+	target := WorkspaceTarget{
 		TargetID: strings.TrimSpace(resolved.TargetID),
 		Kind:     strings.TrimSpace(resolved.Kind),
 		Name:     strings.TrimSpace(resolved.Name),
 	}
-	ctx = workspace.WithWorkspaceTarget(ctx, req.WorkspaceTargetID)
-	ctx = context.WithValue(ctx, preparedWorkspaceTargetKey{}, *req.WorkspaceTarget)
-	return ctx, req, nil
+	req.WorkspaceTargetID = target.TargetID
+	req.WorkspaceTarget = &target
+	return s.withPreparedWorkspaceTarget(ctx, req, target), req, nil
+}
+
+func (*Service) withPreparedWorkspaceTarget(ctx context.Context, req ChatRequest, target WorkspaceTarget) context.Context {
+	ctx = workspace.WithWorkspaceTarget(ctx, target.TargetID)
+	return context.WithValue(ctx, preparedWorkspaceTargetKey{}, preparedWorkspaceTarget{
+		WorkspaceTarget: target,
+		botID:           strings.TrimSpace(req.BotID),
+		sessionID:       strings.TrimSpace(req.ThreadID),
+	})
 }
 
 type preparedWorkspaceTargetKey struct{}
+
+// preparedWorkspaceTarget is the target a turn resolved up front, recorded
+// with the bot and session it belongs to: the context value outlives the
+// turn through derived contexts, so a run config built for another bot or
+// session must not adopt it.
+type preparedWorkspaceTarget struct {
+	WorkspaceTarget
+	botID     string
+	sessionID string
+}
+
+func preparedWorkspaceTargetFromContext(ctx context.Context, botID, sessionID string) (WorkspaceTarget, bool) {
+	prepared, ok := ctx.Value(preparedWorkspaceTargetKey{}).(preparedWorkspaceTarget)
+	if !ok || prepared.botID != strings.TrimSpace(botID) || prepared.sessionID != strings.TrimSpace(sessionID) {
+		return WorkspaceTarget{}, false
+	}
+	return prepared.WorkspaceTarget, true
+}
 
 // resolveTurnWorkspaceTarget resolves the workspace target of a chat turn
 // within the auxiliary timeout. A known target whose runtime is not ready or

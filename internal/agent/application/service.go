@@ -1044,7 +1044,7 @@ func (s *Service) buildBaseRunConfig(ctx context.Context, p baseRunConfigParams)
 		// including its error path when the target is unreachable.
 		ctx = workspace.WithWorkspaceTarget(ctx, bound.TargetID)
 	}
-	if prepared, ok := ctx.Value(preparedWorkspaceTargetKey{}).(WorkspaceTarget); ok {
+	if prepared, ok := preparedWorkspaceTargetFromContext(ctx, p.BotID, p.SessionID); ok {
 		// The turn already resolved its target; resolving again would wait
 		// on a workspace the turn has found unavailable.
 		cfg.Identity.WorkspaceTargetID = prepared.TargetID
@@ -1473,7 +1473,7 @@ func (s *Service) ResolveRunConfig(ctx context.Context, botID, sessionID, channe
 // prepareRunConfig generates the system prompt and appends the user message.
 func (s *Service) prepareRunConfig(ctx context.Context, cfg native.RunConfig) native.RunConfig {
 	cfg.ContextHookText = ""
-	beforePromptResult := s.runPromptHook(ctx, agentRunConfigView{
+	beforePromptResult, hooksUnavailable := s.runPromptHook(ctx, agentRunConfigView{
 		BotID:        cfg.Identity.BotID,
 		SessionID:    cfg.Identity.SessionID,
 		ChatID:       cfg.Identity.ChatID,
@@ -1515,9 +1515,16 @@ func (s *Service) prepareRunConfig(ctx context.Context, cfg native.RunConfig) na
 			files[i].LoadStatus = ""
 		}
 		cfg.SupportsToolCall = false
-	} else if s.hooksConfigUnavailable(ctx, cfg.Identity.BotID) {
+	} else if hooksUnavailable {
+		// The prompt hook above already found the configuration unreadable;
+		// the policy it would enforce is unknown, so the turn runs no tools.
 		loadNotices = append(loadNotices, native.HooksUnavailableNotice)
 		cfg.SupportsToolCall = false
+	}
+	if !cfg.SupportsToolCall {
+		// A request without tools must not carry tool blocks from earlier
+		// turns; replay them as text instead.
+		cfg.Messages = textOnlyMessages(cfg.Messages)
 	}
 	systemParams := native.SystemPromptParams{
 		SessionType:               cfg.SessionType,
@@ -1538,7 +1545,7 @@ func (s *Service) prepareRunConfig(ctx context.Context, cfg native.RunConfig) na
 	}
 	beforePromptObservedTexts := append([]string(nil), promptHookTexts...)
 	beforePromptObservedTexts = append(beforePromptObservedTexts, hookSystemSectionTexts(beforePromptResult)...)
-	afterPromptResult := s.runPromptHook(ctx, agentRunConfigView{
+	afterPromptResult, _ := s.runPromptHook(ctx, agentRunConfigView{
 		BotID:        cfg.Identity.BotID,
 		SessionID:    cfg.Identity.SessionID,
 		ChatID:       cfg.Identity.ChatID,

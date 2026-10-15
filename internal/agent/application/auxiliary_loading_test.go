@@ -8,6 +8,8 @@ import (
 	"sync/atomic"
 	"testing"
 
+	sdk "github.com/felinics/twilight/sdk"
+
 	"github.com/felinics/memoh/internal/agent/runtime/native"
 	"github.com/felinics/memoh/internal/hooks"
 	"github.com/felinics/memoh/internal/workspace"
@@ -166,5 +168,77 @@ func TestHookEventsShareOneWorkspaceDescriptionPerTurn(t *testing.T) {
 	}
 	if got := provider.calls.Load(); got != 1 {
 		t.Fatalf("an unavailable workspace was described: calls = %d", got)
+	}
+}
+
+// A turn that runs without tools must not send tool blocks from earlier
+// turns: providers reject them when no tools are defined. The history is
+// replayed as text with the same number of messages.
+func TestDegradedTurnReplaysToolHistoryAsText(t *testing.T) {
+	s := &Service{workspaceTargets: stubWorkspaceTargets{
+		target: nativeTarget,
+		err:    fmt.Errorf("%w: %w", workspace.ErrCapabilityUnavailable, bridge.ErrUnavailable),
+	}}
+	ctx, _, err := s.prepareWorkspaceRequest(t.Context(), ChatRequest{BotID: "bot-1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	history := []sdk.Message{
+		sdk.UserMessage("list the files"),
+		{Role: sdk.MessageRoleAssistant, Content: []sdk.MessagePart{
+			sdk.TextPart{Text: "Listing."},
+			sdk.ToolCallPart{ToolCallID: "call-1", ToolName: "exec", Input: sdk.ParseToolArguments(`{"command":"ls"}`)},
+		}},
+		sdk.ToolMessage(sdk.ToolResultPart{ToolCallID: "call-1", ToolName: "exec", Result: sdk.TextOutput("a.txt")}),
+		sdk.UserMessage("thanks"),
+	}
+	cfg := s.prepareRunConfig(ctx, native.RunConfig{SupportsToolCall: true, Messages: history, Identity: native.SessionContext{BotID: "bot-1"}})
+	if cfg.SupportsToolCall || len(cfg.Messages) != len(history) {
+		t.Fatalf("SupportsToolCall=%v messages=%d, want tools disabled and %d messages", cfg.SupportsToolCall, len(cfg.Messages), len(history))
+	}
+	for i, msg := range cfg.Messages {
+		if msg.Role == sdk.MessageRoleTool || hasToolParts(msg.Content) {
+			t.Fatalf("message %d still carries tool blocks: %+v", i, msg)
+		}
+	}
+	if text := cfg.Messages[2].Content[0].(sdk.TextPart).Text; !strings.Contains(text, "exec") || !strings.Contains(text, "a.txt") {
+		t.Fatalf("tool result lost in text replay: %q", text)
+	}
+	if got := textOnlyMessages(history[:1]); &got[0] != &history[0] {
+		t.Fatal("a history without tool blocks was copied")
+	}
+
+	healthy := (&Service{}).prepareRunConfig(hooks.WithAuxiliaryTurn(t.Context()), native.RunConfig{SupportsToolCall: true, Messages: history, Identity: native.SessionContext{BotID: "bot-1"}})
+	if !healthy.SupportsToolCall || !hasToolParts(healthy.Messages[1].Content) {
+		t.Fatal("a healthy turn had its tool history rewritten")
+	}
+}
+
+// When an earlier stage of the turn already resolved the target and found
+// the workspace unavailable, preparing the request again keeps that identity
+// instead of waiting on the workspace once more.
+func TestAlreadyUnavailableTurnReusesResolvedTarget(t *testing.T) {
+	calls := 0
+	s := &Service{workspaceTargets: stubWorkspaceTargets{target: nativeTarget, calls: &calls}}
+	ctx := hooks.WithAuxiliaryTurn(t.Context())
+	bridge.MarkWorkspaceUnavailable(ctx)
+	prior := &WorkspaceTarget{TargetID: workspace.WorkspaceTargetNative, Kind: workspace.WorkspaceTargetNative, Name: "Server Workspace"}
+	ctx, req, err := s.prepareWorkspaceRequest(ctx, ChatRequest{BotID: "bot-1", ThreadID: "sess-1", WorkspaceTarget: prior})
+	if err != nil || calls != 0 || req.WorkspaceTargetID != workspace.WorkspaceTargetNative {
+		t.Fatalf("err=%v calls=%d req=%+v, want the recorded target reused without resolving", err, calls, req)
+	}
+	if prepared, ok := preparedWorkspaceTargetFromContext(ctx, "bot-1", "sess-1"); !ok || prepared.TargetID != workspace.WorkspaceTargetNative {
+		t.Fatalf("prepared target = %+v, %v", prepared, ok)
+	}
+	// The prepared target belongs to its bot and session only.
+	if _, ok := preparedWorkspaceTargetFromContext(ctx, "bot-2", "sess-1"); ok {
+		t.Fatal("another bot adopted the prepared target")
+	}
+	if _, ok := preparedWorkspaceTargetFromContext(ctx, "bot-1", "sess-2"); ok {
+		t.Fatal("another session adopted the prepared target")
+	}
+	// A different explicit target is still resolved.
+	if _, _, err := s.prepareWorkspaceRequest(ctx, ChatRequest{BotID: "bot-1", UserID: "u", WorkspaceTarget: prior, WorkspaceTargetID: "other"}); err == nil && calls == 0 {
+		t.Fatal("an explicit different target skipped resolution")
 	}
 }

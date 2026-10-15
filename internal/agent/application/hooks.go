@@ -54,7 +54,10 @@ func (s *Service) applyUserMessageHook(ctx context.Context, req ChatRequest) (Ch
 	return req, nil
 }
 
-func (s *Service) runPromptHook(ctx context.Context, cfg agentRunConfigView, eventName string) hooks.Result {
+// runPromptHook runs a prompt-build hook event. A failure never blocks the
+// turn; the second result reports that the hooks configuration could not be
+// loaded, so the caller knows the turn must run without tools.
+func (s *Service) runPromptHook(ctx context.Context, cfg agentRunConfigView, eventName string) (hooks.Result, bool) {
 	res, err := s.runBaseHook(ctx, cfg.BotID, cfg.SessionID, cfg.ChatID, eventName, func(req *hooks.Request) {
 		req.Turn = map[string]any{
 			"session_type":  cfg.SessionType,
@@ -64,10 +67,10 @@ func (s *Service) runPromptHook(ctx context.Context, cfg agentRunConfigView, eve
 	})
 	if err != nil {
 		s.logHookWarn(eventName, cfg.BotID, cfg.SessionID, err)
-		return hooks.Result{}
+		return hooks.Result{}, errors.Is(err, hooks.ErrConfigUnavailable)
 	}
 	res.AppendContext = strings.TrimSpace(res.AppendContext)
-	return res
+	return res, false
 }
 
 type agentRunConfigView struct {
@@ -145,15 +148,4 @@ func firstHookText(values ...string) string {
 		}
 	}
 	return ""
-}
-
-// hooksConfigUnavailable reports whether the turn's hooks configuration could
-// not be loaded. The policy the hooks would enforce is then unknown, so the
-// turn must not run tools.
-func (s *Service) hooksConfigUnavailable(ctx context.Context, botID string) bool {
-	if s == nil || s.hookService == nil {
-		return false
-	}
-	_, _, err := s.hookService.LoadEffective(ctx, botID)
-	return errors.Is(err, hooks.ErrConfigUnavailable)
 }
