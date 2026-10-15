@@ -9,18 +9,30 @@ import (
 // lockedContainerRef holds a per-container lock together with the latest
 // container metadata so mutation workflows do not have to repeat the same
 // resolve -> lock -> load sequence. workspaceID is the managed computer the
-// container is recorded under once EnsureDBRecords resolved it.
+// container belongs to; botID the bot it is operated for (empty for a
+// computer nothing is bound to).
 type lockedContainerRef struct {
 	manager     *Manager
-	botID       string
 	workspaceID string
+	botID       string
 	containerID string
 	info        ctr.ContainerInfo
 	unlock      func()
 }
 
+// loadLockedContainer resolves the bot's managed computer and locks its
+// container. ErrContainerNotFound (which also satisfies ctr.IsNotFound) when
+// the bot has no computer or the computer has no container.
 func (m *Manager) loadLockedContainer(ctx context.Context, botID string) (*lockedContainerRef, error) {
-	containerID := m.resolveContainerID(ctx, botID)
+	workspaceID, containerID, err := m.resolveBotContainer(ctx, botID)
+	if err != nil {
+		return nil, err
+	}
+	return m.lockContainerRef(ctx, workspaceID, botID, containerID)
+}
+
+// lockContainerRef locks an already resolved container and loads it.
+func (m *Manager) lockContainerRef(ctx context.Context, workspaceID, botID, containerID string) (*lockedContainerRef, error) {
 	unlock := m.lockContainer(containerID)
 
 	info, err := m.service.GetContainer(ctx, containerID)
@@ -31,6 +43,7 @@ func (m *Manager) loadLockedContainer(ctx context.Context, botID string) (*locke
 
 	return &lockedContainerRef{
 		manager:     m,
+		workspaceID: workspaceID,
 		botID:       botID,
 		containerID: containerID,
 		info:        info,
@@ -47,16 +60,10 @@ func (r *lockedContainerRef) Close() {
 }
 
 func (r *lockedContainerRef) StopTaskForMutation(ctx context.Context) (func(), error) {
-	return r.manager.stopTaskForMutation(ctx, r.botID, r.containerID)
+	return r.manager.stopTaskForMutation(ctx, r.workspaceID, r.botID, r.containerID)
 }
 
-// EnsureDBRecords records the container as the bot's managed computer
-// instance and remembers which computer that is.
+// EnsureDBRecords records the container as the computer's instance.
 func (r *lockedContainerRef) EnsureDBRecords(ctx context.Context) error {
-	workspaceID, err := r.manager.ensureDBRecords(ctx, r.botID, r.info.ID, r.info.Image)
-	if err != nil {
-		return err
-	}
-	r.workspaceID = workspaceID
-	return nil
+	return r.manager.ensureDBRecords(ctx, r.workspaceID, r.botID, r.info.ID, r.info.Image)
 }

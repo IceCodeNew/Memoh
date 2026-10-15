@@ -71,7 +71,7 @@ type restoreWorkspaceManager struct {
 	restoreErr error
 }
 
-func (m *restoreWorkspaceManager) HasPreservedData(string) bool { return m.preserved }
+func (m *restoreWorkspaceManager) HasPreservedData(context.Context, string) bool { return m.preserved }
 
 func (m *restoreWorkspaceManager) RestorePreservedData(context.Context, string) error {
 	m.restored++

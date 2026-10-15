@@ -9,6 +9,7 @@ import (
 	"time"
 
 	ctr "github.com/felinics/memoh/internal/container"
+	"github.com/felinics/memoh/internal/db"
 	"github.com/felinics/memoh/internal/errs"
 	netctl "github.com/felinics/memoh/internal/network"
 )
@@ -17,26 +18,82 @@ import (
 // Container ID resolution
 // ---------------------------------------------------------------------------
 
-// ContainerID resolves the containerd container ID for a bot.
-// Resolution order: managed computer record → label search → full container scan.
+// ContainerID resolves the runtime container of the bot's managed computer.
 func (m *Manager) ContainerID(ctx context.Context, botID string) (string, error) {
-	if m.computers != nil {
-		record, err := m.managedComputer(ctx, botID)
-		if err == nil && strings.TrimSpace(record.InstanceID) != "" {
-			return record.InstanceID, nil
+	_, containerID, err := m.resolveBotContainer(ctx, botID)
+	return containerID, err
+}
+
+// resolveBotContainer is the bot-keyed boundary: it resolves the bot to its
+// managed computer once and the computer to its container. A bot without a
+// managed computer, or a computer without a container, is ErrContainerNotFound.
+func (m *Manager) resolveBotContainer(ctx context.Context, botID string) (string, string, error) {
+	workspaceID, err := m.managedWorkspaceID(ctx, botID)
+	if err != nil {
+		if noManagedComputer(err) {
+			return "", "", ErrContainerNotFound
 		}
-		if err != nil && !noManagedComputer(err) {
-			m.logger.WarnContext(ctx, "ContainerID: db lookup failed",
-				slog.String("bot_id", botID), slog.Any("error", err))
+		return "", "", err
+	}
+	containerID, err := m.workspaceContainerID(ctx, workspaceID)
+	if err != nil {
+		return "", "", err
+	}
+	return workspaceID, containerID, nil
+}
+
+// botContainerIDOrNew is resolveBotContainer for paths that only dial: a
+// computer without a container yet is addressed by the name its container
+// will have, so the pooled connection is in place once it starts. Only a bot
+// without a managed computer is an error.
+func (m *Manager) botContainerIDOrNew(ctx context.Context, botID string) (string, string, error) {
+	workspaceID, err := m.managedWorkspaceID(ctx, botID)
+	if err != nil {
+		if noManagedComputer(err) {
+			return "", "", ErrContainerNotFound
+		}
+		return "", "", err
+	}
+	return workspaceID, m.workspaceContainerIDOrNew(ctx, workspaceID), nil
+}
+
+// workspaceContainerID resolves the container of a managed computer.
+// Resolution order: the instance the record names → the workspace label →
+// the bot label of a bound bot → a full scan matching the instance key or a
+// bot-named container of a bound bot. ErrContainerNotFound when none match.
+func (m *Manager) workspaceContainerID(ctx context.Context, workspaceID string) (string, error) {
+	if m.computers != nil {
+		instanceID, err := m.recordedInstance(ctx, workspaceID)
+		if err != nil {
+			m.logger.WarnContext(ctx, "resolve container: db lookup failed",
+				slog.String("workspace_id", workspaceID), slog.Any("error", err))
+		} else if instanceID != "" {
+			return instanceID, nil
 		}
 	}
+	if m.service == nil {
+		// Nothing to ask: a manager wired without a runtime (bridge-only
+		// embedding, tests) only knows what its records say.
+		return "", ErrContainerNotFound
+	}
 
-	containers, err := m.service.ListContainersByLabel(ctx, BotLabelKey, botID)
+	containers, err := m.service.ListContainersByLabel(ctx, WorkspaceIDLabelKey, workspaceID)
 	if err != nil {
 		return "", err
 	}
 	if id, ok := newestContainerID(containers); ok {
 		return id, nil
+	}
+
+	bots := m.boundBots(ctx, workspaceID)
+	for _, botID := range bots {
+		containers, err = m.service.ListContainersByLabel(ctx, BotLabelKey, botID)
+		if err != nil {
+			return "", err
+		}
+		if id, ok := newestContainerID(containers); ok {
+			return id, nil
+		}
 	}
 
 	containers, err = m.service.ListContainers(ctx)
@@ -45,11 +102,9 @@ func (m *Manager) ContainerID(ctx context.Context, botID string) (string, error)
 	}
 	matched := make([]ctr.ContainerInfo, 0, len(containers))
 	for _, info := range containers {
-		resolvedBotID, ok := BotIDFromContainerInfo(info)
-		if !ok || resolvedBotID != botID {
-			continue
+		if m.containerBelongsTo(info, workspaceID, bots) {
+			matched = append(matched, info)
 		}
-		matched = append(matched, info)
 	}
 	if id, ok := newestContainerID(matched); ok {
 		return id, nil
@@ -58,10 +113,46 @@ func (m *Manager) ContainerID(ctx context.Context, botID string) (string, error)
 	return "", ErrContainerNotFound
 }
 
+// containerBelongsTo reports whether a scanned container is the computer's:
+// labelled with its id, named after it, or labelled with / named after a bot
+// bound to it.
+func (*Manager) containerBelongsTo(info ctr.ContainerInfo, workspaceID string, bots []string) bool {
+	if labelled, ok := WorkspaceIDFromContainerInfo(info); ok {
+		return labelled == workspaceID
+	}
+	key, ok := InstanceKeyFromContainerID(info.ID)
+	if ok && key == workspaceID {
+		return true
+	}
+	botID, ok := BotIDFromContainerInfo(info)
+	if !ok {
+		return false
+	}
+	for _, bound := range bots {
+		if bound == botID {
+			return true
+		}
+	}
+	return false
+}
+
+// workspaceContainerIDOrNew is workspaceContainerID for creation paths: a
+// computer without a container gets a container named after it.
+func (m *Manager) workspaceContainerIDOrNew(ctx context.Context, workspaceID string) string {
+	containerID, err := m.workspaceContainerID(ctx, workspaceID)
+	if err != nil {
+		return ContainerPrefix + workspaceID
+	}
+	return containerID
+}
+
 func newestContainerID(containers []ctr.ContainerInfo) (string, bool) {
 	bestID := ""
 	var bestUpdated time.Time
 	for _, info := range containers {
+		if strings.TrimSpace(info.ID) == "" {
+			continue
+		}
 		if bestID == "" || info.UpdatedAt.After(bestUpdated) {
 			bestID = info.ID
 			bestUpdated = info.UpdatedAt
@@ -100,6 +191,9 @@ func displayStatus(recorded string, task ctr.TaskStatus) string {
 	}
 }
 
+// networkAttachmentRequest describes the container's network. botID selects
+// the overlay configuration and may be empty for a computer nothing is bound
+// to; the runtime network is attached either way.
 func (m *Manager) networkAttachmentRequest(ctx context.Context, botID, containerID string) netctl.AttachmentRequest {
 	runtimeReq := netctl.RuntimeNetworkRequest{
 		ContainerID: containerID,
@@ -139,13 +233,13 @@ func (m *Manager) ensureContainerNetworkAndGetIP(ctx context.Context, botID, con
 	return "", fmt.Errorf("network setup failed for workspace runtime %s: %w", containerID, lastErr)
 }
 
-func (m *Manager) ensureContainerNetwork(ctx context.Context, containerID, botID string) error {
+func (m *Manager) ensureContainerNetwork(ctx context.Context, botID, containerID string) error {
 	ip, err := m.ensureContainerNetworkAndGetIP(ctx, botID, containerID)
 	if err != nil {
 		return err
 	}
 	if m.IsLegacyContainer(ctx, containerID) {
-		m.SetLegacyIP(botID, ip)
+		m.setLegacyIP(containerID, ip)
 	}
 	return nil
 }
@@ -160,7 +254,7 @@ func (m *Manager) startTaskAndEnsureNetwork(ctx context.Context, botID, containe
 			return err
 		}
 	}
-	return m.ensureContainerNetwork(ctx, containerID, botID)
+	return m.ensureContainerNetwork(ctx, botID, containerID)
 }
 
 func (m *Manager) waitTaskRunning(ctx context.Context, containerID string, timeout time.Duration) bool {
@@ -206,10 +300,16 @@ func (m *Manager) EnsureNativeRunning(ctx context.Context, botID string) error {
 	// reported, never rebuilt here, so a workspace the user removed (or one
 	// the reconciler is about to remove) cannot be resurrected by a start or
 	// by a tool call that needs the container.
-	containerID, err := m.ContainerID(ctx, botID)
+	_, containerID, err := m.resolveBotContainer(ctx, botID)
 	if err != nil {
 		return err
 	}
+	return m.ensureInstanceRunning(ctx, botID, containerID)
+}
+
+// ensureInstanceRunning starts the task of an existing container when it is
+// not running and attaches its network. botID selects the network overlay.
+func (m *Manager) ensureInstanceRunning(ctx context.Context, botID, containerID string) error {
 	if _, err := m.service.GetContainer(ctx, containerID); err != nil {
 		if ctr.IsNotFound(err) {
 			return fmt.Errorf("%w: container %s is missing in the runtime", ErrContainerNotFound, containerID)
@@ -220,7 +320,7 @@ func (m *Manager) EnsureNativeRunning(ctx context.Context, botID string) error {
 	taskInfo, err := m.service.GetTaskInfo(ctx, containerID)
 	if err == nil {
 		if taskInfo.Status == ctr.TaskStatusRunning {
-			return m.ensureContainerNetwork(ctx, containerID, botID)
+			return m.ensureContainerNetwork(ctx, botID, containerID)
 		}
 		if err := m.service.DeleteTask(ctx, containerID, &ctr.DeleteTaskOptions{Force: true}); err != nil {
 			if !ctr.IsNotFound(err) {
@@ -234,9 +334,10 @@ func (m *Manager) EnsureNativeRunning(ctx context.Context, botID string) error {
 	return m.startTaskAndEnsureNetwork(ctx, botID, containerID)
 }
 
-// StopBot stops the container task for a bot and marks it stopped in DB.
+// StopBot stops the container task of the bot's managed computer and marks it
+// stopped in DB.
 func (m *Manager) StopBot(ctx context.Context, botID string) error {
-	containerID, err := m.ContainerID(ctx, botID)
+	workspaceID, containerID, err := m.resolveBotContainer(ctx, botID)
 	if err != nil {
 		return err
 	}
@@ -256,15 +357,29 @@ func (m *Manager) StopBot(ctx context.Context, botID string) error {
 			slog.String("container_id", containerID), slog.Any("error", err))
 	}
 
-	m.markContainerStopped(ctx, botID)
+	m.recordInstanceStopped(ctx, workspaceID)
 	return nil
 }
 
-// GetContainerInfo returns current container status for a bot,
-// combining the managed computer record with live containerd state.
+// GetContainerInfo returns the current container status of the bot's managed
+// computer, combining the computer record with live runtime state.
 func (m *Manager) GetContainerInfo(ctx context.Context, botID string) (*ContainerStatus, error) {
+	workspaceID, err := m.managedWorkspaceID(ctx, botID)
+	if err != nil {
+		if noManagedComputer(err) {
+			return nil, ErrContainerNotFound
+		}
+		return nil, err
+	}
+	return m.workspaceStatus(ctx, workspaceID, botID)
+}
+
+// workspaceStatus describes the computer's container. botID is the bot the
+// status is asked for; it only locates a preserved archive written under the
+// bot id and may be empty.
+func (m *Manager) workspaceStatus(ctx context.Context, workspaceID, botID string) (*ContainerStatus, error) {
 	if m.computers != nil {
-		record, err := m.managedComputer(ctx, botID)
+		record, err := m.computers.GetManagedComputer(ctx, workspaceID)
 		if err == nil && strings.TrimSpace(record.InstanceID) != "" {
 			cdiDevices := []string(nil)
 			runtimeBackend := ""
@@ -295,19 +410,19 @@ func (m *Manager) GetContainerInfo(ctx context.Context, botID string) (*Containe
 				CDIDevices:       cdiDevices,
 				Snapshotter:      m.cfg.Snapshotter,
 				TaskRunning:      taskRunning,
-				HasPreservedData: m.HasPreservedData(botID),
+				HasPreservedData: m.preservedBackupPath(workspaceID, botID) != "",
 				Legacy:           m.IsLegacyContainer(ctx, record.InstanceID),
 				CreatedAt:        record.CreatedAt,
 				UpdatedAt:        record.UpdatedAt,
 			}, nil
 		}
-		if err != nil && !noManagedComputer(err) {
+		if err != nil && !errors.Is(err, db.ErrNotFound) {
 			m.logger.WarnContext(ctx, "GetContainerInfo: db lookup failed",
-				slog.String("bot_id", botID), slog.Any("error", err))
+				slog.String("workspace_id", workspaceID), slog.Any("error", err))
 		}
 	}
 
-	containerID, err := m.ContainerID(ctx, botID)
+	containerID, err := m.workspaceContainerID(ctx, workspaceID)
 	if err != nil {
 		return nil, err
 	}
@@ -331,7 +446,7 @@ func (m *Manager) GetContainerInfo(ctx context.Context, botID string) (*Containe
 		CDIDevices:       workspaceCDIDevicesFromLabels(info.Labels),
 		Snapshotter:      m.cfg.Snapshotter,
 		TaskRunning:      taskRunning,
-		HasPreservedData: m.HasPreservedData(botID),
+		HasPreservedData: m.preservedBackupPath(workspaceID, botID) != "",
 		Legacy:           m.IsLegacyContainer(ctx, containerID),
 		CreatedAt:        info.CreatedAt,
 		UpdatedAt:        info.UpdatedAt,
@@ -360,20 +475,45 @@ type ContainerSetupEvent struct {
 
 type ContainerSetupProgress func(ContainerSetupEvent)
 
-// CleanupBotContainer removes the container and its record for a bot.
-// When preserveData is true, /data is exported to a backup archive before deletion.
+// CleanupBotContainer removes the container and the instance record of the
+// bot's managed computer. When preserveData is true, /data is exported to a
+// backup archive before deletion. A bot without a managed computer has
+// nothing to clean up.
 func (m *Manager) CleanupBotContainer(ctx context.Context, botID string, preserveData bool) error {
-	if err := m.Delete(ctx, botID, preserveData); err != nil {
+	workspaceID, err := m.managedWorkspaceID(ctx, botID)
+	if err != nil {
+		if noManagedComputer(err) {
+			return nil
+		}
+		return err
+	}
+	return m.teardownWorkspace(ctx, workspaceID, botID, preserveData)
+}
+
+// teardownWorkspace removes the computer's container, if any, and clears its
+// instance record. botID is the bot the computer is operated for and may be
+// empty: the container is found by instance key, so a computer nothing is
+// bound to is torn down the same way.
+func (m *Manager) teardownWorkspace(ctx context.Context, workspaceID, botID string, preserveData bool) error {
+	containerID, err := m.workspaceContainerID(ctx, workspaceID)
+	switch {
+	case errors.Is(err, ErrContainerNotFound):
+		m.clearInstanceRecord(ctx, workspaceID)
+		return nil
+	case err != nil:
+		return err
+	}
+	if err := m.deleteWorkspaceContainer(ctx, workspaceID, botID, containerID, preserveData); err != nil {
 		// A failed export blocks the removal: the container holds the only
 		// copy of the data. A container already gone is a finished removal.
 		if errors.Is(err, errPreserveData) || !ctr.IsNotFound(err) {
 			return err
 		}
-		m.logger.WarnContext(ctx, "cleanup: container not found in containerd, continuing",
-			slog.String("bot_id", botID))
+		m.logger.WarnContext(ctx, "cleanup: container not found in runtime, continuing",
+			slog.String("workspace_id", workspaceID), slog.String("container_id", containerID))
 	}
 
-	m.deleteContainerRecord(ctx, botID)
+	m.clearInstanceRecord(ctx, workspaceID)
 	return nil
 }
 
@@ -428,9 +568,9 @@ func (m *Manager) ReconcileContainers(ctx context.Context) {
 					slog.String("workspace_id", workspaceID), slog.Any("error", err))
 				continue
 			}
-			// Nothing is bound to this computer. Its container is named,
-			// networked and bootstrapped per bot, so only its state is
-			// recorded here.
+			// Nothing is bound to this computer: there is no bot whose
+			// overlay, hooks and diagnostics a start would apply, so only
+			// its state is recorded here.
 			running := m.isTaskRunning(ctx, containerID)
 			switch {
 			case running && row.InstanceStatus != "running":
@@ -451,7 +591,7 @@ func (m *Manager) ReconcileContainers(ctx context.Context) {
 
 			running := m.isTaskRunning(ctx, containerID)
 			if !running {
-				if err := m.EnsureNativeRunning(ctx, botID); err != nil {
+				if err := m.ensureInstanceRunning(ctx, botID, containerID); err != nil {
 					m.logger.ErrorContext(ctx, "reconcile: failed to start legacy container",
 						slog.String("bot_id", botID), slog.Any("error", err))
 					continue
@@ -461,7 +601,7 @@ func (m *Manager) ReconcileContainers(ctx context.Context) {
 				m.logger.ErrorContext(ctx, "reconcile: network setup failed for legacy container",
 					slog.String("bot_id", botID), slog.Any("error", netErr))
 			} else {
-				m.SetLegacyIP(botID, ip)
+				m.setLegacyIP(containerID, ip)
 				m.logger.InfoContext(ctx, "reconcile: legacy container reachable via TCP",
 					slog.String("bot_id", botID), slog.String("ip", ip))
 			}
@@ -474,7 +614,7 @@ func (m *Manager) ReconcileContainers(ctx context.Context) {
 			if row.InstanceStatus != "running" {
 				m.recordInstanceStarted(ctx, workspaceID)
 			}
-			if netErr := m.ensureContainerNetwork(ctx, containerID, botID); netErr != nil {
+			if netErr := m.ensureContainerNetwork(ctx, botID, containerID); netErr != nil {
 				m.logger.ErrorContext(ctx, "reconcile: network setup failed for running task, container unreachable",
 					slog.String("bot_id", botID),
 					slog.String("container_id", containerID),
@@ -482,7 +622,7 @@ func (m *Manager) ReconcileContainers(ctx context.Context) {
 			} else {
 				m.logger.InfoContext(ctx, "reconcile: container healthy",
 					slog.String("bot_id", botID), slog.String("container_id", containerID))
-				m.reconcileNativeWorkspace(ctx, botID)
+				m.reconcileNativeWorkspace(ctx, workspaceID, botID, containerID)
 			}
 			continue
 		}
@@ -490,24 +630,24 @@ func (m *Manager) ReconcileContainers(ctx context.Context) {
 		// Task not running — try to start it.
 		m.logger.WarnContext(ctx, "reconcile: task not running, starting",
 			slog.String("bot_id", botID), slog.String("container_id", containerID))
-		if err := m.EnsureNativeRunning(ctx, botID); err != nil {
+		if err := m.ensureInstanceRunning(ctx, botID, containerID); err != nil {
 			m.logger.ErrorContext(ctx, "reconcile: failed to start task",
 				slog.String("bot_id", botID), slog.Any("error", err))
 			m.recordInstanceStopped(ctx, workspaceID)
 		} else {
 			m.recordInstanceStarted(ctx, workspaceID)
-			m.reconcileNativeWorkspace(ctx, botID)
+			m.reconcileNativeWorkspace(ctx, workspaceID, botID, containerID)
 		}
 	}
 	m.logger.InfoContext(ctx, "reconcile: completed")
 }
 
-func (m *Manager) reconcileNativeWorkspace(ctx context.Context, botID string) {
-	if err := m.WaitForWorkspaceReady(ctx, botID); err != nil {
+func (m *Manager) reconcileNativeWorkspace(ctx context.Context, workspaceID, botID, containerID string) {
+	if err := m.waitForInstanceReady(ctx, workspaceID, containerID); err != nil {
 		m.recordReconcileSetupFailure(ctx, botID, "reconcile_ready", err)
 		return
 	}
-	if err := m.InitializeNativeWorkspace(ctx, botID); err != nil {
+	if err := m.initializeInstance(ctx, containerID); err != nil {
 		m.recordReconcileSetupFailure(ctx, botID, "reconcile_initialize", err)
 		return
 	}

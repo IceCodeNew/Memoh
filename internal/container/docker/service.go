@@ -202,10 +202,17 @@ func (s *Service) CreateContainer(ctx context.Context, req containerapi.CreateCo
 	return s.GetContainer(ctx, resp.ID)
 }
 
-func (s *Service) BridgeTarget(botID string) string {
-	if strings.TrimSpace(botID) == "" {
+// BridgeTarget returns the gRPC dial target of the workspace container with
+// the given instance key: the part of the container name after the
+// "workspace-" prefix (a bot id on containers created before managed
+// computers had their own ids, the workspace id on newer ones). Empty when the
+// container is not reachable yet.
+func (s *Service) BridgeTarget(instanceKey string) string {
+	instanceKey = strings.TrimSpace(instanceKey)
+	if instanceKey == "" {
 		return ""
 	}
+	containerName := workspaceContainerPref + instanceKey
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 	workspaceNetwork, err := s.resolveWorkspaceNetwork(ctx)
@@ -213,7 +220,7 @@ func (s *Service) BridgeTarget(botID string) string {
 		s.logger.Warn("resolve Docker workspace network", slog.Any("error", err))
 		return ""
 	}
-	info, err := s.client.ContainerInspect(ctx, workspaceContainerPref+strings.TrimSpace(botID))
+	info, err := s.client.ContainerInspect(ctx, containerName)
 	if err != nil {
 		return ""
 	}
@@ -221,7 +228,7 @@ func (s *Service) BridgeTarget(botID string) string {
 		if containerNetworkIP(info, workspaceNetwork) == "" {
 			return ""
 		}
-		return net.JoinHostPort(workspaceContainerPref+strings.TrimSpace(botID), bridgeTCPPort)
+		return net.JoinHostPort(containerName, bridgeTCPPort)
 	}
 	if host := firstHostPort(info, bridgeTCPPort); host != "" {
 		return host

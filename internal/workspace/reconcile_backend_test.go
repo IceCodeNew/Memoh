@@ -8,6 +8,7 @@ import (
 	"net"
 	"net/url"
 	"os"
+	"slices"
 	"syscall"
 	"testing"
 
@@ -25,12 +26,24 @@ func (*unreadableBridgeService) MCPClient(context.Context, string) (*bridge.Clie
 }
 
 // bindTestComputer gives the manager a binding service in which computerID
-// is the managed computer of botID; the backend is addressed by the computer
-// and operates the container named after the bot.
+// is the managed computer of botID.
 func bindTestComputer(m *Manager, botID, computerID string) {
-	store := &fakeWorkspaceStore{
-		workspaces: []dbstore.WorkspaceRecord{{ID: computerID, OwnerUserID: wsTestOwnerID, Kind: WorkspaceKindManaged, Name: "bot"}},
-		bindings:   []dbstore.BotWorkspaceBindingRecord{{ID: wsTestBindingID, BotID: botID, WorkspaceID: computerID, IsPrimary: true}},
+	bindTestComputers(m, map[string][]string{computerID: {botID}})
+}
+
+// bindTestComputers binds every listed bot to its computer, in order.
+func bindTestComputers(m *Manager, botsByComputer map[string][]string) {
+	store := &fakeWorkspaceStore{}
+	computers := make([]string, 0, len(botsByComputer))
+	for computerID := range botsByComputer {
+		computers = append(computers, computerID)
+	}
+	slices.Sort(computers)
+	for _, computerID := range computers {
+		store.workspaces = append(store.workspaces, dbstore.WorkspaceRecord{ID: computerID, OwnerUserID: wsTestOwnerID, Kind: WorkspaceKindManaged, Name: "computer"})
+		for _, botID := range botsByComputer[computerID] {
+			store.bindings = append(store.bindings, dbstore.BotWorkspaceBindingRecord{ID: store.newID(), BotID: botID, WorkspaceID: computerID, IsPrimary: true})
+		}
 	}
 	m.SetBindingService(NewBindingService(store, store))
 }
@@ -39,6 +52,7 @@ func TestTeardownPreservingData(t *testing.T) {
 	const botID = "00000000-0000-0000-0000-000000000001"
 	const computerID = "00000000-0000-0000-0000-0000000000c1"
 	svc := &unreadableBridgeService{}
+	svc.container = ctr.ContainerInfo{ID: ContainerPrefix + computerID}
 	m := newLegacyRouteTestManager(t, svc, config.WorkspaceConfig{DataRoot: t.TempDir()})
 	bindTestComputer(m, botID, computerID)
 
@@ -59,8 +73,9 @@ func TestTeardownPreservingData(t *testing.T) {
 	}
 }
 
-// A computer nothing is bound to has no bot to name its container after: it
-// inspects as absent, tears down as already gone and cannot be provisioned.
+// A computer nothing is bound to and without a container inspects as absent
+// and tears down as already gone; it cannot be provisioned, since the image,
+// GPU and bootstrap of a computer are its bot's configuration.
 func TestBackendUnboundComputer(t *testing.T) {
 	const computerID = "00000000-0000-0000-0000-0000000000c2"
 	svc := &legacyRouteTestService{}

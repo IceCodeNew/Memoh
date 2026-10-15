@@ -43,7 +43,7 @@ type managedWorkspaces interface {
 // the terminal "complete" event.
 type workspaceStatus interface {
 	GetContainerInfo(ctx context.Context, botID string) (*workspace.ContainerStatus, error)
-	HasPreservedData(botID string) bool
+	HasPreservedData(ctx context.Context, botID string) bool
 }
 
 // workspaceStreamOutcome is what a provisioning stream ended with.
@@ -193,7 +193,7 @@ func workspaceCompleteEvent(ctx context.Context, log *slog.Logger, status worksp
 			if log != nil {
 				log.WarnContext(ctx, "describe workspace after provisioning failed", slog.String("bot_id", botID), slog.Any("error", err))
 			}
-			response.HasPreservedData = status.HasPreservedData(botID)
+			response.HasPreservedData = status.HasPreservedData(ctx, botID)
 		default:
 			response.ContainerID = info.ContainerID
 			response.WorkspaceBackend = info.WorkspaceBackend

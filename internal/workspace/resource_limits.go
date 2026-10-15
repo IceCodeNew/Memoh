@@ -74,18 +74,11 @@ func workspaceResourceLimitsFromRecord(limits dbstore.ManagedComputerResourceLim
 	}
 }
 
-// desiredResourceLimits reads the limits saved for the bot's managed
-// computer; a bot without a computer or without saved limits has none.
-func (m *Manager) desiredResourceLimits(ctx context.Context, botID string) (container.ResourceLimits, error) {
+// desiredResourceLimits reads the limits saved for the managed computer; a
+// computer without saved limits has none.
+func (m *Manager) desiredResourceLimits(ctx context.Context, workspaceID string) (container.ResourceLimits, error) {
 	if m.computers == nil {
 		return container.ResourceLimits{}, nil
-	}
-	workspaceID, err := m.managedWorkspaceID(ctx, botID)
-	if err != nil {
-		if errors.Is(err, db.ErrNoManagedWorkspaceBinding) {
-			return container.ResourceLimits{}, nil
-		}
-		return container.ResourceLimits{}, err
 	}
 	limits, err := m.computers.GetManagedComputerResourceLimits(ctx, workspaceID)
 	if err != nil {
@@ -125,20 +118,29 @@ func (m *Manager) GetResourceLimits(ctx context.Context, botID string) (*Resourc
 	if err := validateBotID(botID); err != nil {
 		return nil, err
 	}
-	desired, err := m.desiredResourceLimits(ctx, botID)
-	if err != nil {
-		return nil, err
-	}
-
 	workspaceBackend := bridge.WorkspaceBackendContainer
-
 	result := &ResourceLimitsResult{
-		Desired:          desired,
 		WorkspaceBackend: workspaceBackend,
 		Status:           ResourceLimitStatusNotCreated,
 	}
 
-	containerID, err := m.ContainerID(ctx, botID)
+	// A bot without a managed computer has neither saved limits nor a
+	// container.
+	workspaceID, err := m.managedWorkspaceID(ctx, botID)
+	if err != nil {
+		if errors.Is(err, db.ErrNoManagedWorkspaceBinding) {
+			result.Capabilities = ResourceLimitCapabilitiesFor(workspaceBackend, "")
+			return result, nil
+		}
+		return nil, err
+	}
+	desired, err := m.desiredResourceLimits(ctx, workspaceID)
+	if err != nil {
+		return nil, err
+	}
+	result.Desired = desired
+
+	containerID, err := m.workspaceContainerID(ctx, workspaceID)
 	if err != nil {
 		if errors.Is(err, ErrContainerNotFound) {
 			result.Capabilities = ResourceLimitCapabilitiesFor(workspaceBackend, "")
@@ -263,8 +265,8 @@ func unsupportedHardLimitsRequested(limits container.ResourceLimits, caps Resour
 	return false
 }
 
-func (m *Manager) resourceLimitsForCreate(ctx context.Context, botID string) (container.ResourceLimits, error) {
-	limits, err := m.desiredResourceLimits(ctx, botID)
+func (m *Manager) resourceLimitsForCreate(ctx context.Context, workspaceID string) (container.ResourceLimits, error) {
+	limits, err := m.desiredResourceLimits(ctx, workspaceID)
 	if err != nil {
 		return container.ResourceLimits{}, err
 	}

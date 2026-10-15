@@ -87,7 +87,7 @@ func (m *Manager) CreateSnapshot(ctx context.Context, botID, snapshotName, sourc
 	dctx := context.WithoutCancel(ctx)
 
 	if !m.nativeSnapshotsSupported(dctx) {
-		runtimeSnapshotName = m.archiveSnapshotKey(botID)
+		runtimeSnapshotName = m.archiveSnapshotKey(ref.workspaceID)
 		snapshotter = "archive"
 		if archiveErr := m.createArchiveSnapshotFromRef(dctx, ref, runtimeSnapshotName); archiveErr != nil {
 			return nil, archiveErr
@@ -96,7 +96,7 @@ func (m *Manager) CreateSnapshot(ctx context.Context, botID, snapshotName, sourc
 		if !errors.Is(err, ctr.ErrNotSupported) {
 			return nil, err
 		}
-		runtimeSnapshotName = m.archiveSnapshotKey(botID)
+		runtimeSnapshotName = m.archiveSnapshotKey(ref.workspaceID)
 		snapshotter = "archive"
 		if archiveErr := m.createArchiveSnapshotFromRef(dctx, ref, runtimeSnapshotName); archiveErr != nil {
 			return nil, archiveErr
@@ -161,7 +161,7 @@ func (m *Manager) CreateVersion(ctx context.Context, botID string) (*VersionInfo
 
 	versionSnapshotName := fmt.Sprintf("%s-v%d", containerID, time.Now().UnixNano())
 	if !m.nativeSnapshotsSupported(dctx) {
-		versionSnapshotName = m.archiveSnapshotKey(botID)
+		versionSnapshotName = m.archiveSnapshotKey(ref.workspaceID)
 		if archiveErr := m.createArchiveSnapshotFromRef(dctx, ref, versionSnapshotName); archiveErr != nil {
 			return nil, archiveErr
 		}
@@ -169,7 +169,7 @@ func (m *Manager) CreateVersion(ctx context.Context, botID string) (*VersionInfo
 		if !errors.Is(err, ctr.ErrNotSupported) {
 			return nil, err
 		}
-		versionSnapshotName = m.archiveSnapshotKey(botID)
+		versionSnapshotName = m.archiveSnapshotKey(ref.workspaceID)
 		if archiveErr := m.createArchiveSnapshotFromRef(dctx, ref, versionSnapshotName); archiveErr != nil {
 			return nil, archiveErr
 		}
@@ -330,15 +330,12 @@ func (m *Manager) RollbackVersion(ctx context.Context, botID string, version int
 		return errors.New("version out of range")
 	}
 
-	workspaceID, err := m.managedWorkspaceID(ctx, botID)
-	if err != nil {
-		return err
-	}
 	ref, err := m.loadLockedContainer(ctx, botID)
 	if err != nil {
 		return err
 	}
 	defer ref.Close()
+	workspaceID := ref.workspaceID
 
 	snapshotName, err := m.computers.GetManagedComputerVersionSnapshotName(ctx, workspaceID, version)
 	if err != nil {
@@ -393,8 +390,11 @@ func (m *Manager) VersionSnapshotName(ctx context.Context, botID string, version
 
 // replaceContainerSnapshot prepares a new active snapshot from parentSnapshot,
 // deletes the old container, recreates it on the new snapshot, and restarts the task.
+// The recreated container keeps its name and labels and gains the workspace
+// label when it predates it.
 // Caller must pass a detached context (context.WithoutCancel) to guarantee atomicity.
-func (m *Manager) replaceContainerSnapshot(ctx context.Context, botID, containerID string, info ctr.ContainerInfo, activeSnapshotName, parentSnapshot string) error {
+func (m *Manager) replaceContainerSnapshot(ctx context.Context, ref *lockedContainerRef, activeSnapshotName, parentSnapshot string) error {
+	workspaceID, botID, containerID, info := ref.workspaceID, ref.botID, ref.containerID, ref.info
 	if err := m.service.PrepareSnapshot(ctx, ctr.PrepareSnapshotRequest{
 		Target: ctr.StorageRef{Driver: info.StorageRef.Driver, Key: activeSnapshotName, Kind: "active"},
 		Parent: ctr.SnapshotRef{Driver: info.StorageRef.Driver, Key: parentSnapshot},
@@ -404,15 +404,21 @@ func (m *Manager) replaceContainerSnapshot(ctx context.Context, botID, container
 	if err := m.service.DeleteContainer(ctx, containerID, &ctr.DeleteContainerOptions{CleanupSnapshot: false}); err != nil {
 		return err
 	}
-	spec, err := m.buildVersionSpec(ctx, botID, workspaceCDIDevicesFromLabels(info.Labels))
+	spec, err := m.buildVersionSpec(ctx, containerID, botID, workspaceCDIDevicesFromLabels(info.Labels))
 	if err != nil {
 		return err
 	}
-	limits, err := m.resourceLimitsForCreate(ctx, botID)
+	limits, err := m.resourceLimitsForCreate(ctx, workspaceID)
 	if err != nil {
 		return err
 	}
 	labels := cloneStringMap(info.Labels)
+	if labels == nil {
+		labels = make(map[string]string)
+	}
+	if strings.TrimSpace(labels[WorkspaceIDLabelKey]) == "" {
+		labels[WorkspaceIDLabelKey] = workspaceID
+	}
 	for k, v := range resourceLimitLabels(limits) {
 		labels[k] = v
 	}
@@ -428,7 +434,7 @@ func (m *Manager) replaceContainerSnapshot(ctx context.Context, botID, container
 	}
 	// Container process was recreated — evict the stale gRPC connection
 	// unconditionally so the next call dials fresh to the new process.
-	m.resetBridge(botID)
+	m.resetBridge(ctx, workspaceID, containerID)
 
 	// Recreate the task and restore the container network before the next
 	// workspace operation.
@@ -447,9 +453,9 @@ func (m *Manager) commitSnapshotAndReplaceContainer(ctx context.Context, ref *lo
 		Target: ctr.SnapshotRef{Driver: ref.info.StorageRef.Driver, Key: runtimeSnapshotName, Kind: "committed"},
 	}); err != nil {
 		if errors.Is(err, ctr.ErrNotSupported) {
-			m.resetBridge(ref.botID)
+			m.resetBridge(ctx, ref.workspaceID, ref.containerID)
 			_ = m.startTaskAndEnsureNetwork(ctx, ref.botID, ref.containerID)
-			m.resetBridge(ref.botID)
+			m.resetBridge(ctx, ref.workspaceID, ref.containerID)
 		}
 		return err
 	}
@@ -458,7 +464,7 @@ func (m *Manager) commitSnapshotAndReplaceContainer(ctx context.Context, ref *lo
 
 func (m *Manager) replaceLockedContainerFromSnapshot(ctx context.Context, ref *lockedContainerRef, activeLabel, parentSnapshot string) error {
 	activeSnapshotName := fmt.Sprintf("%s-%s-%d", ref.containerID, strings.TrimSpace(activeLabel), time.Now().UnixNano())
-	return m.replaceContainerSnapshot(ctx, ref.botID, ref.containerID, ref.info, activeSnapshotName, parentSnapshot)
+	return m.replaceContainerSnapshot(ctx, ref, activeSnapshotName, parentSnapshot)
 }
 
 func (m *Manager) nativeSnapshotsSupported(ctx context.Context) bool {
@@ -468,15 +474,17 @@ func (m *Manager) nativeSnapshotsSupported(ctx context.Context) bool {
 	return !ok || checker.SnapshotSupported(ctx)
 }
 
-func (m *Manager) buildVersionSpec(ctx context.Context, botID string, cdiDevices []string) (ctr.ContainerSpec, error) {
-	if len(cdiDevices) == 0 {
+// buildVersionSpec rebuilds the start parameters of an existing container.
+// botID may be empty for a computer nothing is bound to.
+func (m *Manager) buildVersionSpec(ctx context.Context, containerID, botID string, cdiDevices []string) (ctr.ContainerSpec, error) {
+	if len(cdiDevices) == 0 && botID != "" {
 		gpu, err := m.resolveWorkspaceGPU(ctx, botID)
 		if err != nil {
 			return ctr.ContainerSpec{}, err
 		}
 		cdiDevices = gpu.Devices
 	}
-	return m.buildWorkspaceContainerSpec(ctx, botID, WorkspaceGPUConfig{Devices: cdiDevices})
+	return m.buildWorkspaceContainerSpec(ctx, containerID, botID, WorkspaceGPUConfig{Devices: cdiDevices})
 }
 
 func (m *Manager) safeStopTask(ctx context.Context, containerID string) error {
@@ -493,26 +501,22 @@ func (m *Manager) safeStopTask(ctx context.Context, containerID string) error {
 	return nil
 }
 
-// ensureDBRecords records containerID as the bot's managed computer instance
-// and returns the computer's workspace id.
-func (m *Manager) ensureDBRecords(ctx context.Context, botID, containerID, imageRef string) (string, error) {
+// ensureDBRecords records containerID as the computer's instance. The bot,
+// when the computer is operated for one, has to exist.
+func (m *Manager) ensureDBRecords(ctx context.Context, workspaceID, botID, containerID, imageRef string) error {
 	if m.computers == nil {
-		return "", errors.New("db is not configured")
+		return errors.New("db is not configured")
 	}
-	if m.queries != nil {
+	if m.queries != nil && botID != "" {
 		botUUID, err := db.ParseUUID(botID)
 		if err != nil {
-			return "", err
+			return err
 		}
 		if _, err := m.queries.GetBotByID(ctx, botUUID); err != nil {
-			return "", err
+			return err
 		}
 	}
-	workspaceID, err := m.managedWorkspaceID(ctx, botID)
-	if err != nil {
-		return "", err
-	}
-	if err := m.computers.UpsertManagedComputerInstance(ctx, dbstore.ManagedComputerInstanceInput{
+	return m.computers.UpsertManagedComputerInstance(ctx, dbstore.ManagedComputerInstanceInput{
 		WorkspaceID:   workspaceID,
 		InstanceID:    containerID,
 		InstanceName:  containerID,
@@ -521,10 +525,7 @@ func (m *Manager) ensureDBRecords(ctx context.Context, botID, containerID, image
 		Namespace:     "default",
 		AutoStart:     true,
 		ContainerPath: config.DefaultDataMount,
-	}); err != nil {
-		return "", err
-	}
-	return workspaceID, nil
+	})
 }
 
 // managedSnapshots lists the snapshot records of the bot's managed computer;

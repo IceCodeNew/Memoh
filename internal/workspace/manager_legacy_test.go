@@ -19,7 +19,7 @@ import (
 type legacyRouteTestService struct {
 	container  ctr.ContainerInfo
 	created    bool
-	byLabel    []ctr.ContainerInfo
+	byLabel    []ctr.ContainerInfo // extra containers, listed and matched by label
 	createdReq ctr.CreateContainerRequest
 
 	createCalls int
@@ -115,10 +115,11 @@ func (s *legacyRouteTestService) GetContainer(context.Context, string) (ctr.Cont
 }
 
 func (s *legacyRouteTestService) ListContainers(context.Context) ([]ctr.ContainerInfo, error) {
-	if !s.created {
-		return nil, nil
+	out := append([]ctr.ContainerInfo(nil), s.byLabel...)
+	if s.created {
+		out = append(out, s.container)
 	}
-	return []ctr.ContainerInfo{s.container}, nil
+	return out, nil
 }
 
 func (s *legacyRouteTestService) DeleteContainer(context.Context, string, *ctr.DeleteContainerOptions) error {
@@ -127,8 +128,15 @@ func (s *legacyRouteTestService) DeleteContainer(context.Context, string, *ctr.D
 	return nil
 }
 
-func (s *legacyRouteTestService) ListContainersByLabel(context.Context, string, string) ([]ctr.ContainerInfo, error) {
-	return s.byLabel, nil
+func (s *legacyRouteTestService) ListContainersByLabel(ctx context.Context, key, value string) ([]ctr.ContainerInfo, error) {
+	all, _ := s.ListContainers(ctx)
+	var out []ctr.ContainerInfo
+	for _, info := range all {
+		if got, ok := info.Labels[key]; ok && got == value {
+			out = append(out, info)
+		}
+	}
+	return out, nil
 }
 
 func (s *legacyRouteTestService) StartContainer(context.Context, string, *ctr.StartTaskOptions) error {
@@ -233,7 +241,7 @@ func TestBuildWorkspaceContainerSpecInjectsBridgeTLSMaterial(t *testing.T) {
 		ExpectedClientURI: expectedClientURI,
 	})
 
-	spec, err := m.buildWorkspaceContainerSpec(context.Background(), "00000000-0000-0000-0000-000000000001", WorkspaceGPUConfig{})
+	spec, err := m.buildWorkspaceContainerSpec(context.Background(), ContainerPrefix+"00000000-0000-0000-0000-0000000000c1", "00000000-0000-0000-0000-000000000001", WorkspaceGPUConfig{})
 	if err != nil {
 		t.Fatalf("build spec: %v", err)
 	}
@@ -312,10 +320,13 @@ func TestStartWithImageClearsLegacyRouteForBridgeContainer(t *testing.T) {
 		CNIConfigDir: "/etc/cni/net.d",
 	})
 
-	botID := "00000000-0000-0000-0000-000000000001"
-	m.SetLegacyIP(botID, "10.0.0.9")
+	const botID = "00000000-0000-0000-0000-000000000001"
+	const computerID = "00000000-0000-0000-0000-0000000000c1"
+	bindTestComputer(m, botID, computerID)
+	containerID := ContainerPrefix + computerID
+	m.setLegacyIP(containerID, "10.0.0.9")
 
-	if got := m.dialTarget(botID); got != "passthrough:///10.0.0.9:9090" {
+	if got := m.dialTarget(containerID); got != "passthrough:///10.0.0.9:9090" {
 		t.Fatalf("expected legacy dial target before start, got %q", got)
 	}
 
@@ -323,11 +334,25 @@ func TestStartWithImageClearsLegacyRouteForBridgeContainer(t *testing.T) {
 		t.Fatalf("StartWithImage failed: %v", err)
 	}
 
-	if got := m.dialTarget(botID); got != "unix://"+filepath.Join(dataRoot, "run", botID, "bridge.sock") {
+	// A new container is named after the computer, so its socket directory is
+	// the computer's as well; the bot id appears nowhere on the host.
+	if got := m.dialTarget(containerID); got != "unix://"+filepath.Join(dataRoot, "run", computerID, "bridge.sock") {
 		t.Fatalf("expected unix dial target after bridge start, got %q", got)
 	}
 	if svc.createCalls != 1 || svc.startCalls != 1 {
 		t.Fatalf("expected create/start once, got create=%d start=%d", svc.createCalls, svc.startCalls)
+	}
+	if svc.createdReq.ID != containerID {
+		t.Fatalf("container id = %q, want %q", svc.createdReq.ID, containerID)
+	}
+	if got := svc.createdReq.Labels[WorkspaceIDLabelKey]; got != computerID {
+		t.Fatalf("%s label = %q, want %q", WorkspaceIDLabelKey, got, computerID)
+	}
+	if got := svc.createdReq.Labels[BotLabelKey]; got != botID {
+		t.Fatalf("%s label = %q, want %q", BotLabelKey, got, botID)
+	}
+	if got, err := m.ContainerID(context.Background(), botID); err != nil || got != containerID {
+		t.Fatalf("ContainerID() = %q, %v; want %q", got, err, containerID)
 	}
 }
 
@@ -338,7 +363,10 @@ func TestStartWithImageDoesNotRecreateExistingContainer(t *testing.T) {
 		t.Fatalf("mkdir runtime dir: %v", err)
 	}
 
-	botID := "00000000-0000-0000-0000-000000000001"
+	// The container predates managed computers: it is named after the bot
+	// and carries no label. The bot's computer has a different id.
+	const botID = "00000000-0000-0000-0000-000000000001"
+	const computerID = "00000000-0000-0000-0000-0000000000c1"
 	svc := &legacyRouteTestService{
 		created: true,
 		container: ctr.ContainerInfo{
@@ -353,6 +381,7 @@ func TestStartWithImageDoesNotRecreateExistingContainer(t *testing.T) {
 		CNIBinaryDir: "/opt/cni/bin",
 		CNIConfigDir: "/etc/cni/net.d",
 	})
+	bindTestComputer(m, botID, computerID)
 
 	if err := m.StartWithImage(context.Background(), botID, ""); err != nil {
 		t.Fatalf("StartWithImage failed: %v", err)
@@ -362,6 +391,14 @@ func TestStartWithImageDoesNotRecreateExistingContainer(t *testing.T) {
 	}
 	if svc.startCalls != 1 {
 		t.Fatalf("existing container start calls = %d, want 1", svc.startCalls)
+	}
+	// Host-side resources follow the container's instance key: the bot id
+	// the container was started with, not the computer id.
+	if got := m.dialTarget(ContainerPrefix + botID); got != "unix://"+filepath.Join(dataRoot, "run", botID, "bridge.sock") {
+		t.Fatalf("dial target = %q, want the bot-named socket", got)
+	}
+	if got := m.DisplaySocketPath(context.Background(), botID); got != filepath.Join(dataRoot, "run", botID, DisplayRFBSocketName) {
+		t.Fatalf("DisplaySocketPath() = %q, want the bot-named socket directory", got)
 	}
 }
 
@@ -384,22 +421,24 @@ func TestWorkspaceInfoAddsACPToolsEndpointForProviderContainer(t *testing.T) {
 }
 
 func TestDeleteClearsLegacyRoute(t *testing.T) {
-	svc := &legacyRouteTestService{created: true, container: ctr.ContainerInfo{ID: "workspace-00000000-0000-0000-0000-000000000001"}}
+	const botID = "00000000-0000-0000-0000-000000000001"
+	const computerID = "00000000-0000-0000-0000-0000000000c1"
+	containerID := ContainerPrefix + botID
+	svc := &legacyRouteTestService{created: true, container: ctr.ContainerInfo{ID: containerID}}
 	m := newLegacyRouteTestManager(t, svc, config.WorkspaceConfig{
 		DataRoot:     t.TempDir(),
 		Snapshotter:  "overlayfs",
 		CNIBinaryDir: "/opt/cni/bin",
 		CNIConfigDir: "/etc/cni/net.d",
 	})
-
-	botID := "00000000-0000-0000-0000-000000000001"
-	m.SetLegacyIP(botID, "10.0.0.9")
+	bindTestComputer(m, botID, computerID)
+	m.setLegacyIP(containerID, "10.0.0.9")
 
 	if err := m.Delete(context.Background(), botID, false); err != nil {
 		t.Fatalf("Delete failed: %v", err)
 	}
 
-	if got := m.dialTarget(botID); got == "passthrough:///10.0.0.9:9090" {
+	if got := m.dialTarget(containerID); got == "passthrough:///10.0.0.9:9090" {
 		t.Fatalf("expected legacy TCP target to be cleared, got %q", got)
 	}
 	if svc.removeNet != 1 || svc.deleteTask != 1 || svc.deleteCalls != 1 {
@@ -428,10 +467,11 @@ func TestEnsureContainerNetworkAndGetIPRejectsEmptyIP(t *testing.T) {
 	}
 }
 
-func TestContainerIDPrefersCurrentLabelSearch(t *testing.T) {
+func TestContainerIDPrefersLabelSearchOverScan(t *testing.T) {
 	t.Parallel()
 
-	botID := "00000000-0000-0000-0000-000000000001"
+	const botID = "00000000-0000-0000-0000-000000000001"
+	const computerID = "00000000-0000-0000-0000-0000000000c1"
 	svc := &legacyRouteTestService{
 		byLabel: []ctr.ContainerInfo{{
 			ID:        "workspace-from-label",
@@ -440,6 +480,7 @@ func TestContainerIDPrefersCurrentLabelSearch(t *testing.T) {
 		}},
 	}
 	m := newLegacyRouteTestManager(t, svc, config.WorkspaceConfig{})
+	bindTestComputer(m, botID, computerID)
 
 	containerID, err := m.ContainerID(context.Background(), botID)
 	if err != nil {
@@ -453,7 +494,8 @@ func TestContainerIDPrefersCurrentLabelSearch(t *testing.T) {
 func TestContainerIDFallsBackToNameInference(t *testing.T) {
 	t.Parallel()
 
-	botID := "00000000-0000-0000-0000-000000000001"
+	const botID = "00000000-0000-0000-0000-000000000001"
+	const computerID = "00000000-0000-0000-0000-0000000000c1"
 	svc := &legacyRouteTestService{
 		created: true,
 		container: ctr.ContainerInfo{
@@ -462,6 +504,7 @@ func TestContainerIDFallsBackToNameInference(t *testing.T) {
 		},
 	}
 	m := newLegacyRouteTestManager(t, svc, config.WorkspaceConfig{})
+	bindTestComputer(m, botID, computerID)
 
 	containerID, err := m.ContainerID(context.Background(), botID)
 	if err != nil {

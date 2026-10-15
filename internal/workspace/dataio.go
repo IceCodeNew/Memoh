@@ -46,7 +46,7 @@ func (m *Manager) ExportData(ctx context.Context, botID string) (io.ReadCloser, 
 
 	mounts, err := m.snapshotMounts(ctx, ref.info)
 	if errors.Is(err, errMountNotSupported) {
-		return m.exportDataViaGRPC(ctx, botID)
+		return m.exportDataViaGRPC(ctx, ref.containerID)
 	}
 	if err != nil {
 		return nil, err
@@ -86,10 +86,13 @@ func (m *Manager) ImportData(ctx context.Context, botID string, r io.Reader) err
 		return fmt.Errorf("get workspace runtime: %w", err)
 	}
 	defer ref.Close()
+	return m.importDataIntoRef(ctx, ref, r)
+}
 
+func (m *Manager) importDataIntoRef(ctx context.Context, ref *lockedContainerRef, r io.Reader) error {
 	mounts, err := m.snapshotMounts(ctx, ref.info)
 	if errors.Is(err, errMountNotSupported) {
-		return m.importDataViaGRPC(ctx, botID, r)
+		return m.importDataViaGRPC(ctx, ref.containerID, r)
 	}
 	if err != nil {
 		return err
@@ -122,46 +125,59 @@ func (m *Manager) PreserveData(ctx context.Context, botID string) error {
 	}
 	defer ref.Close()
 
+	backupPath := m.backupPath(ref.workspaceID)
 	mounts, mountErr := m.snapshotMounts(ctx, ref.info)
 	if errors.Is(mountErr, errMountNotSupported) {
-		return m.preserveDataViaGRPC(ctx, botID, m.backupPath(botID))
+		return m.preserveDataViaGRPC(ctx, ref.containerID, backupPath)
 	}
 	if mountErr != nil {
 		return mountErr
 	}
-	return m.preserveDataToBackup(ctx, botID, mounts)
+	return m.preserveDataToArchive(ctx, backupPath, mounts)
 }
 
 // RestorePreservedData imports preserved data (backup tar.gz) into a running
 // container's /data.
 func (m *Manager) RestorePreservedData(ctx context.Context, botID string) error {
-	return m.consumePreservedData(botID, func(r io.Reader) error {
-		return m.ImportData(ctx, botID, r)
+	ref, err := m.loadLockedContainer(ctx, botID)
+	if err != nil {
+		return fmt.Errorf("get workspace runtime: %w", err)
+	}
+	defer ref.Close()
+	backupPath := m.preservedBackupPath(ref.workspaceID, ref.botID)
+	if backupPath == "" {
+		return errNoPreservedData
+	}
+	return consumePreservedData(backupPath, func(r io.Reader) error {
+		return m.importDataIntoRef(ctx, ref, r)
 	})
 }
 
-// HasPreservedData checks whether a backup tar.gz exists for a bot.
-func (m *Manager) HasPreservedData(botID string) bool {
-	_, err := os.Stat(m.backupPath(botID))
-	return err == nil
+// HasPreservedData reports whether a backup tar.gz exists for the bot's
+// managed computer.
+func (m *Manager) HasPreservedData(ctx context.Context, botID string) bool {
+	workspaceID, err := m.managedWorkspaceID(ctx, botID)
+	if err != nil {
+		return false
+	}
+	return m.preservedBackupPath(workspaceID, botID) != ""
 }
 
 // recoverOrphanedSnapshot detects a snapshot whose container was deleted
 // (e.g. dev image rebuild, containerd metadata loss) and exports /data to a
 // backup archive. The caller should invoke restorePreservedIntoSnapshot after
 // creating the replacement container. Returns true when data was preserved.
-func (m *Manager) recoverOrphanedSnapshot(ctx context.Context, botID string) bool {
+func (m *Manager) recoverOrphanedSnapshot(ctx context.Context, workspaceID, containerID string) bool {
 	snapshotter := m.cfg.Snapshotter
 	if snapshotter == "" {
 		return false
 	}
 
-	snapshotKey := m.resolveContainerID(ctx, botID)
 	mounter, ok := m.service.(snapshotMountProvider)
 	if !ok {
 		return false
 	}
-	raw, err := mounter.SnapshotMounts(ctx, snapshotter, snapshotKey)
+	raw, err := mounter.SnapshotMounts(ctx, snapshotter, containerID)
 	if err != nil {
 		return false
 	}
@@ -171,17 +187,17 @@ func (m *Manager) recoverOrphanedSnapshot(ctx context.Context, botID string) boo
 		mounts[i] = mount.Mount{Type: r.Type, Source: r.Source, Options: r.Options}
 	}
 
-	backupPath := m.backupPath(botID)
+	backupPath := m.backupPath(workspaceID)
 	if err := os.MkdirAll(filepath.Dir(backupPath), 0o750); err != nil {
 		m.logger.WarnContext(ctx, "recover orphaned snapshot: mkdir failed",
-			slog.String("bot_id", botID), slog.Any("error", err))
+			slog.String("workspace_id", workspaceID), slog.Any("error", err))
 		return false
 	}
 
 	f, err := createPrivateWorkspaceArchive(backupPath)
 	if err != nil {
 		m.logger.WarnContext(ctx, "recover orphaned snapshot: create backup file failed",
-			slog.String("bot_id", botID), slog.Any("error", err))
+			slog.String("workspace_id", workspaceID), slog.Any("error", err))
 		return false
 	}
 
@@ -197,7 +213,7 @@ func (m *Manager) recoverOrphanedSnapshot(ctx context.Context, botID string) boo
 	if writeErr != nil {
 		_ = os.Remove(backupPath)
 		m.logger.WarnContext(ctx, "recover orphaned snapshot: export failed",
-			slog.String("bot_id", botID), slog.Any("error", writeErr))
+			slog.String("workspace_id", workspaceID), slog.Any("error", writeErr))
 		return false
 	}
 	if closeErr != nil {
@@ -207,16 +223,16 @@ func (m *Manager) recoverOrphanedSnapshot(ctx context.Context, botID string) boo
 	return true
 }
 
-// restorePreservedIntoSnapshot restores a preserved backup directly into
-// the container's snapshot before the task is started. This avoids the
+// restorePreservedIntoSnapshot restores the backup at backupPath directly
+// into the container's snapshot before the task is started. This avoids the
 // stop/start cycle that RestorePreservedData (via ImportData) requires.
-func (m *Manager) restorePreservedIntoSnapshot(ctx context.Context, botID string, info ctr.ContainerInfo) error {
+func (m *Manager) restorePreservedIntoSnapshot(ctx context.Context, backupPath string, info ctr.ContainerInfo) error {
 	mounts, err := m.snapshotMounts(ctx, info)
 	if err != nil {
 		return err
 	}
 
-	return m.consumePreservedData(botID, func(r io.Reader) error {
+	return consumePreservedData(backupPath, func(r io.Reader) error {
 		return mount.WithTempMount(ctx, mounts, func(root string) error {
 			dataDir := mountedDataDir(root)
 			if err := os.MkdirAll(dataDir, 0o750); err != nil {
@@ -227,18 +243,21 @@ func (m *Manager) restorePreservedIntoSnapshot(ctx context.Context, botID string
 	})
 }
 
-func (m *Manager) restorePreservedDataViaGRPC(ctx context.Context, botID string) error {
-	return m.consumePreservedData(botID, func(r io.Reader) error {
-		return m.importDataViaGRPC(ctx, botID, r)
+func (m *Manager) restorePreservedDataViaGRPC(ctx context.Context, backupPath, containerID string) error {
+	return consumePreservedData(backupPath, func(r io.Reader) error {
+		return m.importDataViaGRPC(ctx, containerID, r)
 	})
 }
 
-func (m *Manager) consumePreservedData(botID string, restore func(io.Reader) error) error {
-	bp := m.backupPath(botID)
-	f, err := os.Open(bp) //nolint:gosec // G304: operator-controlled path
+var errNoPreservedData = errors.New("no preserved data found")
+
+// consumePreservedData feeds the backup at backupPath to restore and removes
+// it once restored.
+func consumePreservedData(backupPath string, restore func(io.Reader) error) error {
+	f, err := os.Open(backupPath) //nolint:gosec // G304: operator-controlled path
 	if err != nil {
 		if os.IsNotExist(err) {
-			return errors.New("no preserved data found")
+			return errNoPreservedData
 		}
 		return err
 	}
@@ -249,7 +268,7 @@ func (m *Manager) consumePreservedData(botID string, restore func(io.Reader) err
 	if err := f.Close(); err != nil {
 		return err
 	}
-	return os.Remove(bp)
+	return os.Remove(backupPath)
 }
 
 // errMountNotSupported indicates the backend doesn't support snapshot mounts
@@ -279,8 +298,8 @@ func (m *Manager) snapshotMounts(ctx context.Context, info ctr.ContainerInfo) ([
 	return mounts, nil
 }
 
-func (m *Manager) restartContainer(ctx context.Context, botID, containerID string) {
-	m.resetBridge(botID)
+func (m *Manager) restartContainer(ctx context.Context, workspaceID, botID, containerID string) {
+	m.resetBridge(ctx, workspaceID, containerID)
 	if err := m.service.DeleteTask(ctx, containerID, &ctr.DeleteTaskOptions{Force: true}); err != nil && !ctr.IsNotFound(err) {
 		m.logger.WarnContext(ctx, "cleanup stale task after data operation failed",
 			slog.String("container_id", containerID), slog.Any("error", err))
@@ -293,13 +312,13 @@ func (m *Manager) restartContainer(ctx context.Context, botID, containerID strin
 	}
 }
 
-func (m *Manager) stopTaskForMutation(ctx context.Context, botID, containerID string) (func(), error) {
+func (m *Manager) stopTaskForMutation(ctx context.Context, workspaceID, botID, containerID string) (func(), error) {
 	if err := m.safeStopTask(ctx, containerID); err != nil {
 		return nil, err
 	}
 	restartCtx := context.WithoutCancel(ctx)
 	return func() {
-		m.restartContainer(restartCtx, botID, containerID)
+		m.restartContainer(restartCtx, workspaceID, botID, containerID)
 	}, nil
 }
 
@@ -336,12 +355,11 @@ func (*Manager) preserveDataToArchive(
 	return nil
 }
 
-func (m *Manager) preserveDataToBackup(ctx context.Context, botID string, mounts []mount.Mount) error {
-	return m.preserveDataToArchive(ctx, m.backupPath(botID), mounts)
-}
-
-func (m *Manager) preserveDataBeforeDelete(ctx context.Context, botID string) error {
-	ref, err := m.loadLockedContainer(ctx, botID)
+// preserveDataBeforeDelete exports the container's /data to the computer's
+// backup archive. A container the runtime no longer has holds nothing to
+// export.
+func (m *Manager) preserveDataBeforeDelete(ctx context.Context, workspaceID, botID, containerID string) error {
+	ref, err := m.lockContainerRef(ctx, workspaceID, botID, containerID)
 	if err != nil {
 		if ctr.IsNotFound(err) {
 			return nil
@@ -350,19 +368,20 @@ func (m *Manager) preserveDataBeforeDelete(ctx context.Context, botID string) er
 	}
 	defer ref.Close()
 
+	backupPath := m.backupPath(workspaceID)
 	mounts, err := m.snapshotMounts(ctx, ref.info)
 	if errors.Is(err, errMountNotSupported) {
-		return m.preserveDataViaGRPC(ctx, botID, m.backupPath(botID))
+		return m.preserveDataViaGRPC(ctx, containerID, backupPath)
 	}
 	if err != nil {
 		return err
 	}
 
-	if err := m.safeStopTask(ctx, ref.containerID); err != nil {
+	if err := m.safeStopTask(ctx, containerID); err != nil {
 		return fmt.Errorf("stop for data preserve: %w", err)
 	}
-	if err := m.preserveDataToBackup(ctx, botID, mounts); err != nil {
-		m.restartContainer(ctx, botID, ref.containerID)
+	if err := m.preserveDataToArchive(ctx, backupPath, mounts); err != nil {
+		m.restartContainer(ctx, workspaceID, botID, containerID)
 		return err
 	}
 	return nil
@@ -372,8 +391,27 @@ func mountedDataDir(root string) string {
 	return filepath.Join(root, strings.TrimPrefix(containerDataDir, string(filepath.Separator)))
 }
 
-func (m *Manager) backupPath(botID string) string {
-	return filepath.Join(m.dataRoot(), backupsSubdir, botID+".tar.gz")
+// backupPath is where the computer's preserved /data is written.
+func (m *Manager) backupPath(workspaceID string) string {
+	return filepath.Join(m.dataRoot(), backupsSubdir, workspaceID+".tar.gz")
+}
+
+// preservedBackupPath is the preserved /data of the computer, empty when
+// there is none. New backups are written under the workspace id; one written
+// before computers had their own ids sits under the id of the bot the
+// computer was operated for, which is tried next when the caller knows it.
+// For a computer that predates 0167 both ids are the same path.
+func (m *Manager) preservedBackupPath(workspaceID, botID string) string {
+	candidates := []string{m.backupPath(workspaceID)}
+	if botID != "" && botID != workspaceID {
+		candidates = append(candidates, m.backupPath(botID))
+	}
+	for _, candidate := range candidates {
+		if _, err := os.Stat(candidate); err == nil {
+			return candidate
+		}
+	}
+	return ""
 }
 
 func createPrivateWorkspaceArchive(path string) (*os.File, error) {
@@ -388,8 +426,10 @@ func createPrivateWorkspaceArchive(path string) (*os.File, error) {
 	return f, nil
 }
 
-func (*Manager) archiveSnapshotKey(botID string) string {
-	return archivePrefix + filepath.ToSlash(filepath.Join(botID, fmt.Sprintf("%d.tar.gz", time.Now().UnixNano())))
+// archiveSnapshotKey names a new archive snapshot of the computer. The key is
+// persisted with the version, so reading it back needs no fallback.
+func (*Manager) archiveSnapshotKey(workspaceID string) string {
+	return archivePrefix + filepath.ToSlash(filepath.Join(workspaceID, fmt.Sprintf("%d.tar.gz", time.Now().UnixNano())))
 }
 
 func (m *Manager) archiveSnapshotPath(key string) string {
@@ -425,9 +465,9 @@ func (m *Manager) CountData(ctx context.Context, botID string) (int, error) {
 
 func (m *Manager) exportDataViaGRPC(
 	ctx context.Context,
-	botID string,
+	containerID string,
 ) (io.ReadCloser, error) {
-	client, err := m.nativeMCPClient(ctx, botID)
+	client, err := m.instanceClient(ctx, containerID)
 	if err != nil {
 		return nil, fmt.Errorf("grpc connect: %w", err)
 	}
@@ -485,10 +525,10 @@ func (m *Manager) exportDataViaGRPC(
 
 func (m *Manager) preserveDataViaGRPC(
 	ctx context.Context,
-	botID string,
+	containerID string,
 	backupPath string,
 ) error {
-	reader, err := m.exportDataViaGRPC(ctx, botID)
+	reader, err := m.exportDataViaGRPC(ctx, containerID)
 	if err != nil {
 		return err
 	}
@@ -515,8 +555,8 @@ func (m *Manager) createArchiveSnapshotFromRef(ctx context.Context, ref *lockedC
 	if errors.Is(mountErr, errMountNotSupported) {
 		var lastErr error
 		for range 20 {
-			m.resetBridge(ref.botID)
-			if err := m.preserveDataViaGRPC(ctx, ref.botID, archivePath); err == nil {
+			m.resetBridge(ctx, ref.workspaceID, ref.containerID)
+			if err := m.preserveDataViaGRPC(ctx, ref.containerID, archivePath); err == nil {
 				return nil
 			} else {
 				lastErr = err
@@ -548,7 +588,7 @@ func (m *Manager) restoreArchiveSnapshotFromRef(ctx context.Context, ref *locked
 	}
 	defer func() { _ = f.Close() }()
 
-	client, err := m.nativeMCPClient(ctx, ref.botID)
+	client, err := m.instanceClient(ctx, ref.containerID)
 	if err != nil {
 		return fmt.Errorf("grpc connect: %w", err)
 	}
@@ -556,15 +596,15 @@ func (m *Manager) restoreArchiveSnapshotFromRef(ctx context.Context, ref *locked
 	if err := client.Mkdir(ctx, containerDataDir); err != nil {
 		return fmt.Errorf("mkdir data dir: %w", err)
 	}
-	return m.importDataViaGRPC(ctx, ref.botID, f)
+	return m.importDataViaGRPC(ctx, ref.containerID, f)
 }
 
 func (m *Manager) importDataViaGRPC(
 	ctx context.Context,
-	botID string,
+	containerID string,
 	r io.Reader,
 ) error {
-	client, err := m.nativeMCPClient(ctx, botID)
+	client, err := m.instanceClient(ctx, containerID)
 	if err != nil {
 		return fmt.Errorf("grpc connect: %w", err)
 	}

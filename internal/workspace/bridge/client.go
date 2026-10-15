@@ -768,16 +768,18 @@ type Provider interface {
 	MCPClient(ctx context.Context, botID string) (*Client, error)
 }
 
-// Pool manages cached gRPC clients keyed by bot ID.
+// Pool manages cached gRPC clients keyed by workspace instance: the owner
+// chooses the key (the workspace manager uses the container id) and maps it
+// to a dial target.
 type Pool struct {
 	mu             sync.RWMutex
 	clients        map[string]*Client
-	dialTargetFunc func(botID string) string
+	dialTargetFunc func(key string) string
 	tlsOpts        *TLSOptions
 }
 
-// NewPool creates a client pool. dialTargetFunc maps bot ID to a gRPC target
-// string (e.g. "unix:///path/sock" or "host:port").
+// NewPool creates a client pool. dialTargetFunc maps a pool key to a gRPC
+// target string (e.g. "unix:///path/sock" or "host:port").
 func NewPool(dialTargetFunc func(string) string) *Pool {
 	return &Pool{
 		clients:        make(map[string]*Client),
@@ -800,15 +802,15 @@ func (p *Pool) tlsOptions() *TLSOptions {
 }
 
 // MCPClient implements Provider. Alias for Get.
-func (p *Pool) MCPClient(ctx context.Context, botID string) (*Client, error) {
-	return p.Get(ctx, botID)
+func (p *Pool) MCPClient(ctx context.Context, key string) (*Client, error) {
+	return p.Get(ctx, key)
 }
 
 // Get returns a cached client or dials a new one.
 // Stale connections (Shutdown / TransientFailure / stuck Connecting) are evicted automatically.
-func (p *Pool) Get(ctx context.Context, botID string) (*Client, error) {
+func (p *Pool) Get(ctx context.Context, key string) (*Client, error) {
 	p.mu.RLock()
-	if c, ok := p.clients[botID]; ok {
+	if c, ok := p.clients[key]; ok {
 		state := c.conn.GetState()
 		stale := state == connectivity.Shutdown || state == connectivity.TransientFailure ||
 			(state == connectivity.Connecting && time.Since(c.createdAt) > connectingTimeout)
@@ -817,14 +819,14 @@ func (p *Pool) Get(ctx context.Context, botID string) (*Client, error) {
 			return c, nil
 		}
 		p.mu.RUnlock()
-		p.Remove(botID)
+		p.Remove(key)
 	} else {
 		p.mu.RUnlock()
 	}
 
-	target := p.dialTargetFunc(botID)
+	target := p.dialTargetFunc(key)
 	if target == "" {
-		return nil, fmt.Errorf("no dial target for bot %s", botID)
+		return nil, fmt.Errorf("no dial target for workspace instance %s", key)
 	}
 
 	c, err := DialTLS(ctx, target, p.tlsOptions())
@@ -833,22 +835,22 @@ func (p *Pool) Get(ctx context.Context, botID string) (*Client, error) {
 	}
 
 	p.mu.Lock()
-	if existing, ok := p.clients[botID]; ok {
+	if existing, ok := p.clients[key]; ok {
 		p.mu.Unlock()
 		_ = c.Close()
 		return existing, nil
 	}
-	p.clients[botID] = c
+	p.clients[key] = c
 	p.mu.Unlock()
 	return c, nil
 }
 
-// Remove closes and removes the client for a bot.
-func (p *Pool) Remove(botID string) {
+// Remove closes and removes the client of a workspace instance.
+func (p *Pool) Remove(key string) {
 	p.mu.Lock()
-	if c, ok := p.clients[botID]; ok {
+	if c, ok := p.clients[key]; ok {
 		_ = c.Close()
-		delete(p.clients, botID)
+		delete(p.clients, key)
 	}
 	p.mu.Unlock()
 }

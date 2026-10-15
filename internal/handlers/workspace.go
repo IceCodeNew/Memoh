@@ -16,14 +16,14 @@ type containerWorkspace interface {
 	bridge.Provider
 	NativeMCPClient(ctx context.Context, botID string) (*bridge.Client, error)
 	BotDisplayEnabled(ctx context.Context, botID string) bool
-	DisplaySocketPath(botID string) string
+	DisplaySocketPath(ctx context.Context, botID string) string
 	EnsureRunning(ctx context.Context, botID string) error
 	EnsureNativeRunning(ctx context.Context, botID string) error
 	ContainerID(ctx context.Context, botID string) (string, error)
 	ResolveWorkspaceImage(ctx context.Context, botID string) (string, error)
 	ResolveWorkspaceGPU(ctx context.Context, botID string) (workspace.WorkspaceGPUConfig, error)
 	PrepareImageForCreate(ctx context.Context, image string, opts *ctr.PullImageOptions) (workspace.ImagePrepareResult, error)
-	HasPreservedData(botID string) bool
+	HasPreservedData(ctx context.Context, botID string) bool
 	StartWithResolvedConfig(ctx context.Context, botID, image string, gpu workspace.WorkspaceGPUConfig) error
 	WaitForWorkspaceReady(ctx context.Context, botID string) error
 	InitializeNativeWorkspace(ctx context.Context, botID string) error

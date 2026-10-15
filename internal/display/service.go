@@ -103,7 +103,7 @@ var screenshotJPEGCandidates = []screenshotJPEGCandidate{
 
 type Workspace interface {
 	BotDisplayEnabled(ctx context.Context, botID string) bool
-	DisplaySocketPath(botID string) string
+	DisplaySocketPath(ctx context.Context, botID string) string
 }
 
 type workspaceDisplayDialer interface {
@@ -219,11 +219,11 @@ func (s *Service) Close() error {
 	return mux.Close()
 }
 
-func (s *Service) displayTarget(botID string) string {
+func (s *Service) displayTarget(ctx context.Context, botID string) string {
 	if _, ok := s.workspace.(workspaceDisplayDialer); ok {
 		return "bridge-tcp://" + rfbTCPAddress
 	}
-	return s.workspace.DisplaySocketPath(botID)
+	return s.workspace.DisplaySocketPath(ctx, botID)
 }
 
 func (s *Service) displayReachable(ctx context.Context, botID string) bool {
@@ -242,14 +242,14 @@ func (s *Service) dialRFB(ctx context.Context, botID string) (net.Conn, error) {
 		if err == nil {
 			return conn, nil
 		}
-		if socketPath := strings.TrimSpace(s.workspace.DisplaySocketPath(botID)); socketPath != "" {
+		if socketPath := strings.TrimSpace(s.workspace.DisplaySocketPath(ctx, botID)); socketPath != "" {
 			if fallback, fallbackErr := dialRFBSocket(ctx, socketPath); fallbackErr == nil {
 				return fallback, nil
 			}
 		}
 		return nil, fmt.Errorf("dial workspace display %s: %w", rfbTCPAddress, err)
 	}
-	return dialRFBSocket(ctx, s.workspace.DisplaySocketPath(botID))
+	return dialRFBSocket(ctx, s.workspace.DisplaySocketPath(ctx, botID))
 }
 
 func dialRFBSocket(ctx context.Context, socketPath string) (net.Conn, error) {
@@ -304,7 +304,7 @@ func (s *Service) Answer(ctx context.Context, botID string, req OfferRequest) (O
 	}
 
 	if !s.displayReachable(ctx, botID) {
-		return OfferResponse{}, fmt.Errorf("%w: %s", ErrDisplayUnavailable, s.displayTarget(botID))
+		return OfferResponse{}, fmt.Errorf("%w: %s", ErrDisplayUnavailable, s.displayTarget(ctx, botID))
 	}
 	gstLaunch, err := resolveGSTLaunch()
 	if err != nil {
@@ -358,7 +358,7 @@ func (s *Service) Screenshot(ctx context.Context, botID string) ([]byte, string,
 		return nil, "", ErrDisplayDisabled
 	}
 	if !s.displayReachable(ctx, botID) {
-		return nil, "", fmt.Errorf("%w: %s", ErrDisplayUnavailable, s.displayTarget(botID))
+		return nil, "", fmt.Errorf("%w: %s", ErrDisplayUnavailable, s.displayTarget(ctx, botID))
 	}
 	gstLaunch, err := resolveGSTLaunch()
 	if err != nil {
@@ -421,7 +421,7 @@ func (s *Service) ControlInputs(ctx context.Context, botID string, events []Cont
 		return ErrDisplayDisabled
 	}
 	if !s.displayReachable(ctx, botID) {
-		return fmt.Errorf("%w: %s", ErrDisplayUnavailable, s.displayTarget(botID))
+		return fmt.Errorf("%w: %s", ErrDisplayUnavailable, s.displayTarget(ctx, botID))
 	}
 	conn, err := s.dialRFB(ctx, botID)
 	if err != nil {
@@ -608,7 +608,7 @@ func (s *session) closed() bool {
 
 func (s *session) start(ctx context.Context) error {
 	if !s.service.displayReachable(ctx, s.botID) {
-		return fmt.Errorf("%w: %s", ErrDisplayUnavailable, s.service.displayTarget(s.botID))
+		return fmt.Errorf("%w: %s", ErrDisplayUnavailable, s.service.displayTarget(ctx, s.botID))
 	}
 
 	runCtx, runCtxCancel := context.WithCancel(context.WithoutCancel(ctx))
@@ -668,7 +668,7 @@ func (s *session) start(ctx context.Context) error {
 
 	s.service.logger.InfoContext(ctx, "display encoder started",
 		slog.String("bot_id", s.botID),
-		slog.String("rfb_target", s.service.displayTarget(s.botID)),
+		slog.String("rfb_target", s.service.displayTarget(ctx, s.botID)),
 		slog.String("gst_launch", s.gstLaunch),
 		slog.String("codec", s.codec),
 		slog.Int("proxy_port", proxyPort),

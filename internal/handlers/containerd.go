@@ -496,7 +496,7 @@ func (h *ContainerdHandler) CreateContainer(c echo.Context) error {
 	// The archive is imported after the workspace settled so the single
 	// "complete" event already reports data_restored.
 	dataRestored := false
-	if req.RestoreData && h.manager.HasPreservedData(botID) {
+	if req.RestoreData && h.manager.HasPreservedData(streamCtx, botID) {
 		send(createContainerRestoringEvent{Type: "restoring"})
 		if err := h.manager.RestorePreservedData(streamCtx, botID); err != nil {
 			return sendWorkspaceStreamFailure(streamCtx, send, apperror.CodeWorkspaceRestoreFailed, err, httpx.RequestID(c))
@@ -935,7 +935,7 @@ func (h *ContainerdHandler) RestorePreservedData(c echo.Context) error {
 		return apperror.New(apperror.CodeWorkspaceManagerUnavailable, nil)
 	}
 
-	if !h.manager.HasPreservedData(botID) {
+	if !h.manager.HasPreservedData(c.Request().Context(), botID) {
 		return apperror.New(apperror.CodeWorkspacePreservedDataNotFound, nil)
 	}
 

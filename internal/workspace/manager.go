@@ -32,14 +32,22 @@ import (
 )
 
 const (
-	BotLabelKey                 = "memoh.bot_id"
+	// BotLabelKey names the bot a container was created for. It is kept on new
+	// containers next to WorkspaceIDLabelKey so older lookups and Cloud-side
+	// filters keep working.
+	BotLabelKey = "memoh.bot_id"
+	// WorkspaceIDLabelKey names the managed computer a container belongs to.
+	WorkspaceIDLabelKey         = "memoh.workspace_id"
 	WorkspaceLabelKey           = "memoh.workspace"
 	WorkspaceLabelValue         = "v3"
 	WorkspaceCDIDevicesLabelKey = "memoh.workspace.cdi_devices"
-	ContainerPrefix             = "workspace-"
-	LegacyContainerPrefix       = "mcp-"
-	DisplayRFBSocketName        = "display.rfb.sock"
-	ToolsProxyHTTPURL           = bridge.ToolsProxyHTTPURL
+	// ContainerPrefix precedes the instance key in a container name. New
+	// containers are named after the managed computer (workspace-<workspace
+	// id>); those created earlier are named after the bot and keep their name.
+	ContainerPrefix       = "workspace-"
+	LegacyContainerPrefix = "mcp-"
+	DisplayRFBSocketName  = "display.rfb.sock"
+	ToolsProxyHTTPURL     = bridge.ToolsProxyHTTPURL
 
 	// WorkspaceInitPath and WorkspaceBridgePath are the container start
 	// parameters used by buildWorkspaceContainerSpec: the image's init and the
@@ -54,8 +62,11 @@ const (
 	bridgeReadyRetryInterval = 500 * time.Millisecond
 )
 
-// ErrContainerNotFound is returned when no container exists for a bot.
-var ErrContainerNotFound = errors.New("workspace not found for bot")
+// ErrContainerNotFound is returned when a bot has no managed computer or its
+// computer has no container. It wraps ctr.ErrNotFound: before the manager
+// resolved containers through records, the same situations surfaced as the
+// runtime's not-found on a guessed container name, and callers test for that.
+var ErrContainerNotFound = fmt.Errorf("workspace not found for bot: %w", ctr.ErrNotFound)
 
 // IsNotReady reports whether err says that the bot's workspace container does
 // not exist in the runtime or that its bridge does not answer. Both clear once
@@ -105,6 +116,12 @@ type ContainerMetricsResult struct {
 	Storage           *ContainerStorageMetrics
 }
 
+// Manager operates the managed computers of a runtime. Callers address it by
+// bot id; every exported bot-keyed method resolves the bot's managed computer
+// once at the boundary and continues with the workspace id and the container
+// behind it. Host-side resources — socket directory, display socket, bridge
+// connection, legacy dial target, container lock — are keyed by the container
+// (its instance key for paths), never derived from the bot.
 type Manager struct {
 	service           runtimeService
 	networkController netctl.Controller
@@ -124,7 +141,7 @@ type Manager struct {
 	templateBootstrap *TemplateBootstrapper
 	setupDiagnostics  WorkspaceSetupDiagnostics
 	legacyMu          sync.RWMutex
-	legacyIPs         map[string]string // botID → IP for pre-bridge containers
+	legacyIPs         map[string]string // containerID → IP for pre-bridge containers
 	bridgeResetMu     sync.Mutex
 	bridgeResetFns    []func(botID string) // see OnBridgeReset
 }
@@ -194,18 +211,6 @@ func (m *Manager) SetBridgeTLS(opts *BridgeTLSRuntimeOptions) {
 	m.grpcPool.SetTLSOptions(opts.Client)
 }
 
-// resolveContainerID resolves the actual workspace container ID for a bot.
-// This is the SINGLE point of container ID resolution for all lookup operations.
-// It delegates to ContainerID (DB → label → scan) and falls back to the
-// new-style prefix if no container exists yet.
-func (m *Manager) resolveContainerID(ctx context.Context, botID string) string {
-	id, err := m.ContainerID(ctx, botID)
-	if err != nil {
-		return ContainerPrefix + botID
-	}
-	return id
-}
-
 func (m *Manager) lockContainer(containerID string) func() {
 	m.containerLockMu.Lock()
 	lock, ok := m.containerLocks[containerID]
@@ -220,64 +225,74 @@ func (m *Manager) lockContainer(containerID string) func() {
 }
 
 // socketDir returns the host-side directory that is bind-mounted into the
-// container at /run/memoh, holding the UDS socket file.
-func (m *Manager) socketDir(botID string) string {
-	return filepath.Join(m.dataRoot(), "run", botID)
+// container at /run/memoh, holding the UDS socket file. It is named after the
+// container's instance key, so a container created before managed computers
+// had their own ids keeps the directory it was started with.
+func (m *Manager) socketDir(containerID string) string {
+	return filepath.Join(m.dataRoot(), "run", instanceKey(containerID))
 }
 
-// socketPath returns the path to the UDS socket file for a bot's container.
-func (m *Manager) socketPath(botID string) string {
-	return filepath.Join(m.socketDir(botID), "bridge.sock")
+// socketPath returns the path to the UDS socket file of a container.
+func (m *Manager) socketPath(containerID string) string {
+	return filepath.Join(m.socketDir(containerID), "bridge.sock")
 }
 
 // DisplaySocketPath returns the host-side path to the workspace display RFB
-// Unix socket. The directory is mounted into the container at /run/memoh.
-func (m *Manager) DisplaySocketPath(botID string) string {
-	return filepath.Join(m.socketDir(botID), DisplayRFBSocketName)
+// Unix socket of the bot's managed computer; empty when the bot has no
+// managed computer. The directory is mounted into the container at
+// /run/memoh.
+func (m *Manager) DisplaySocketPath(ctx context.Context, botID string) string {
+	_, containerID, err := m.botContainerIDOrNew(ctx, botID)
+	if err != nil {
+		return ""
+	}
+	return filepath.Join(m.socketDir(containerID), DisplayRFBSocketName)
 }
 
-// dialTarget returns the gRPC dial target for a bot. Legacy containers
+// dialTarget returns the gRPC dial target for a container. Legacy containers
 // (pre-bridge) are reached via TCP; bridge containers use UDS.
-func (m *Manager) dialTarget(botID string) string {
+func (m *Manager) dialTarget(containerID string) string {
 	if targeter, ok := m.service.(interface{ BridgeTarget(string) string }); ok {
-		if target := strings.TrimSpace(targeter.BridgeTarget(botID)); target != "" {
+		if target := strings.TrimSpace(targeter.BridgeTarget(instanceKey(containerID))); target != "" {
 			return target
 		}
 	}
 	m.legacyMu.RLock()
-	ip, legacy := m.legacyIPs[botID]
+	ip, legacy := m.legacyIPs[containerID]
 	m.legacyMu.RUnlock()
 	if legacy {
 		return fmt.Sprintf("passthrough:///%s:%d", ip, legacyGRPCPort)
 	}
-	return "unix://" + m.socketPath(botID)
+	return "unix://" + m.socketPath(containerID)
 }
 
-// SetLegacyIP records the IP address of a legacy (pre-bridge) container
+// setLegacyIP records the IP address of a legacy (pre-bridge) container
 // so the gRPC pool can reach it via TCP.
-func (m *Manager) SetLegacyIP(botID, ip string) {
+func (m *Manager) setLegacyIP(containerID, ip string) {
 	m.legacyMu.Lock()
-	m.legacyIPs[botID] = ip
+	m.legacyIPs[containerID] = ip
 	m.legacyMu.Unlock()
 }
 
-// ClearLegacyIP removes a cached legacy IP (e.g. when the container is deleted).
-func (m *Manager) ClearLegacyIP(botID string) {
+// clearLegacyIP removes a cached legacy IP (e.g. when the container is deleted).
+func (m *Manager) clearLegacyIP(containerID string) {
 	m.legacyMu.Lock()
-	delete(m.legacyIPs, botID)
+	delete(m.legacyIPs, containerID)
 	m.legacyMu.Unlock()
 }
 
-// clearLegacyRoute evicts any stale TCP fallback state for a bot so future
-// gRPC dials use the bridge container's Unix socket.
-func (m *Manager) clearLegacyRoute(botID string) {
-	m.ClearLegacyIP(botID)
-	m.resetBridge(botID)
+// clearLegacyRoute evicts any stale TCP fallback state for a container so
+// future gRPC dials use the bridge container's Unix socket.
+func (m *Manager) clearLegacyRoute(ctx context.Context, workspaceID, containerID string) {
+	m.clearLegacyIP(containerID)
+	m.resetBridge(ctx, workspaceID, containerID)
 }
 
-func (m *Manager) nativeMCPClient(ctx context.Context, botID string) (*bridge.Client, error) {
+// instanceClient is the bridge client of a container: the runtime's own
+// provider when it has one, the pooled connection otherwise.
+func (m *Manager) instanceClient(ctx context.Context, containerID string) (*bridge.Client, error) {
 	if provider, ok := m.service.(bridge.Provider); ok {
-		client, err := provider.MCPClient(ctx, botID)
+		client, err := provider.MCPClient(ctx, instanceKey(containerID))
 		if err == nil {
 			return client, nil
 		}
@@ -285,7 +300,19 @@ func (m *Manager) nativeMCPClient(ctx context.Context, botID string) (*bridge.Cl
 			return nil, err
 		}
 	}
-	return m.grpcPool.Get(ctx, botID)
+	return m.grpcPool.Get(ctx, containerID)
+}
+
+// nativeMCPClient is the bridge client of the bot's managed computer. A
+// computer whose container does not exist yet is dialed by the name the
+// container will have; the dial fails with bridge.ErrUnavailable until then,
+// as it always did.
+func (m *Manager) nativeMCPClient(ctx context.Context, botID string) (*bridge.Client, error) {
+	_, containerID, err := m.botContainerIDOrNew(ctx, botID)
+	if err != nil {
+		return nil, err
+	}
+	return m.instanceClient(ctx, containerID)
 }
 
 func (m *Manager) NativeMCPClient(ctx context.Context, botID string) (*bridge.Client, error) {
@@ -378,12 +405,22 @@ func (m *Manager) ResolveWorkspaceTarget(ctx context.Context, botID, targetID st
 	return m.remote.ResolveMount(ctx, botID, targetID)
 }
 
+// WaitForWorkspaceReady waits until the bridge of the bot's managed computer
+// answers.
 func (m *Manager) WaitForWorkspaceReady(ctx context.Context, botID string) error {
+	workspaceID, containerID, err := m.botContainerIDOrNew(ctx, botID)
+	if err != nil {
+		return err
+	}
+	return m.waitForInstanceReady(ctx, workspaceID, containerID)
+}
+
+func (m *Manager) waitForInstanceReady(ctx context.Context, workspaceID, containerID string) error {
 	deadline := time.Now().Add(bridgeReadyTimeout)
 	var lastErr error
 	for {
 		attemptCtx, cancel := context.WithTimeout(ctx, bridgeReadyRPCTimeout)
-		client, err := m.nativeMCPClient(attemptCtx, botID)
+		client, err := m.instanceClient(attemptCtx, containerID)
 		if err == nil {
 			_, err = client.Stat(attemptCtx, "/")
 		}
@@ -392,9 +429,9 @@ func (m *Manager) WaitForWorkspaceReady(ctx context.Context, botID string) error
 			return nil
 		}
 		lastErr = err
-		m.resetBridge(botID)
+		m.resetBridge(ctx, workspaceID, containerID)
 		if time.Now().After(deadline) {
-			return fmt.Errorf("workspace bridge not ready for bot %s after %s: %w", botID, bridgeReadyTimeout, lastErr)
+			return fmt.Errorf("workspace bridge not ready for %s after %s: %w", containerID, bridgeReadyTimeout, lastErr)
 		}
 		select {
 		case <-ctx.Done():
@@ -408,7 +445,15 @@ func (m *Manager) WaitForWorkspaceReady(ctx context.Context, botID string) error
 // native workspace bridge is reachable. Remote Runtime targets intentionally do
 // not pass through this method.
 func (m *Manager) InitializeNativeWorkspace(ctx context.Context, botID string) error {
-	client, err := m.nativeMCPClient(ctx, botID)
+	_, containerID, err := m.botContainerIDOrNew(ctx, botID)
+	if err != nil {
+		return fmt.Errorf("%w: resolve native workspace filesystem: %w", ErrWorkspaceTemplateBootstrapFailed, err)
+	}
+	return m.initializeInstance(ctx, containerID)
+}
+
+func (m *Manager) initializeInstance(ctx context.Context, containerID string) error {
+	client, err := m.instanceClient(ctx, containerID)
 	if err != nil {
 		return fmt.Errorf("%w: resolve native workspace filesystem: %w", ErrWorkspaceTemplateBootstrapFailed, err)
 	}
@@ -440,11 +485,20 @@ func (m *Manager) WorkspaceInfo(ctx context.Context, botID string) (bridge.Works
 
 func (m *Manager) nativeWorkspaceInfo(ctx context.Context, botID string) (bridge.WorkspaceInfo, error) {
 	if provider, ok := m.service.(bridge.WorkspaceInfoProvider); ok {
-		info, err := provider.WorkspaceInfo(ctx, botID)
-		if err == nil {
-			return withToolsEndpoint(info), nil
-		}
-		if !errors.Is(err, ctr.ErrNotSupported) && !ctr.IsNotFound(err) {
+		_, containerID, err := m.botContainerIDOrNew(ctx, botID)
+		switch {
+		case err == nil:
+			info, err := provider.WorkspaceInfo(ctx, instanceKey(containerID))
+			if err == nil {
+				return withToolsEndpoint(info), nil
+			}
+			if !errors.Is(err, ctr.ErrNotSupported) && !ctr.IsNotFound(err) {
+				return bridge.WorkspaceInfo{}, err
+			}
+		case errors.Is(err, ErrContainerNotFound):
+			// No managed computer: the defaults below describe what it
+			// will be.
+		default:
 			return bridge.WorkspaceInfo{}, err
 		}
 	}
@@ -543,21 +597,31 @@ func (m *Manager) Init(ctx context.Context) error {
 	return nil
 }
 
-// EnsureBot creates the workspace container for a bot if it does not exist.
-// Bot data lives in the container's writable layer (snapshot), not bind mounts.
-// Only the bridge binary is injected as a read-only file mount; the workspace
-// image owns its toolkit and runtime scripts.
-// If imageOverride is non-empty, it is used instead of the configured default.
+// EnsureBot creates the workspace container of the bot's managed computer if
+// it does not exist. Bot data lives in the container's writable layer
+// (snapshot), not bind mounts. Only the bridge binary is injected as a
+// read-only file mount; the workspace image owns its toolkit and runtime
+// scripts. If imageOverride is non-empty, it is used instead of the configured
+// default.
 func (m *Manager) EnsureBot(ctx context.Context, botID, imageOverride string) error {
+	if err := validateBotID(botID); err != nil {
+		return err
+	}
 	image := m.imageRef()
 	if imageOverride != "" {
 		image = config.NormalizeImageRef(imageOverride)
+	}
+	workspaceID, err := m.managedWorkspaceID(ctx, botID)
+	if err != nil {
+		return err
 	}
 	gpu, err := m.resolveWorkspaceGPU(ctx, botID)
 	if err != nil {
 		return err
 	}
-	return m.ensureBotWithImage(ctx, botID, image, gpu)
+	containerID := m.workspaceContainerIDOrNew(ctx, workspaceID)
+	_, err = m.ensureWorkspaceContainer(ctx, workspaceID, botID, containerID, image, gpu)
+	return err
 }
 
 func workspaceCDIDevicesLabelValue(devices []string) string {
@@ -576,14 +640,17 @@ func workspaceCDIDevicesFromLabels(labels map[string]string) []string {
 	return normalizeWorkspaceGPUDevices(strings.Split(value, ","))
 }
 
-func (m *Manager) buildWorkspaceContainerSpec(ctx context.Context, botID string, gpu WorkspaceGPUConfig) (ctr.ContainerSpec, error) {
+// buildWorkspaceContainerSpec builds the start parameters of containerID. The
+// socket directory follows the container's instance key; the bot, when there
+// is one, contributes its skill roots and display preference.
+func (m *Manager) buildWorkspaceContainerSpec(ctx context.Context, containerID, botID string, gpu WorkspaceGPUConfig) (ctr.ContainerSpec, error) {
 	resolvPath, err := ctr.ResolveConfSource(m.dataRoot())
 	if err != nil {
 		return ctr.ContainerSpec{}, err
 	}
 
 	bridgePath := m.cfg.BridgeBinaryPath()
-	sockDir := m.socketDir(botID)
+	sockDir := m.socketDir(containerID)
 	if err := os.MkdirAll(sockDir, 0o750); err != nil {
 		return ctr.ContainerSpec{}, fmt.Errorf("create socket dir: %w", err)
 	}
@@ -623,16 +690,21 @@ func (m *Manager) buildWorkspaceContainerSpec(ctx context.Context, botID string,
 		})
 	}
 
-	skillRoots, err := m.ResolveWorkspaceSkillDiscoveryRoots(ctx, botID)
-	if err != nil {
-		return ctr.ContainerSpec{}, err
+	var skillRoots []string
+	displayEnabled := false
+	if botID != "" {
+		skillRoots, err = m.ResolveWorkspaceSkillDiscoveryRoots(ctx, botID)
+		if err != nil {
+			return ctr.ContainerSpec{}, err
+		}
+		displayEnabled = m.botDisplayEnabled(ctx, botID)
 	}
 	skillEnv := skillset.ContainerEnv(skillRoots)
 	env := make([]string, 0, len(tzEnv)+1+len(skillEnv))
 	env = append(env, tzEnv...)
 	env = append(env, "BRIDGE_SOCKET_PATH=/run/memoh/bridge.sock")
 	env = m.appendBridgeTLSEnv(env)
-	if m.botDisplayEnabled(ctx, botID) {
+	if displayEnabled {
 		env = append(env,
 			"MEMOH_DISPLAY_ENABLED=true",
 			"MEMOH_DISPLAY_RFB_TCP_ADDR=127.0.0.1:5999",
@@ -689,28 +761,30 @@ func (m *Manager) DisplayDialContext(ctx context.Context, botID, network, addres
 	return client.DialContext(ctx, network, address)
 }
 
-func (m *Manager) ensureBotWithImage(ctx context.Context, botID, image string, gpu WorkspaceGPUConfig) error {
-	if err := validateBotID(botID); err != nil {
-		return err
-	}
-	containerID := m.resolveContainerID(ctx, botID)
+// ensureWorkspaceContainer creates containerID for the managed computer when
+// the runtime does not have it. The container is labelled with the workspace
+// id and, when the computer is operated for a bot, the bot id as well.
+func (m *Manager) ensureWorkspaceContainer(ctx context.Context, workspaceID, botID, containerID, image string, gpu WorkspaceGPUConfig) (string, error) {
 	if _, err := m.service.GetContainer(ctx, containerID); err == nil {
-		return nil
+		return containerID, nil
 	} else if !ctr.IsNotFound(err) {
-		return err
+		return "", err
 	}
-	spec, err := m.buildWorkspaceContainerSpec(ctx, botID, gpu)
+	spec, err := m.buildWorkspaceContainerSpec(ctx, containerID, botID, gpu)
 	if err != nil {
-		return err
+		return "", err
 	}
-	limits, err := m.resourceLimitsForCreate(ctx, botID)
+	limits, err := m.resourceLimitsForCreate(ctx, workspaceID)
 	if err != nil {
-		return err
+		return "", err
 	}
 
 	labels := map[string]string{
-		BotLabelKey:       botID,
-		WorkspaceLabelKey: WorkspaceLabelValue,
+		WorkspaceIDLabelKey: workspaceID,
+		WorkspaceLabelKey:   WorkspaceLabelValue,
+	}
+	if botID != "" {
+		labels[BotLabelKey] = botID
 	}
 	for k, v := range resourceLimitLabels(limits) {
 		labels[k] = v
@@ -728,18 +802,16 @@ func (m *Manager) ensureBotWithImage(ctx context.Context, botID, image string, g
 		Labels:          labels,
 		Spec:            spec,
 	})
-	if err == nil {
-		return nil
+	if err != nil && !ctr.IsAlreadyExists(err) {
+		return "", err
 	}
-
-	if !ctr.IsAlreadyExists(err) {
-		return err
-	}
-
-	return nil
+	return containerID, nil
 }
 
-// ListBots returns the bot IDs that have workspace containers.
+// ListBots returns the ids of the bots whose managed computer has a workspace
+// container: each container is resolved to its computer and the computer to
+// the bots bound to it. A container no computer claims still names the bot it
+// was created for.
 func (m *Manager) ListBots(ctx context.Context) ([]string, error) {
 	containers, err := m.service.ListContainers(ctx)
 	if err != nil {
@@ -747,9 +819,23 @@ func (m *Manager) ListBots(ctx context.Context) ([]string, error) {
 	}
 
 	botIDs := make([]string, 0, len(containers))
+	seen := make(map[string]struct{}, len(containers))
+	add := func(botID string) {
+		if _, dup := seen[botID]; dup {
+			return
+		}
+		seen[botID] = struct{}{}
+		botIDs = append(botIDs, botID)
+	}
 	for _, info := range containers {
+		if workspaceID, ok := m.containerWorkspaceID(ctx, info); ok {
+			for _, botID := range m.boundBots(ctx, workspaceID) {
+				add(botID)
+			}
+			continue
+		}
 		if botID, ok := BotIDFromContainerInfo(info); ok {
-			botIDs = append(botIDs, botID)
+			add(botID)
 		}
 	}
 	return botIDs, nil
@@ -805,38 +891,53 @@ func (m *Manager) StartWithResolvedConfig(ctx context.Context, botID, image stri
 }
 
 func (m *Manager) startWithResolvedConfig(ctx context.Context, botID, image string, gpu WorkspaceGPUConfig) error {
-	containerID := m.resolveContainerID(ctx, botID)
+	if err := validateBotID(botID); err != nil {
+		return err
+	}
+	workspaceID, err := m.managedWorkspaceID(ctx, botID)
+	if err != nil {
+		return err
+	}
+	_, err = m.startWorkspace(ctx, workspaceID, botID, image, gpu)
+	return err
+}
+
+// startWorkspace creates the managed computer's container when missing and
+// starts its task. botID is the bot the computer is operated for; it decides
+// the skill roots, display, network overlay and hooks of the container.
+func (m *Manager) startWorkspace(ctx context.Context, workspaceID, botID, image string, gpu WorkspaceGPUConfig) (string, error) {
+	containerID := m.workspaceContainerIDOrNew(ctx, workspaceID)
 	unlock := m.lockContainer(containerID)
 	defer unlock()
 
 	// Before creating a new container, check for an orphaned snapshot
 	// (container deleted but snapshot with /data survived). Export /data
-	// to a backup so it can be restored after EnsureBot creates a fresh
-	// container. This covers dev image rebuilds, containerd metadata loss,
-	// and manual container deletion.
+	// to a backup so it can be restored after the fresh container exists.
+	// This covers dev image rebuilds, containerd metadata loss, and manual
+	// container deletion.
 	if _, err := m.service.GetContainer(ctx, containerID); ctr.IsNotFound(err) {
-		m.recoverOrphanedSnapshot(ctx, botID)
+		m.recoverOrphanedSnapshot(ctx, workspaceID, containerID)
 	}
 
-	if err := m.ensureBotWithImage(ctx, botID, image, gpu); err != nil {
-		return err
+	if _, err := m.ensureWorkspaceContainer(ctx, workspaceID, botID, containerID, image, gpu); err != nil {
+		return "", err
 	}
 
 	// Restore preserved data (from orphaned snapshot recovery or a previous
-	// CleanupBotContainer with preserveData) into the fresh snapshot before
-	// starting the task when the backend exposes snapshot mounts. Backends
-	// without mount support restore through the bridge after the task starts.
-	restoreAfterStart := false
-	if m.HasPreservedData(botID) {
+	// teardown with preserveData) into the fresh snapshot before starting the
+	// task when the backend exposes snapshot mounts. Backends without mount
+	// support restore through the bridge after the task starts.
+	restoreFrom := ""
+	if backupPath := m.preservedBackupPath(workspaceID, botID); backupPath != "" {
 		info, err := m.service.GetContainer(ctx, containerID)
 		if err != nil {
-			return fmt.Errorf("load workspace for preserved data restore: %w", err)
+			return "", fmt.Errorf("load workspace for preserved data restore: %w", err)
 		}
-		if err := m.restorePreservedIntoSnapshot(ctx, botID, info); err != nil {
+		if err := m.restorePreservedIntoSnapshot(ctx, backupPath, info); err != nil {
 			if errors.Is(err, errMountNotSupported) {
-				restoreAfterStart = true
+				restoreFrom = backupPath
 			} else {
-				return fmt.Errorf("restore preserved data: %w", err)
+				return "", fmt.Errorf("restore preserved data: %w", err)
 			}
 		}
 	}
@@ -847,27 +948,33 @@ func (m *Manager) startWithResolvedConfig(ctx context.Context, botID, image stri
 		if stopErr := m.service.StopContainer(ctx, containerID, &ctr.StopTaskOptions{Force: true}); stopErr != nil {
 			m.logger.WarnContext(ctx, "cleanup: stop task failed", slog.String("container_id", containerID), slog.Any("error", stopErr))
 		}
-		return err
+		return "", err
 	}
-	if restoreAfterStart {
-		if err := m.restorePreservedDataViaGRPC(ctx, botID); err != nil {
-			return fmt.Errorf("restore preserved data through bridge: %w", err)
+	if restoreFrom != "" {
+		if err := m.restorePreservedDataViaGRPC(ctx, restoreFrom, containerID); err != nil {
+			return "", fmt.Errorf("restore preserved data through bridge: %w", err)
 		}
 	}
 	if !m.IsLegacyContainer(ctx, containerID) {
-		m.clearLegacyRoute(botID)
+		m.clearLegacyRoute(ctx, workspaceID, containerID)
 	}
-	if err := m.runWorkspaceHook(context.WithoutCancel(ctx), botID, hooks.EventWorkspaceStart, map[string]any{
-		"backend": bridge.WorkspaceBackendContainer,
-		"image":   image,
-	}); err != nil {
-		m.logWorkspaceHookError(hooks.EventWorkspaceStart, botID, err)
+	if botID != "" {
+		if err := m.runWorkspaceHook(context.WithoutCancel(ctx), botID, hooks.EventWorkspaceStart, map[string]any{
+			"backend": bridge.WorkspaceBackendContainer,
+			"image":   image,
+		}); err != nil {
+			m.logWorkspaceHookError(hooks.EventWorkspaceStart, botID, err)
+		}
 	}
-	return nil
+	return containerID, nil
 }
 
 func (m *Manager) Stop(ctx context.Context, botID string, timeout time.Duration) error {
 	if err := validateBotID(botID); err != nil {
+		return err
+	}
+	_, containerID, err := m.resolveBotContainer(ctx, botID)
+	if err != nil {
 		return err
 	}
 	if err := m.runWorkspaceHook(ctx, botID, hooks.EventWorkspaceStop, map[string]any{
@@ -875,7 +982,7 @@ func (m *Manager) Stop(ctx context.Context, botID string, timeout time.Duration)
 	}); err != nil {
 		m.logWorkspaceHookError(hooks.EventWorkspaceStop, botID, err)
 	}
-	return m.service.StopContainer(ctx, m.resolveContainerID(ctx, botID), &ctr.StopTaskOptions{
+	return m.service.StopContainer(ctx, containerID, &ctr.StopTaskOptions{
 		Timeout: timeout,
 		Force:   true,
 	})
@@ -884,20 +991,30 @@ func (m *Manager) Stop(ctx context.Context, botID string, timeout time.Duration)
 // errPreserveData marks a removal stopped by a failed export of /data.
 var errPreserveData = errors.New("preserve data")
 
+// Delete removes the container of the bot's managed computer. The record is
+// left as it is; CleanupBotContainer clears it as well.
 func (m *Manager) Delete(ctx context.Context, botID string, preserveData bool) error {
 	if err := validateBotID(botID); err != nil {
 		return err
 	}
+	workspaceID, containerID, err := m.resolveBotContainer(ctx, botID)
+	if err != nil {
+		return err
+	}
+	return m.deleteWorkspaceContainer(ctx, workspaceID, botID, containerID, preserveData)
+}
 
-	containerID := m.resolveContainerID(ctx, botID)
-
+// deleteWorkspaceContainer exports /data when asked, then removes the
+// container, its task and its network. botID only matters for the network
+// overlay and may be empty.
+func (m *Manager) deleteWorkspaceContainer(ctx context.Context, workspaceID, botID, containerID string, preserveData bool) error {
 	if preserveData {
-		if err := m.preserveDataBeforeDelete(ctx, botID); err != nil {
+		if err := m.preserveDataBeforeDelete(ctx, workspaceID, botID, containerID); err != nil {
 			return fmt.Errorf("%w: %w", errPreserveData, err)
 		}
 	}
 
-	m.clearLegacyRoute(botID)
+	m.clearLegacyRoute(ctx, workspaceID, containerID)
 
 	if err := m.removeContainerNetwork(ctx, botID, containerID); err != nil {
 		m.logger.WarnContext(ctx, "delete: remove network failed",
