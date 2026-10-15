@@ -301,7 +301,7 @@ let pasteWithShift = false
 const keyboard = createDisplayKeyboard({
   mac: macKeyboard,
   active: () => viewing.value && connection.inputReady(),
-  send: event => connection.sendInput(event),
+  send: sendInput,
   copy: clipboard.prepareRemoteCopy,
   pasteShortcut: shift => { pasteWithShift = shift },
 })
