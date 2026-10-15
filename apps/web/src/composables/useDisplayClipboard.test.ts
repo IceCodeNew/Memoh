@@ -265,4 +265,41 @@ describe('clipboard sync without extra controls', () => {
     await vi.advanceTimersByTimeAsync(0)
     expect(connection.syncClipboardText).not.toHaveBeenCalled()
   })
+  it('fails the click barrier on a denied granted read or rejected channel send', async () => {
+    const { clipboard, connection } = setup()
+    readText.mockRejectedValueOnce(new Error('NotAllowedError'))
+    expect(await clipboard.syncLocalClipboard(true)).toBe(false)
+    readText.mockResolvedValue('fresh')
+    connection.syncClipboardText.mockReturnValueOnce(false)
+    expect(await clipboard.syncLocalClipboard(true)).toBe(false)
+  })
+
+  it('bounds a click read and prevents late text from reaching the remote clipboard', async () => {
+    const { clipboard, connection } = setup()
+    let resolve!: (text: string) => void
+    readText.mockImplementationOnce(() => new Promise(yes => { resolve = yes }))
+    const sync = clipboard.syncLocalClipboard(true)
+    await vi.advanceTimersByTimeAsync(1500)
+    expect(await sync).toBe(false)
+    resolve('late text')
+    await vi.advanceTimersByTimeAsync(0)
+    expect(connection.syncClipboardText).not.toHaveBeenCalled()
+  })
+
+  it('preserves a queued click and copy shortcut when that copy supersedes the local read', async () => {
+    const { clipboard, connection } = setup()
+    let resolve!: (text: string) => void
+    readText.mockImplementationOnce(() => new Promise(yes => { resolve = yes }))
+    const sync = clipboard.syncLocalClipboard(true)
+    await Promise.resolve()
+    clipboard.prepareRemoteCopy()
+    resolve('old local clipboard')
+    expect(await sync).toBe(true)
+    expect(connection.syncClipboardText).not.toHaveBeenCalled()
+    connection.clipboardText.value = 'new remote selection'
+    connection.clipboardRevision.value++
+    const blob = await write.mock.calls[0]![0][0]!.text
+    expect(await blob.text()).toBe('new remote selection')
+  })
+
 })

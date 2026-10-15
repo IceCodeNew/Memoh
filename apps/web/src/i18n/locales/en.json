@@ -1727,6 +1727,7 @@
       "clipboard": {
         "copyDenied": "The browser blocked copying to your clipboard. Focus the desktop and copy again.",
         "copyTimedOut": "No new clipboard text arrived from the desktop. Select text and copy again.",
+        "syncFailed": "Could not sync the clipboard. Try again or use the paste shortcut.",
         "pasteFailed": "Could not paste this text. Try a smaller selection (up to 48 KB)."
       },
       "title": "Desktop",

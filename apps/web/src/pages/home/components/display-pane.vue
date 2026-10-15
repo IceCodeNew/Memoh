@@ -233,6 +233,7 @@ import { Activity, Globe, Maximize, Monitor, Package, Wrench, X } from 'lucide-v
 import { useDocumentVisibility, useMagicKeys, useMouseInElement, useToggle } from '@vueuse/core'
 import { useBotDisplayConnection } from '@/composables/useBotDisplayConnection'
 import { captureDisplaySnapshot } from '@/utils/display-snapshot'
+import { createDisplayInput } from '@/composables/display-input'
 import { useDisplayClipboard } from '@/composables/useDisplayClipboard'
 import { remoteCopyKeys } from '@/composables/display-clipboard'
 import { resolveApiErrorMessage } from '@/utils/api-error'
@@ -290,6 +291,11 @@ const documentVisibility = useDocumentVisibility()
 const viewing = computed(() => !!props.active && documentVisibility.value === 'visible')
 const connection = useBotDisplayConnection(props.botId, viewing)
 const clipboard = useDisplayClipboard(connection, () => viewing.value)
+const orderedInput = createDisplayInput(
+  payload => { if (viewing.value) connection.sendInput(payload) },
+  () => toast.error(t('chat.display.clipboard.syncFailed')),
+)
+watch([viewing, connection.inputChannel], () => orderedInput.cancel(), { flush: 'sync' })
 const keyboardRef = useTemplateRef('keyboardRef')
 const macKeyboard = detectPlatform() === 'mac'
 let pasteWithShift = false
@@ -309,6 +315,7 @@ function onPaste(event: ClipboardEvent) {
   const shift = pasteWithShift
   pasteWithShift = false
   if (text !== undefined) {
+    orderedInput.cancel()
     clipboard.pasteText(text, shift)
   }
 }
@@ -497,6 +504,7 @@ function emptyDisplayStats(): DisplayStats {
 }
 
 function cleanupLocalUI() {
+  orderedInput.cancel()
   stopSnapshotCapture()
   stopStatsPolling()
   closeStatsMenu()
@@ -683,7 +691,7 @@ function sendInput(payload: Record<string, unknown>) {
   // bot, so a background/inactive pane forwarding pointer + key events would
   // race the focused pane's input on the desktop.
   if (!viewing.value) return
-  connection.sendInput(payload)
+  orderedInput.input(payload)
 }
 
 function inputReady() {
@@ -736,7 +744,7 @@ function sendPointer(event: MouseEvent | WheelEvent, mask = pointerMask) {
 
 function onPointerDown(event: MouseEvent) {
   keyboardRef.value?.focus({ preventScroll: true })
-  void clipboard.syncLocalClipboard(true)
+  if (pointerMask === 0) orderedInput.waitForClipboard(clipboard.syncLocalClipboard(true))
   pointerMask |= buttonBit(event.button)
   sendPointer(event)
 }

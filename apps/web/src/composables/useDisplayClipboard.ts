@@ -13,7 +13,7 @@ export function useDisplayClipboard(connection: ClipboardConnection, isActive: (
   let lastSharedChannel: RTCDataChannel | null = null
   let contextRevision = 0
   let clipboardRevision = 0
-  let syncInFlight: Promise<void> | null = null
+  let syncInFlight: Promise<boolean> | null = null
   let requestReadPermission = false
   let remoteWriteRevision: number | null = null
 
@@ -125,38 +125,54 @@ export function useDisplayClipboard(connection: ClipboardConnection, isActive: (
 
   // Only supported Permissions API implementations can request a persistent
   // read grant. Safari throws at query(), so it never opens a Paste prompt.
-  function syncLocalClipboard(requestPermission = false): Promise<void> {
-    if (pending || remoteWriteRevision !== null || !isActive() || !connection.inputReady() || !document.hasFocus()) return Promise.resolve()
+  function syncLocalClipboard(requestPermission = false): Promise<boolean> {
+    if (pending || remoteWriteRevision !== null || !isActive() || !connection.inputReady() || !document.hasFocus()) return Promise.resolve(true)
     requestReadPermission ||= requestPermission && navigator.userActivation?.isActive === true
     if (syncInFlight) return syncInFlight
     const channel = connection.inputChannel.value
     const revision = contextRevision
     const clipboard = clipboardRevision
     let expired = false
-    const current = () => !expired && isActive() && document.hasFocus() && connection.inputReady()
-      && connection.inputChannel.value === channel && revision === contextRevision && clipboard === clipboardRevision
+    const sameContext = () => isActive() && document.hasFocus() && connection.inputReady()
+      && connection.inputChannel.value === channel && revision === contextRevision
+    const current = () => !expired && sameContext() && clipboard === clipboardRevision
+    // A queued copy/native paste supersedes this read, but must still be sent.
+    const superseded = () => !expired && sameContext() && clipboard !== clipboardRevision
     const operation = (async () => {
       try {
-        if (!navigator.permissions?.query) return
+        if (!navigator.permissions?.query) return true
         const descriptor = { name: 'clipboard-read' as PermissionName, allowWithoutGesture: true }
-        const permission = await navigator.permissions.query(descriptor)
+        // Safari does not implement this permission. Do not block its input.
+        let permission: PermissionStatus
+        try {
+          permission = await navigator.permissions.query(descriptor)
+        } catch {
+          return true
+        }
         const canRequest = permission.state === 'prompt' && requestReadPermission && navigator.userActivation?.isActive === true
-        if ((permission.state !== 'granted' && !canRequest) || !current()) return
+        if (permission.state !== 'granted' && !canRequest) return true
+        if (!current()) return superseded()
         const text = await navigator.clipboard.readText()
-        if (!current() || (lastSharedChannel === channel && lastSharedText === text)) return
+        if (!current()) return superseded()
+        if (lastSharedChannel === channel && lastSharedText === text) return true
         if (connection.syncClipboardText(text)) {
           lastSharedText = text
           lastSharedChannel = channel
+          return true
         }
+        return false
       } catch {
-        // Unsupported permissions and denied reads leave native paste available.
+        return false
       }
     })()
     let timeout!: ReturnType<typeof setTimeout>
-    const deadline = new Promise<void>((resolve) => {
-      // Allow time for a first-use permission prompt, then discard late OS
-      // reads. Input never waits for this background operation.
-      timeout = setTimeout(() => { expired = true; resolve() }, 30_000)
+    const deadline = new Promise<boolean>((resolve) => {
+      // Bound the input barrier and discard OS reads that finish after it.
+      timeout = setTimeout(() => {
+        const replaced = superseded()
+        expired = true
+        resolve(replaced)
+      }, 1500)
     })
     syncInFlight = Promise.race([operation, deadline]).finally(() => {
       clearTimeout(timeout)
