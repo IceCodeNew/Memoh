@@ -8,7 +8,7 @@ type ClipboardConnection = Pick<BotDisplayConnection,
 
 export function useDisplayClipboard(connection: ClipboardConnection, isActive: () => boolean) {
   const { t } = useI18n()
-  let pending: { received: boolean; text: string | null; resolve: (text: Blob) => void; cancel: () => void } | null = null
+  let pending: { pointer: boolean; received: boolean; text: string | null; resolve: (text: Blob) => void; cancel: () => void } | null = null
   let lastSharedText: string | null = null
   let lastSharedChannel: RTCDataChannel | null = null
   let contextRevision = 0
@@ -16,6 +16,20 @@ export function useDisplayClipboard(connection: ClipboardConnection, isActive: (
   let syncInFlight: Promise<boolean> | null = null
   let requestReadPermission = false
   let remoteWriteRevision: number | null = null
+  let pointerCopyEnabled = !navigator.permissions?.query
+
+  // Detect Safari's unsupported clipboard permission before a later click.
+  // Querying inside the click would lose the activation before write().
+  async function detectGestureWrite() {
+    if (!navigator.permissions?.query) return
+    try {
+      const descriptor = { name: 'clipboard-write' as PermissionName, allowWithoutGesture: true }
+      await navigator.permissions.query(descriptor)
+    } catch {
+      pointerCopyEnabled = true
+    }
+  }
+  void detectGestureWrite()
 
   function cancelCopy() {
     pending?.cancel()
@@ -24,12 +38,14 @@ export function useDisplayClipboard(connection: ClipboardConnection, isActive: (
 
   // Start the write inside the input gesture. Safari can then wait for the
   // remote copy to arrive without losing the gesture's clipboard permission.
-  function prepareRemoteCopy() {
-    if (!isActive() || !connection.inputReady()) return
+  function prepareRemoteCopy(pointer = false) {
+    if (!isActive() || !connection.inputReady() || !document.hasFocus()) return
+    // Do not replace a shortcut's explicit copy, or a copy already being written.
+    if (pointer && pending && (!pending.pointer || pending.received)) return
     clipboardRevision++
     cancelCopy()
     if (!navigator.clipboard?.write || typeof ClipboardItem === 'undefined') {
-      toast.error(t('chat.display.clipboard.copyDenied'))
+      if (!pointer) toast.error(t('chat.display.clipboard.copyDenied'))
       return
     }
     let resolve!: (text: Blob) => void
@@ -45,6 +61,7 @@ export function useDisplayClipboard(connection: ClipboardConnection, isActive: (
       if (received) toast.error(t('chat.display.clipboard.copyDenied'))
     }, 5000)
     const request = {
+      pointer,
       received: false,
       text: null as string | null,
       resolve: (text: Blob) => { resolve(text) },
@@ -63,12 +80,20 @@ export function useDisplayClipboard(connection: ClipboardConnection, isActive: (
       }).catch(() => {
         if (pending !== request) return
         cancelCopy()
-        toast.error(t('chat.display.clipboard.copyDenied'))
+        if (!pointer || request.received) toast.error(t('chat.display.clipboard.copyDenied'))
       })
     } catch {
       cancelCopy()
-      toast.error(t('chat.display.clipboard.copyDenied'))
+      if (!pointer) toast.error(t('chat.display.clipboard.copyDenied'))
     }
+  }
+
+  function preparePointerCopy() {
+    if (pointerCopyEnabled && navigator.userActivation?.isActive !== false) prepareRemoteCopy(true)
+  }
+
+  function cancelPointerCopy() {
+    if (pending?.pointer) cancelCopy()
   }
 
   watch(connection.clipboardRevision, (revision) => {
@@ -77,6 +102,7 @@ export function useDisplayClipboard(connection: ClipboardConnection, isActive: (
     lastSharedText = null
     lastSharedChannel = null
     const text = connection.clipboardText.value
+    if (pending?.pointer && !document.hasFocus()) cancelCopy()
     if (pending && !pending.received) {
       pending.received = true
       pending.text = text
@@ -190,5 +216,5 @@ export function useDisplayClipboard(connection: ClipboardConnection, isActive: (
     contextRevision++
     cancelCopy()
   })
-  return { prepareRemoteCopy, syncLocalClipboard, pasteText }
+  return { prepareRemoteCopy, preparePointerCopy, cancelPointerCopy, syncLocalClipboard, pasteText }
 }

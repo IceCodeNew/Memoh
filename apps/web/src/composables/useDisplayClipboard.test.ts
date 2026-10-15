@@ -219,8 +219,8 @@ describe('clipboard sync without extra controls', () => {
 
   it.each(['denied', 'unsupported'])('never requests a read when permission is %s even on click', async (state) => {
     vi.stubGlobal('navigator', { clipboard: { write, readText, writeText }, permissions: { query: queryPermission }, userActivation: { isActive: true } })
-    if (state === 'unsupported') queryPermission.mockRejectedValueOnce(new TypeError('Unsupported permission'))
-    else queryPermission.mockResolvedValueOnce({ state })
+    if (state === 'unsupported') queryPermission.mockRejectedValue(new TypeError('Unsupported permission'))
+    else queryPermission.mockResolvedValue({ state })
     const { clipboard } = setup()
     await clipboard.syncLocalClipboard(true)
     expect(readText).not.toHaveBeenCalled()
@@ -302,6 +302,114 @@ describe('clipboard sync without extra controls', () => {
     connection.clipboardRevision.value++
     const blob = await write.mock.calls[0]![0][0]!.text
     expect(await blob.text()).toBe('new remote selection')
+  })
+
+  async function setupGestureBrowser() {
+    queryPermission.mockRejectedValue(new TypeError('Unsupported permission'))
+    const result = setup()
+    await vi.advanceTimersByTimeAsync(0)
+    return result
+  }
+
+  it('starts a menu copy write inside the pointer gesture, before the remote result', async () => {
+    const { clipboard, connection } = await setupGestureBrowser()
+    clipboard.preparePointerCopy()
+    expect(write).toHaveBeenCalledOnce()
+    expect(connection.syncClipboardText).not.toHaveBeenCalled()
+    connection.clipboardText.value = '右键 Copy 的中文\n第二行'
+    connection.clipboardRevision.value++
+    const blob = await write.mock.calls[0]![0][0]!.text
+    expect(await blob.text()).toBe('右键 Copy 的中文\n第二行')
+    expect(writeText).not.toHaveBeenCalled()
+  })
+
+  it('rejects an ordinary click without supplying empty or cached text to the clipboard', async () => {
+    const { clipboard } = await setupGestureBrowser()
+    clipboard.preparePointerCopy()
+    const data = write.mock.calls[0]![0][0]!.text
+    const rejected = expect(data).rejects.toThrow('expired')
+    await vi.advanceTimersByTimeAsync(5000)
+    await rejected
+    expect(writeText).not.toHaveBeenCalled()
+    expect(showError).not.toHaveBeenCalled()
+  })
+
+  it('arms the later Copy menu click after an earlier ordinary click', async () => {
+    const { clipboard, connection } = await setupGestureBrowser()
+    clipboard.preparePointerCopy()
+    const first = write.mock.calls[0]![0][0]!.text
+    const canceled = expect(first).rejects.toThrow('expired')
+    clipboard.preparePointerCopy()
+    await canceled
+    expect(write).toHaveBeenCalledTimes(2)
+    connection.clipboardText.value = 'menu copy'
+    connection.clipboardRevision.value++
+    const blob = await write.mock.calls[1]![0][0]!.text
+    expect(await blob.text()).toBe('menu copy')
+    expect(showError).not.toHaveBeenCalled()
+  })
+
+  it('keeps an explicit shortcut copy when another pointer event arrives', async () => {
+    const { clipboard, connection } = await setupGestureBrowser()
+    clipboard.prepareRemoteCopy()
+    clipboard.preparePointerCopy()
+    clipboard.cancelPointerCopy()
+    expect(write).toHaveBeenCalledOnce()
+    connection.clipboardText.value = 'shortcut copy'
+    connection.clipboardRevision.value++
+    const blob = await write.mock.calls[0]![0][0]!.text
+    expect(await blob.text()).toBe('shortcut copy')
+  })
+
+  it('does not replace a pointer copy that is already being written', async () => {
+    const { clipboard, connection } = await setupGestureBrowser()
+    clipboard.preparePointerCopy()
+    connection.clipboardText.value = 'first copy'
+    connection.clipboardRevision.value++
+    clipboard.preparePointerCopy()
+    expect(write).toHaveBeenCalledOnce()
+    const blob = await write.mock.calls[0]![0][0]!.text
+    expect(await blob.text()).toBe('first copy')
+  })
+
+  it.each(['granted', 'prompt', 'denied'])('does not arm speculative writes with a supported %s permission', async (state) => {
+    queryPermission.mockResolvedValue({ state })
+    const { clipboard } = setup()
+    await vi.advanceTimersByTimeAsync(0)
+    clipboard.preparePointerCopy()
+    expect(write).not.toHaveBeenCalled()
+  })
+
+  it('cancels pointer copy on blur without touching the existing clipboard', async () => {
+    const { clipboard, connection } = await setupGestureBrowser()
+    clipboard.preparePointerCopy()
+    const data = write.mock.calls[0]![0][0]!.text
+    const canceled = expect(data).rejects.toThrow('expired')
+    clipboard.cancelPointerCopy()
+    await canceled
+    connection.clipboardText.value = 'late text'
+    connection.clipboardRevision.value++
+    await vi.advanceTimersByTimeAsync(0)
+    expect(writeText).not.toHaveBeenCalled()
+    expect(showError).not.toHaveBeenCalled()
+  })
+
+  it('does not arm pointer copies in an unfocused or inactive pane', async () => {
+    const { clipboard, active } = await setupGestureBrowser()
+    hasFocus.mockReturnValue(false)
+    clipboard.preparePointerCopy()
+    hasFocus.mockReturnValue(true)
+    active.value = false
+    clipboard.preparePointerCopy()
+    expect(write).not.toHaveBeenCalled()
+  })
+
+  it('leaves ordinary clicks silent when the browser immediately refuses writes', async () => {
+    const { clipboard } = await setupGestureBrowser()
+    write.mockRejectedValueOnce(new Error('NotAllowedError'))
+    clipboard.preparePointerCopy()
+    await vi.advanceTimersByTimeAsync(0)
+    expect(showError).not.toHaveBeenCalled()
   })
 
 })

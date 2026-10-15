@@ -743,7 +743,11 @@ function sendPointer(event: MouseEvent | WheelEvent, mask = pointerMask) {
 }
 
 function onPointerDown(event: MouseEvent) {
+  if (!inputReady() || !resolveVideoPoint(event)) return
   keyboardRef.value?.focus({ preventScroll: true })
+  // Start the promised clipboard write during the local click, before the
+  // remote menu can handle it and return its Copy/Cut result.
+  if (event.button === 0) clipboard.preparePointerCopy()
   if (pointerMask === 0) orderedInput.waitForClipboard(clipboard.syncLocalClipboard(true))
   pointerMask |= buttonBit(event.button)
   sendPointer(event)
