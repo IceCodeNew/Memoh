@@ -446,7 +446,7 @@ func (m *Manager) archiveSnapshotPath(key string) string {
 // It is best-effort context for the export dialog; callers should treat an
 // error (e.g. a stopped or unreachable container) as "unknown".
 func (m *Manager) CountData(ctx context.Context, botID string) (int, error) {
-	client, err := m.nativeMCPClient(ctx, botID)
+	client, err := m.NativeMCPClient(ctx, botID)
 	if err != nil {
 		return 0, fmt.Errorf("grpc connect: %w", err)
 	}

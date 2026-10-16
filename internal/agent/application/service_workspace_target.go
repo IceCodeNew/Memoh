@@ -8,7 +8,6 @@ import (
 
 	"github.com/felinics/memoh/internal/agent/runtime/native"
 	"github.com/felinics/memoh/internal/bots"
-	"github.com/felinics/memoh/internal/workdir"
 	"github.com/felinics/memoh/internal/workspace"
 )
 
@@ -44,11 +43,13 @@ func (s *Service) prepareWorkspaceRequest(ctx context.Context, req ChatRequest) 
 		}
 		requestedTargetID = bound.TargetID
 		req.WorkspaceTargetID = bound.TargetID
-		// Reaching a remote computer is a permission boundary whether the
-		// target comes from the request or from the workdir binding. A
-		// native workdir adds no capability beyond the default workspace,
-		// so it does not demand workspace_read just to chat.
-		if bound.Kind == workdir.TargetKindRemote {
+		// Reaching a person's own computer is a permission boundary whether
+		// the target comes from the request or from the workdir binding. A
+		// workdir on the bot's managed computer adds nothing beyond the
+		// default workspace, so it does not demand workspace_read just to
+		// chat. This is a question of who owns the machine, not of what it
+		// can do, so it is not a capability check.
+		if workspace.IsUserComputerTarget(bound.Kind) {
 			enforceSelection = true
 		}
 	}

@@ -311,7 +311,7 @@ func (t *mcpStderrTail) String() string {
 	return strings.Join(t.lines, "\n")
 }
 
-func startMCPStderrLogger(stderr io.ReadCloser, containerID string, logger *slog.Logger, tail *mcpStderrTail) {
+func startMCPStderrLogger(stderr io.ReadCloser, botID string, logger *slog.Logger, tail *mcpStderrTail) {
 	if stderr == nil {
 		return
 	}
@@ -324,13 +324,13 @@ func startMCPStderrLogger(stderr io.ReadCloser, containerID string, logger *slog
 				continue
 			}
 			tail.append(line)
-			logger.Warn("mcp stderr", slog.String("container_id", containerID), slog.String("message", line))
+			logger.Warn("mcp stderr", slog.String("bot_id", botID), slog.String("message", line))
 		}
 		if err := scanner.Err(); err != nil {
 			if errors.Is(err, io.EOF) || errors.Is(err, io.ErrClosedPipe) {
 				return
 			}
-			logger.Error("mcp stderr read failed", slog.Any("error", err), slog.String("container_id", containerID))
+			logger.Error("mcp stderr read failed", slog.Any("error", err), slog.String("bot_id", botID))
 		}
 	}()
 }
@@ -401,11 +401,10 @@ func buildEnvPairs(env map[string]string) []string {
 // ---------- MCP Stdio Handlers ----------
 
 type mcpStdioSession struct {
-	id          string
-	botID       string
-	containerID string
-	name        string
-	createdAt   time.Time
+	id        string
+	botID     string
+	name      string
+	createdAt time.Time
 	// request is retained for the lazy start: the session process spawns on
 	// the FIRST proxied message, so an initialize can drive the handshake with
 	// the external client's own capabilities (see ensureStdioSession). An
@@ -440,33 +439,31 @@ func (h *ContainerdHandler) CreateMCPStdio(c echo.Context) error {
 		return apperror.FieldRequired("command")
 	}
 	ctx := c.Request().Context()
-	if err := h.manager.EnsureRunning(ctx, botID); err != nil {
+	// stdio MCP servers run on the bot's managed computer, the one that hosts
+	// its dependencies: bring it up first, then every session connects to it
+	// through startContainerdMCPCommandSession.
+	if err := h.manager.EnsureNativeRunning(ctx, botID); err != nil {
 		return errs.Wrap(err, "start workspace runtime")
-	}
-	containerID, err := h.manager.ContainerID(ctx, botID)
-	if err != nil {
-		if errors.Is(err, workspace.ErrContainerNotFound) {
-			return apperror.Wrap(apperror.CodeWorkspaceNotFound, err, nil)
-		}
-		return errs.Wrap(err, "resolve workspace container")
 	}
 
 	connectionID := uuid.NewString()
 	record := &mcpStdioSession{
-		id:          connectionID,
-		botID:       botID,
-		containerID: containerID,
-		name:        strings.TrimSpace(req.Name),
-		createdAt:   time.Now().UTC(),
-		request:     req,
+		id:        connectionID,
+		botID:     botID,
+		name:      strings.TrimSpace(req.Name),
+		createdAt: time.Now().UTC(),
+		request:   req,
 	}
 	// Eager probe on a THROWAWAY process: it validates the command and fills
 	// the response's tool list, then dies. The session process starts lazily
 	// on the first proxied message (see mcpStdioSession.request), so create
 	// keeps its old contract — fail fast on a bad command, return the tool
 	// list — without burning the session's handshake on memoh's capabilities.
-	probeSess, err := h.startContainerdMCPCommandSession(ctx, botID, containerID, req, nil, defaultStdioSDKClient())
+	probeSess, err := h.startContainerdMCPCommandSession(ctx, botID, req, nil, defaultStdioSDKClient())
 	if err != nil {
+		if errors.Is(err, workspace.ErrContainerNotFound) {
+			return apperror.Wrap(apperror.CodeWorkspaceNotFound, err, nil)
+		}
 		return errs.Wrap(err, "probe stdio mcp command")
 	}
 	tools := h.probeMCPTools(ctx, probeSess, botID, strings.TrimSpace(req.Name))
@@ -509,7 +506,7 @@ func (h *ContainerdHandler) ensureStdioSession(ctx context.Context, record *mcpS
 	if req != nil && strings.TrimSpace(req.Method) == "initialize" {
 		client = sdkClientForInitialize(req.Params)
 	}
-	sess, err := h.startContainerdMCPCommandSession(ctx, record.botID, record.containerID, record.request, func() {
+	sess, err := h.startContainerdMCPCommandSession(ctx, record.botID, record.request, func() {
 		h.mcpStdioMu.Lock()
 		if current, ok := h.mcpStdioSess[record.id]; ok && current == record {
 			delete(h.mcpStdioSess, record.id)
@@ -655,9 +652,13 @@ func connectStdioClient(ctx context.Context, stdin io.WriteCloser, stdout io.Rea
 // The client argument chooses the identity presented at the handshake:
 // defaultStdioSDKClient() when memoh is the real client, or
 // sdkClientForInitialize(...) for lazily-started proxy sessions.
-func (h *ContainerdHandler) startContainerdMCPCommandSession(ctx context.Context, botID, containerID string, req MCPStdioRequest, onClose func(), sdkClient *sdkmcp.Client) (*mcpStdioClient, error) {
-	// Get gRPC client for the bot container via manager
-	client, err := h.manager.MCPClient(ctx, botID)
+//
+// The process runs on the bot's managed computer: a stdio MCP server is a
+// hosted dependency, so the computer must offer
+// workspace.CapabilityDependencies, and the connection comes from Connect
+// like every other bridge connection.
+func (h *ContainerdHandler) startContainerdMCPCommandSession(ctx context.Context, botID string, req MCPStdioRequest, onClose func(), sdkClient *sdkmcp.Client) (*mcpStdioClient, error) {
+	client, err := h.manager.ManagedClient(ctx, botID, workspace.CapabilityDependencies)
 	if err != nil {
 		return nil, fmt.Errorf("get workspace runtime client: %w", err)
 	}
@@ -728,7 +729,7 @@ func (h *ContainerdHandler) startContainerdMCPCommandSession(ctx context.Context
 		}
 	}()
 
-	startMCPStderrLogger(stderrR, containerID, h.logger, sess.stderrTail)
+	startMCPStderrLogger(stderrR, botID, h.logger, sess.stderrTail)
 
 	session, err := connectStdioClient(ctx, stdinW, stdoutR, sdkClient)
 	if err != nil {

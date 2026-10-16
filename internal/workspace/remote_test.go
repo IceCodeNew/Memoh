@@ -311,7 +311,9 @@ func TestRemotePrimaryOfflineNeverFallsBackToNative(t *testing.T) {
 		IsPrimary:     true,
 		RuntimeUserID: remoteTestOwnerID, BotOwnerUserID: remoteTestOwnerID,
 	}}}
+	bindings, _ := newUserWorkspaceBindings(t, remoteTestRuntimeID)
 	manager := NewManager(slog.Default(), nil, nil, config.WorkspaceConfig{}, "", nil)
+	manager.SetBindingService(bindings)
 	manager.SetRemoteWorkspaceService(&RemoteWorkspaceService{store: store, runtimes: fakeRuntimeConnections{}})
 	if _, err := manager.MCPClient(context.Background(), remoteTestBotID); !errors.Is(err, ErrRemoteRuntimeOffline) {
 		t.Fatalf("MCPClient error = %v, want offline", err)

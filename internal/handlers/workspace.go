@@ -15,6 +15,10 @@ import (
 type containerWorkspace interface {
 	bridge.Provider
 	NativeMCPClient(ctx context.Context, botID string) (*bridge.Client, error)
+	// ManagedClient connects to the bot's managed computer for an operation
+	// that needs the capability; handlers say what they need, not which kind
+	// of computer they expect.
+	ManagedClient(ctx context.Context, botID string, capability workspace.Capability) (*bridge.Client, error)
 	BotDisplayEnabled(ctx context.Context, botID string) bool
 	DisplaySocketPath(ctx context.Context, botID string) string
 	EnsureRunning(ctx context.Context, botID string) error

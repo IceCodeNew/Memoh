@@ -3,6 +3,7 @@ package workdir
 import (
 	"context"
 	"errors"
+	"reflect"
 	"testing"
 	"time"
 
@@ -20,9 +21,12 @@ func TestResolveForSessionNative(t *testing.T) {
 		t.Fatalf("ResolveForSession error = %v", err)
 	}
 	// A managed workspace is addressed as the native target, never by its
-	// binding id.
-	want := Resolved{WorkdirID: "p1", TargetID: workspace.WorkspaceTargetNative, Kind: TargetKindNative, WorkspaceID: "ws-managed", WorkDir: "/data/site"}
-	if resolved != want {
+	// binding id, and offers everything a managed computer does.
+	want := Resolved{
+		WorkdirID: "p1", TargetID: workspace.WorkspaceTargetNative, Kind: TargetKindNative, WorkspaceID: "ws-managed",
+		Capabilities: workspace.CapabilitiesFor(workspace.WorkspaceKindManaged), WorkDir: "/data/site",
+	}
+	if !reflect.DeepEqual(resolved, want) {
 		t.Fatalf("resolved = %+v, want %+v", resolved, want)
 	}
 }
@@ -37,6 +41,10 @@ func TestResolveForSessionRemote(t *testing.T) {
 	}
 	if resolved.TargetID != "bind-1" || resolved.Kind != TargetKindRemote || resolved.WorkspaceID != "ws-user" || resolved.WorkDir != `C:\Users\alice\code` {
 		t.Fatalf("resolved = %+v", resolved)
+	}
+	// A user's computer offers files only: no external agent can bind it.
+	if !resolved.Capabilities.Has(workspace.CapabilityFiles) || resolved.Capabilities.Has(workspace.CapabilityExternalAgent) {
+		t.Fatalf("capabilities = %v, want files only", resolved.Capabilities.List())
 	}
 }
 

@@ -131,7 +131,9 @@ func TestManagerWorkspaceTargetOverridePrecedenceAndConcurrentIsolation(t *testi
 		},
 	}}
 	capabilities := []string{userruntime.CapabilityFS, userruntime.CapabilityExec, userruntime.CapabilityHostFS}
+	bindings, _ := newUserWorkspaceBindings(t, remoteTestRuntimeID, remoteTestRuntimeID2)
 	manager := NewManager(slog.Default(), nil, nil, config.WorkspaceConfig{}, "", nil)
+	manager.SetBindingService(bindings)
 	manager.SetRemoteWorkspaceService(&RemoteWorkspaceService{
 		store: store,
 		runtimes: fakeRuntimeConnections{

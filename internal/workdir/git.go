@@ -42,8 +42,10 @@ func (s *Service) SwitchGitBranch(ctx context.Context, botID, workdirID, branch 
 	if record.Archived {
 		return GitBranchResponse{}, ErrWorkdirArchived
 	}
-	// Remote execution is outside the current Codex composer scope.
-	if target.Kind != TargetKindNative {
+	// Branch switching serves the external-agent composer: it only runs on a
+	// computer that can host those agents. A computer without that
+	// capability has no composer to switch branches for.
+	if !target.Capabilities.Has(workspace.CapabilityExternalAgent) {
 		return GitBranchResponse{}, ErrGitUnavailable
 	}
 	activity, ok := s.store.(dbstore.WorkdirActivityStore)

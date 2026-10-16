@@ -13,7 +13,7 @@ import (
 	"github.com/felinics/memoh/internal/db"
 	"github.com/felinics/memoh/internal/models"
 	"github.com/felinics/memoh/internal/runtimekind"
-	"github.com/felinics/memoh/internal/workdir"
+	"github.com/felinics/memoh/internal/workspace"
 )
 
 var (
@@ -382,9 +382,9 @@ func (s *Service) validateWorkdirBinding(ctx context.Context, botID, workdirID, 
 	if err != nil {
 		return err
 	}
-	// External Agents run inside the native workspace and cannot reach a
-	// remote runtime's filesystem — same policy as interactive sessions.
-	if runtimekind.IsExternal(runtimeType) && wd.TargetKind == workdir.TargetKindRemote {
+	// External Agents run on the computer the workdir lives on, so it must be
+	// able to host them — same policy as interactive sessions.
+	if runtimekind.IsExternal(runtimeType) && !wd.Capabilities.Has(workspace.CapabilityExternalAgent) {
 		return invalidField("workdir_id", "external Agent schedules cannot bind a remote workdir")
 	}
 	return nil

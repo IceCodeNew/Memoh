@@ -282,11 +282,9 @@ func (g *MCPFederationGateway) startStdioConnectionSession(ctx context.Context, 
 	if g.handler == nil {
 		return nil, errors.New("containerd handler not configured")
 	}
-	if err := g.handler.manager.EnsureRunning(ctx, botID); err != nil {
-		return nil, err
-	}
-	containerID, err := g.handler.manager.ContainerID(ctx, botID)
-	if err != nil {
+	// The server process runs on the bot's managed computer (see
+	// startContainerdMCPCommandSession); bring it up first.
+	if err := g.handler.manager.EnsureNativeRunning(ctx, botID); err != nil {
 		return nil, err
 	}
 
@@ -303,7 +301,7 @@ func (g *MCPFederationGateway) startStdioConnectionSession(ctx context.Context, 
 	}
 	// Federation sessions are short-lived and unregistered — no onClose. Memoh
 	// is the real client here, so the handshake uses the default identity.
-	return g.handler.startContainerdMCPCommandSession(ctx, botID, containerID, request, nil, defaultStdioSDKClient())
+	return g.handler.startContainerdMCPCommandSession(ctx, botID, request, nil, defaultStdioSDKClient())
 }
 
 func convertSDKTools(items []*sdkmcp.Tool) []mcpgw.ToolDescriptor {

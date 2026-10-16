@@ -118,7 +118,7 @@ func (s *Service) Directories(ctx context.Context, botID, targetID, rawPath stri
 		}
 		return DirectoriesResponse{}, fmt.Errorf("list workdir directories: %w", err)
 	}
-	windows := resolved.Kind == TargetKindRemote && isWindowsOS(resolved.Info.OS)
+	windows := isWindowsOS(resolved.Info.OS)
 	directories := make([]Directory, 0, len(entries))
 	for _, entry := range entries {
 		if !entry.GetIsDir() {
@@ -137,10 +137,19 @@ func (s *Service) Directories(ctx context.Context, botID, targetID, rawPath stri
 	}, nil
 }
 
-// defaultBrowsePath is where browsing starts on a target: the data mount on
-// the native workspace, the runtime's reported workspace base on a remote one.
+// onHostFilesystem reports whether the target's bridge exposes a machine's own
+// filesystem rather than the sandboxed data mount of a server container. It
+// is what the bridge says about itself, not which kind of computer it is: a
+// Remote Runtime serves host paths (Windows drives included), a container
+// serves its data mount.
+func onHostFilesystem(target workspace.ResolvedWorkspaceTarget) bool {
+	return strings.EqualFold(strings.TrimSpace(target.Info.Backend), bridge.WorkspaceBackendRemote)
+}
+
+// defaultBrowsePath is where browsing starts on a target: the data mount of a
+// sandboxed container, the reported workspace base of a host filesystem.
 func defaultBrowsePath(target workspace.ResolvedWorkspaceTarget) string {
-	if target.Kind != TargetKindRemote {
+	if !onHostFilesystem(target) {
 		return vpath.DataMount
 	}
 	if base := strings.TrimSpace(target.Info.DefaultWorkDir); base != "" {
@@ -264,15 +273,15 @@ func (*Service) requireDirectory(ctx context.Context, target workspace.ResolvedW
 }
 
 // normalizeWorkdirPath canonicalizes the user-supplied path for the target
-// it will live on. Native paths are clamped under the container data mount;
-// remote paths are host-absolute (Windows drive/UNC paths included) and the
-// remote runtime stays the authority on what exists there.
+// it will live on. Container paths are clamped under the data mount; host
+// filesystem paths are host-absolute (Windows drive/UNC paths included) and
+// the runtime serving them stays the authority on what exists there.
 func normalizeWorkdirPath(raw string, target workspace.ResolvedWorkspaceTarget) (string, error) {
 	trimmed := strings.TrimSpace(raw)
 	if trimmed == "" {
 		return "", ErrPathRequired
 	}
-	if target.Kind == TargetKindRemote {
+	if onHostFilesystem(target) {
 		if isWindowsOS(target.Info.OS) {
 			return normalizeWindowsAbsPath(trimmed)
 		}
@@ -332,6 +341,7 @@ func toWorkdir(record dbstore.BotWorkdirRecord) Workdir {
 		TargetKind:        kind,
 		WorkspaceTargetID: targetID,
 		WorkspaceID:       record.WorkspaceID,
+		Capabilities:      workspace.CapabilitiesFor(record.WorkspaceKind),
 		Path:              record.Path,
 		CreatedByUserID:   record.CreatedByUserID,
 		Archived:          !record.ArchivedAt.IsZero(),

@@ -38,8 +38,10 @@ func NewManagerWorkspaceAccess(m *workspace.Manager) WorkspaceAccess {
 	return &managerWorkspaceAccess{manager: m}
 }
 
+// Client connects to the bot's managed computer: dependency management needs
+// a computer that can host installations (workspace.CapabilityDependencies).
 func (a *managerWorkspaceAccess) Client(ctx context.Context, botID string) (*bridge.Client, error) {
-	return a.manager.NativeMCPClient(ctx, botID)
+	return a.manager.ManagedClient(ctx, botID, workspace.CapabilityDependencies)
 }
 
 func (*managerWorkspaceAccess) DataRoot(_ context.Context, _ string) (string, error) {
@@ -64,7 +66,7 @@ func (a *managerWorkspaceAccess) EnsureRunning(ctx context.Context, botID string
 	if err := a.manager.EnsureNativeRunning(ctx, botID); err != nil {
 		return err
 	}
-	return a.manager.WaitForWorkspaceReady(workspace.WithWorkspaceTarget(ctx, workspace.WorkspaceTargetNative), botID)
+	return a.manager.WaitForWorkspaceReady(ctx, botID)
 }
 
 func (a *managerWorkspaceAccess) OnBridgeReset(fn func(botID string)) { a.manager.OnBridgeReset(fn) }

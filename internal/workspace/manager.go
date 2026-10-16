@@ -183,8 +183,14 @@ func (m *Manager) SetHookService(h *hooks.Service) {
 	m.hookService = h
 }
 
+// SetRemoteWorkspaceService wires the remote mounts. The service takes live
+// connections through this manager's Connect, so a mount is reached the same
+// way every other workspace is.
 func (m *Manager) SetRemoteWorkspaceService(service *RemoteWorkspaceService) {
 	m.remote = service
+	if service != nil {
+		service.connector = m
+	}
 }
 
 // WorkspaceSetupDiagnostics records sanitized setup failures for Bot health
@@ -303,28 +309,29 @@ func (m *Manager) instanceClient(ctx context.Context, containerID string) (*brid
 	return m.grpcPool.Get(ctx, containerID)
 }
 
-// nativeMCPClient is the bridge client of the bot's managed computer. A
-// computer whose container does not exist yet is dialed by the name the
-// container will have; the dial fails with bridge.ErrUnavailable until then,
-// as it always did.
-func (m *Manager) nativeMCPClient(ctx context.Context, botID string) (*bridge.Client, error) {
-	_, containerID, err := m.botContainerIDOrNew(ctx, botID)
+// NativeMCPClient is the bridge client of the bot's managed computer: the
+// workspace behind its native target, connected through Connect. A computer
+// whose container does not exist yet is dialed by the name the container will
+// have; the dial fails with bridge.ErrUnavailable until then, as it always
+// did. A bot without a managed computer is ErrContainerNotFound.
+func (m *Manager) NativeMCPClient(ctx context.Context, botID string) (*bridge.Client, error) {
+	workspaceID, err := m.managedWorkspaceID(ctx, botID)
 	if err != nil {
+		if noManagedComputer(err) {
+			return nil, ErrContainerNotFound
+		}
 		return nil, err
 	}
-	return m.instanceClient(ctx, containerID)
+	return m.Connect(ctx, workspaceID)
 }
 
-func (m *Manager) NativeMCPClient(ctx context.Context, botID string) (*bridge.Client, error) {
-	return m.nativeMCPClient(ctx, botID)
-}
-
-// MCPClient implements bridge.Provider and resolves the request-scoped target
-// override before falling back to the Bot's persisted Primary target.
+// MCPClient implements bridge.Provider: the request-scoped target override
+// first, then the Bot's persisted Primary target. Either way the target is
+// resolved to its workspace and connected through Connect.
 func (m *Manager) MCPClient(ctx context.Context, botID string) (*bridge.Client, error) {
 	if targetID := WorkspaceTargetFromContext(ctx); targetID != "" {
 		if targetID == WorkspaceTargetNative {
-			return m.nativeMCPClient(ctx, botID)
+			return m.NativeMCPClient(ctx, botID)
 		}
 		target, err := m.ResolveWorkspaceTarget(ctx, botID, targetID)
 		return target.Client, err
@@ -334,7 +341,7 @@ func (m *Manager) MCPClient(ctx context.Context, botID string) (*bridge.Client, 
 			return target.Client, err
 		}
 	}
-	return m.nativeMCPClient(ctx, botID)
+	return m.NativeMCPClient(ctx, botID)
 }
 
 // CurrentWorkspaceTargetID resolves only the request or persisted target ID.
@@ -377,7 +384,7 @@ func (m *Manager) ResolveWorkspaceTarget(ctx context.Context, botID, targetID st
 				primary = true
 			}
 		}
-		client, err := m.nativeMCPClient(ctx, botID)
+		client, err := m.NativeMCPClient(ctx, botID)
 		if err != nil {
 			return ResolvedWorkspaceTarget{}, err
 		}
@@ -394,14 +401,15 @@ func (m *Manager) ResolveWorkspaceTarget(ctx context.Context, botID, targetID st
 			return ResolvedWorkspaceTarget{}, err
 		}
 		return ResolvedWorkspaceTarget{
-			TargetID:    WorkspaceTargetNative,
-			Kind:        WorkspaceTargetNative,
-			WorkspaceID: workspaceID,
-			Name:        "Server Workspace",
-			Primary:     primary,
-			Client:      client,
-			Info:        info,
-			Approval:    approval,
+			TargetID:     WorkspaceTargetNative,
+			Kind:         WorkspaceTargetNative,
+			WorkspaceID:  workspaceID,
+			Capabilities: CapabilitiesFor(WorkspaceKindManaged),
+			Name:         "Server Workspace",
+			Primary:      primary,
+			Client:       client,
+			Info:         info,
+			Approval:     approval,
 		}, nil
 	}
 	if _, ok := canonicalWorkspaceUUID(targetID); !ok || m.remote == nil {
@@ -637,6 +645,7 @@ func (m *Manager) ListWorkspaceTargets(ctx context.Context, botID string) ([]Wor
 		TargetID:           WorkspaceTargetNative,
 		Kind:               WorkspaceTargetNative,
 		WorkspaceID:        workspaceID,
+		Capabilities:       CapabilitiesFor(WorkspaceKindManaged),
 		Name:               "Server Workspace",
 		Primary:            true,
 		Status:             WorkspaceTargetStatusOffline,
@@ -853,7 +862,7 @@ func (m *Manager) BotDisplayEnabled(ctx context.Context, botID string) bool {
 }
 
 func (m *Manager) DisplayDialContext(ctx context.Context, botID, network, address string) (net.Conn, error) {
-	client, err := m.nativeMCPClient(ctx, botID)
+	client, err := m.NativeMCPClient(ctx, botID)
 	if err != nil {
 		return nil, err
 	}

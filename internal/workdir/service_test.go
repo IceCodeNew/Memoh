@@ -179,7 +179,7 @@ func TestNormalizeWorkdirPathEmpty(t *testing.T) {
 }
 
 func TestNormalizeWorkdirPathRemotePosix(t *testing.T) {
-	remote := workspace.ResolvedWorkspaceTarget{Kind: TargetKindRemote, Info: bridge.WorkspaceInfo{OS: "darwin"}}
+	remote := workspace.ResolvedWorkspaceTarget{Kind: TargetKindRemote, Info: bridge.WorkspaceInfo{Backend: bridge.WorkspaceBackendRemote, OS: "darwin"}}
 	got, err := normalizeWorkdirPath("/Users/alice/code/site/", remote)
 	if err != nil {
 		t.Fatalf("error = %v", err)
@@ -193,7 +193,7 @@ func TestNormalizeWorkdirPathRemotePosix(t *testing.T) {
 }
 
 func TestNormalizeWorkdirPathRemoteWindows(t *testing.T) {
-	remote := workspace.ResolvedWorkspaceTarget{Kind: TargetKindRemote, Info: bridge.WorkspaceInfo{OS: "win32"}}
+	remote := workspace.ResolvedWorkspaceTarget{Kind: TargetKindRemote, Info: bridge.WorkspaceInfo{Backend: bridge.WorkspaceBackendRemote, OS: "win32"}}
 	for name, tc := range map[string]struct {
 		raw  string
 		want string

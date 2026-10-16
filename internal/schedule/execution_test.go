@@ -15,6 +15,7 @@ import (
 	"github.com/felinics/memoh/internal/db/postgres/sqlc"
 	dbstore "github.com/felinics/memoh/internal/db/store"
 	"github.com/felinics/memoh/internal/workdir"
+	"github.com/felinics/memoh/internal/workspace"
 )
 
 const (
@@ -297,10 +298,11 @@ func TestNormalizeExecutionValidatesNativeModel(t *testing.T) {
 func TestNormalizeExecutionWorkdirRules(t *testing.T) {
 	ctx := context.Background()
 	native := &fakeWorkdirValidator{workdirs: map[string]workdir.Workdir{
-		execTestWorkdirID: {ID: execTestWorkdirID, TargetKind: workdir.TargetKindNative, Path: "/data/project"},
+		execTestWorkdirID: {ID: execTestWorkdirID, TargetKind: workdir.TargetKindNative, Capabilities: workspace.CapabilitiesFor(workspace.WorkspaceKindManaged), Path: "/data/project"},
 	}}
+	// A user's own computer: files only, so no external Agent can run there.
 	remote := &fakeWorkdirValidator{workdirs: map[string]workdir.Workdir{
-		execTestWorkdirID: {ID: execTestWorkdirID, TargetKind: workdir.TargetKindRemote, Path: "/home/user/project"},
+		execTestWorkdirID: {ID: execTestWorkdirID, TargetKind: workdir.TargetKindRemote, Capabilities: workspace.CapabilitiesFor(workspace.WorkspaceKindUser), Path: "/home/user/project"},
 	}}
 
 	t.Run("native workdir binds", func(t *testing.T) {
@@ -320,6 +322,19 @@ func TestNormalizeExecutionWorkdirRules(t *testing.T) {
 			err := svc.validateWorkdirBinding(ctx, execTestBotID, execTestWorkdirID, runtimeType)
 			if err == nil || !strings.Contains(err.Error(), "remote") {
 				t.Fatalf("runtime %q error = %v, want remote workdir rejection", runtimeType, err)
+			}
+		}
+		// The model runtime does not run on the computer, so it binds there.
+		if err := svc.validateWorkdirBinding(ctx, execTestBotID, execTestWorkdirID, "model"); err != nil {
+			t.Fatalf("model runtime error = %v, want remote workdir accepted", err)
+		}
+	})
+
+	t.Run("external runtimes bind a native workdir", func(t *testing.T) {
+		svc := newExecutionService(t, &executionQueries{}, native)
+		for _, runtimeType := range []string{"acp_agent", "codex", "claude-code"} {
+			if err := svc.validateWorkdirBinding(ctx, execTestBotID, execTestWorkdirID, runtimeType); err != nil {
+				t.Fatalf("runtime %q error = %v, want native workdir accepted", runtimeType, err)
 			}
 		}
 	})

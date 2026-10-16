@@ -26,6 +26,7 @@ import (
 	"github.com/felinics/memoh/internal/runtimefence"
 	"github.com/felinics/memoh/internal/runtimekind"
 	"github.com/felinics/memoh/internal/workdir"
+	"github.com/felinics/memoh/internal/workspace"
 )
 
 // SessionHandler handles bot session CRUD endpoints.
@@ -1275,9 +1276,9 @@ func filterSessionsForPermissions(items []session.Thread, userID string, perms [
 // session creation. Both creation entry points use it — the REST create and
 // the WebSocket first send that creates its session in-band — so a session is
 // only ever born bound to an active workdir of its own bot. An empty id means
-// no binding and returns nil. External Agent sessions can only bind
-// native-workspace workdirs until their runtime lifecycles are scoped by
-// workspace target.
+// no binding and returns nil. External Agent sessions run on the computer the
+// workdir lives on, so that computer must be able to host them
+// (workspace.CapabilityExternalAgent); a user's own computer cannot yet.
 //
 // Errors are echo.HTTPError values; the WebSocket caller renders them with
 // wsErrorMessage.
@@ -1293,7 +1294,7 @@ func resolveSessionWorkdirBinding(ctx context.Context, workdirs sessionWorkdirSe
 	if err != nil {
 		return nil, workdirHTTPError(err)
 	}
-	if (runtimeType == session.RuntimeACPAgent || session.IsDirectRuntimeType(runtimeType)) && bound.TargetKind == workdir.TargetKindRemote {
+	if (runtimeType == session.RuntimeACPAgent || session.IsDirectRuntimeType(runtimeType)) && !bound.Capabilities.Has(workspace.CapabilityExternalAgent) {
 		return nil, apperror.New(apperror.CodeWorkdirRemoteUnsupportedForAgent, nil)
 	}
 	return &bound, nil

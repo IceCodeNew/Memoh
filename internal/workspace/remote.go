@@ -28,6 +28,15 @@ const (
 	WorkspaceTargetStatusClientUpdateRequired = "client_update_required"
 )
 
+// IsUserComputerTarget reports whether a client-facing target kind addresses
+// a person's own computer rather than one the server provisioned for the bot.
+// It answers an ownership question — who must hold what permission to reach
+// the machine — not a capability one; see Capabilities for what a computer
+// can do.
+func IsUserComputerTarget(kind string) bool {
+	return strings.TrimSpace(kind) == WorkspaceTargetRemote
+}
+
 var (
 	ErrWorkspaceTargetNotFound          = errors.New("workspace target not found")
 	ErrRemoteWorkspaceNotBound          = errors.New("remote workspace is not bound")
@@ -54,6 +63,7 @@ type WorkspaceTarget struct {
 	TargetID           string                      `json:"target_id"`
 	Kind               string                      `json:"kind"`
 	WorkspaceID        string                      `json:"-"`
+	Capabilities       Capabilities                `json:"-"`
 	RuntimeID          string                      `json:"runtime_id,omitempty"`
 	Name               string                      `json:"name"`
 	Primary            bool                        `json:"primary"`
@@ -81,24 +91,27 @@ type UpdateWorkspaceTargetToolApprovalRequest struct {
 
 // ResolvedWorkspaceTarget is a live target: the client-facing address
 // (TargetID / Kind), the workspace it stands for (WorkspaceID, the key that
-// workdirs, approvals and session snapshots are stored under) and the bridge
-// client to reach it.
+// workdirs, approvals and session snapshots are stored under), what the
+// computer can do (Capabilities) and the bridge client to reach it.
 type ResolvedWorkspaceTarget struct {
-	TargetID    string
-	Kind        string
-	WorkspaceID string
-	Name        string
-	Primary     bool
-	Client      *bridge.Client
-	Info        bridge.WorkspaceInfo
-	Approval    settings.ToolApprovalConfig
+	TargetID     string
+	Kind         string
+	WorkspaceID  string
+	Capabilities Capabilities
+	Name         string
+	Primary      bool
+	Client       *bridge.Client
+	Info         bridge.WorkspaceInfo
+	Approval     settings.ToolApprovalConfig
 }
 
 // RemoteWorkspaceService owns persistent remote mounts. Live runtime
-// connections remain owned by userruntime.Service.
+// connections remain owned by userruntime.Service and are reached through the
+// connector (the Manager's Connect) once a mount's record checks out.
 type RemoteWorkspaceService struct {
-	store    dbstore.BotRemoteRuntimeBindingStore
-	runtimes runtimeConnectionResolver
+	store     dbstore.BotRemoteRuntimeBindingStore
+	runtimes  runtimeConnectionResolver
+	connector Connector
 }
 
 type runtimeConnectionResolver interface {
@@ -277,21 +290,22 @@ func (s *RemoteWorkspaceService) ResolveMount(ctx context.Context, botID, target
 	if err != nil {
 		return ResolvedWorkspaceTarget{}, err
 	}
-	return s.resolveRecord(record)
+	return s.resolveRecord(ctx, record)
 }
 
-func (s *RemoteWorkspaceService) resolveRecord(record dbstore.BotRemoteRuntimeBindingRecord) (ResolvedWorkspaceTarget, error) {
-	client, connection, err := s.clientForRecord(record)
+func (s *RemoteWorkspaceService) resolveRecord(ctx context.Context, record dbstore.BotRemoteRuntimeBindingRecord) (ResolvedWorkspaceTarget, error) {
+	client, connection, err := s.clientForRecord(ctx, record)
 	if err != nil {
 		return ResolvedWorkspaceTarget{}, err
 	}
 	return ResolvedWorkspaceTarget{
-		TargetID:    record.ID,
-		Kind:        WorkspaceTargetRemote,
-		WorkspaceID: record.RuntimeID,
-		Name:        record.RuntimeName,
-		Primary:     record.IsPrimary,
-		Client:      client,
+		TargetID:     record.ID,
+		Kind:         WorkspaceTargetRemote,
+		WorkspaceID:  record.RuntimeID,
+		Capabilities: CapabilitiesFor(WorkspaceKindUser),
+		Name:         record.RuntimeName,
+		Primary:      record.IsPrimary,
+		Client:       client,
 		Info: bridge.WorkspaceInfo{
 			Backend:        bridge.WorkspaceBackendRemote,
 			OS:             connection.Info.OS,
@@ -309,7 +323,7 @@ func (s *RemoteWorkspaceService) ResolvePrimary(ctx context.Context, botID strin
 	if err != nil {
 		return ResolvedWorkspaceTarget{}, false, err
 	}
-	target, err := s.resolveRecord(record)
+	target, err := s.resolveRecord(ctx, record)
 	return target, true, err
 }
 
@@ -370,28 +384,44 @@ func (s *RemoteWorkspaceService) getPrimaryRecord(ctx context.Context, botID str
 	return record, err
 }
 
-func (s *RemoteWorkspaceService) clientForRecord(record dbstore.BotRemoteRuntimeBindingRecord) (*bridge.Client, *userruntime.Connection, error) {
+// clientForRecord checks what the mount record alone can tell — the runtime
+// still belongs to the bot's owner and has not been revoked — and then takes
+// the live connection through Connect, like every other caller.
+func (s *RemoteWorkspaceService) clientForRecord(ctx context.Context, record dbstore.BotRemoteRuntimeBindingRecord) (*bridge.Client, *userruntime.Connection, error) {
 	if record.RuntimeUserID != record.BotOwnerUserID {
 		return nil, nil, ErrRemoteRuntimeOwnerMismatch
 	}
 	if record.RuntimeRevoked {
 		return nil, nil, ErrRemoteRuntimeRevoked
 	}
+	client, err := s.connect(ctx, record.RuntimeID)
+	if err != nil {
+		return nil, nil, err
+	}
+	// The workspace info (OS, workspace base) is the live connection's; the
+	// client Connect returned belongs to it.
 	if s.runtimes == nil {
 		return nil, nil, ErrRemoteRuntimeOffline
 	}
 	connection, ok := s.runtimes.Connection(record.RuntimeID)
-	if !ok || connection == nil || connection.Client == nil {
-		return nil, nil, ErrRemoteRuntimeOffline
-	}
-	if !supportsRemoteWorkspace(connection.Info.Capabilities) {
-		return nil, nil, ErrRemoteRuntimeClientUpdateNeeded
-	}
-	client := connection.Client
-	if client == nil {
+	if !ok || connection == nil {
 		return nil, nil, ErrRemoteRuntimeOffline
 	}
 	return client, connection, nil
+}
+
+// connect takes the mount's live connection through the Manager's Connect. A
+// service wired without a manager (tests, bridge-only embeddings) resolves the
+// user half directly; it is the same code Connect runs for a user workspace.
+func (s *RemoteWorkspaceService) connect(ctx context.Context, runtimeID string) (*bridge.Client, error) {
+	if s.connector != nil {
+		return s.connector.Connect(ctx, runtimeID)
+	}
+	connection, err := connectUserRuntime(s.runtimes, runtimeID)
+	if err != nil {
+		return nil, err
+	}
+	return connection.Client, nil
 }
 
 func (s *RemoteWorkspaceService) target(record dbstore.BotRemoteRuntimeBindingRecord) WorkspaceTarget {
@@ -400,6 +430,7 @@ func (s *RemoteWorkspaceService) target(record dbstore.BotRemoteRuntimeBindingRe
 		TargetID:           record.ID,
 		Kind:               WorkspaceTargetRemote,
 		WorkspaceID:        record.RuntimeID,
+		Capabilities:       CapabilitiesFor(WorkspaceKindUser),
 		RuntimeID:          record.RuntimeID,
 		Name:               record.RuntimeName,
 		Primary:            record.IsPrimary,

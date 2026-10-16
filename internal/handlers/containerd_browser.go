@@ -20,6 +20,7 @@ import (
 
 	"github.com/felinics/memoh/internal/apperror"
 	"github.com/felinics/memoh/internal/errs"
+	"github.com/felinics/memoh/internal/workspace"
 	"github.com/felinics/memoh/internal/workspace/bridge"
 )
 
@@ -194,7 +195,7 @@ func (h *ContainerdHandler) CreateBrowserSession(c echo.Context) error {
 	}
 
 	ctx := c.Request().Context()
-	if _, err := h.manager.NativeMCPClient(ctx, botID); err != nil {
+	if _, err := h.manager.ManagedClient(ctx, botID, workspace.CapabilityDisplay); err != nil {
 		return errs.WrapDependency(err, "connect workspace")
 	}
 
@@ -273,7 +274,7 @@ func (h *ContainerdHandler) HandleBrowserProxy(c echo.Context) error {
 	if h.manager == nil {
 		return echo.NewHTTPError(http.StatusBadGateway, "manager not configured")
 	}
-	client, err := h.manager.NativeMCPClient(c.Request().Context(), session.BotID)
+	client, err := h.manager.ManagedClient(c.Request().Context(), session.BotID, workspace.CapabilityDisplay)
 	if err != nil {
 		return errs.WrapDependency(err, "connect workspace")
 	}

@@ -52,19 +52,21 @@ var (
 // Workdir is the API shape of a workdir. TargetKind and WorkspaceTargetID
 // are the derived target address: "native" / the native sentinel for a
 // workdir on the bot's managed computer, "remote" / the binding UUID for one
-// on a user's computer. WorkspaceID is the stored key and stays internal.
+// on a user's computer. WorkspaceID is the stored key and Capabilities what
+// the computer behind it can do; both stay internal.
 type Workdir struct {
-	ID                string    `json:"id"`
-	BotID             string    `json:"bot_id"`
-	Name              string    `json:"name"`
-	TargetKind        string    `json:"target_kind"`
-	WorkspaceTargetID string    `json:"workspace_target_id"`
-	WorkspaceID       string    `json:"-"`
-	Path              string    `json:"path"`
-	CreatedByUserID   string    `json:"created_by_user_id,omitempty"`
-	Archived          bool      `json:"archived,omitempty"`
-	CreatedAt         time.Time `json:"created_at"`
-	UpdatedAt         time.Time `json:"updated_at"`
+	ID                string                 `json:"id"`
+	BotID             string                 `json:"bot_id"`
+	Name              string                 `json:"name"`
+	TargetKind        string                 `json:"target_kind"`
+	WorkspaceTargetID string                 `json:"workspace_target_id"`
+	WorkspaceID       string                 `json:"-"`
+	Capabilities      workspace.Capabilities `json:"-"`
+	Path              string                 `json:"path"`
+	CreatedByUserID   string                 `json:"created_by_user_id,omitempty"`
+	Archived          bool                   `json:"archived,omitempty"`
+	CreatedAt         time.Time              `json:"created_at"`
+	UpdatedAt         time.Time              `json:"updated_at"`
 } // @name workdir.Workdir
 
 // CreateRequest creates a workdir. An empty WorkspaceTargetID means the
@@ -107,13 +109,15 @@ type DirectoriesResponse struct {
 // Resolved is the per-session resolution of a workdir binding: which target
 // the session is pinned to and the working directory tools and runtimes use.
 // TargetID is the client-facing address, WorkspaceID the workspace behind
-// it. It reads only stored state — target liveness stays with the turn path.
+// it and Capabilities what that computer can do. It reads only stored state —
+// target liveness stays with the turn path.
 type Resolved struct {
-	WorkdirID   string
-	TargetID    string
-	Kind        string
-	WorkspaceID string
-	WorkDir     string
+	WorkdirID    string
+	TargetID     string
+	Kind         string
+	WorkspaceID  string
+	Capabilities workspace.Capabilities
+	WorkDir      string
 }
 
 // GitBranchResponse contains a branch only when the directory has an attached Git HEAD.

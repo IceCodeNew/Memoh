@@ -13,6 +13,7 @@ import (
 	"github.com/labstack/echo/v4"
 
 	"github.com/felinics/memoh/internal/bots"
+	"github.com/felinics/memoh/internal/workspace"
 	pb "github.com/felinics/memoh/internal/workspace/bridgepb"
 	"github.com/felinics/memoh/internal/workspace/shellenv"
 )
@@ -50,7 +51,7 @@ func (h *ContainerdHandler) GetTerminalInfo(c echo.Context) error {
 		return c.JSON(http.StatusOK, terminalInfoResponse{Available: false})
 	}
 
-	client, clientErr := h.manager.NativeMCPClient(ctx, botID)
+	client, clientErr := h.manager.ManagedClient(ctx, botID, workspace.CapabilityTerminal)
 	if clientErr != nil || client == nil {
 		return c.JSON(http.StatusOK, terminalInfoResponse{Available: false})
 	}
@@ -83,7 +84,7 @@ func (h *ContainerdHandler) HandleTerminalWS(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusInternalServerError, "manager not configured")
 	}
 
-	client, err := h.manager.NativeMCPClient(ctx, botID)
+	client, err := h.manager.ManagedClient(ctx, botID, workspace.CapabilityTerminal)
 	if err != nil {
 		return echo.NewHTTPError(http.StatusInternalServerError).WithInternal(err)
 	}
