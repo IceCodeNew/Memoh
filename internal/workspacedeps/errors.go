@@ -11,15 +11,16 @@ var (
 	// ErrPlatformUnsupported means the catalog manifest does not list the
 	// probed platform of the target.
 	ErrPlatformUnsupported = errors.New("workspace dependency does not support the target platform")
-	// ErrBusy means another operation on the same (bot, dependency)
+	// ErrBusy means another operation on the same (computer, dependency)
 	// is in progress, either in this process or, through the workspace lock,
 	// in another Server instance. Operations never queue.
 	ErrBusy = errors.New("workspace dependency operation already in progress")
 	// ErrWorkspaceNotRunning means the native workspace exists but is stopped
 	// and could not be started for the operation.
 	ErrWorkspaceNotRunning = errors.New("workspace is not running")
-	// ErrWorkspaceMissing means the native workspace container has not been
-	// created; the caller must create it before installing anything.
+	// ErrWorkspaceMissing means the bot has no managed computer, or its
+	// container has not been created; the caller must create it before
+	// installing anything.
 	ErrWorkspaceMissing = errors.New("workspace has not been created")
 	// ErrRollbackUnavailable means state.json records no previous version or
 	// its versions/<previous> directory is gone.

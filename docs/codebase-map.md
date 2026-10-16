@@ -72,6 +72,7 @@ Memoh/
 │   ├── boot/                   #   Runtime configuration provider (container backend detection)
 │   ├── bots/                   #   Bot management (CRUD, lifecycle)
 │   ├── botbackup/              #   Bot backup/export/import service
+│   ├── botworkspace/           #   Declarative lifecycle of a managed computer: desired/observed state, reconciler, backoff (keyed by workspace id)
 │   ├── capabilities/           #   Model reasoning capability derivation (LiteLLM registry)
 │   ├── channel/                #   Channel adapter system
 │   │   ├── adapters/           #     Platform adapters: telegram, discord, feishu, qq, dingtalk, weixin, wecom, wechatoa, matrix, misskey, line, slack, local
@@ -130,14 +131,19 @@ Memoh/
 │   ├── timezone/               #   Timezone utilities
 │   ├── toolapproval/           #   Tool call approval flow
 │   ├── userinput/              #   In-conversation user input requests (ask_user tool)
+│   ├── userruntime/            #   Remote Runtime hub for user computers: pairing, live connections, metadata (a user computer shares its workspace id)
 │   ├── version/                #   Build-time version information
 │   ├── video/                  #   Video generation provider/model service
 │   ├── webhooktunnel/          #   Webhook tunnel manager (cloudflared) for channels behind NAT
-│   └── workspace/              #   Workspace container lifecycle management
-│       ├── manager.go          #     Container reconciliation, gRPC connection pool
-│       ├── manager_lifecycle.go #    Container create/start/stop operations
-│       ├── bridge/             #     gRPC client for in-container bridge service
-│       └── bridgepb/           #     Protobuf definitions (bridge.proto)
+│   ├── workspace/              #   Workspaces (managed computers and user computers), bot bindings, connection by capability
+│   │   ├── workspaces.go       #     WorkspaceService / BindingService: workspaces, bot_workspace_bindings, a bot's managed computer
+│   │   ├── capabilities.go     #     Capability set of a computer (files, terminal, display, snapshots, dependencies, external agent)
+│   │   ├── connect.go          #     Connect / ConnectFor / ManagedClient: the one bridge entry point, by workspace id
+│   │   ├── manager.go          #     Managed-computer runtime: instance records, gRPC connection pool
+│   │   ├── manager_lifecycle.go #    Container create/start/stop by instance key
+│   │   ├── bridge/             #     gRPC client for in-container bridge service
+│   │   └── bridgepb/           #     Protobuf definitions (bridge.proto)
+│   └── workspacedeps/          #   Dependency manager of managed computers (records keyed by workspace id, bot resolved at the boundary)
 ├── apps/                       # Application services
 │   ├── desktop/                #   Native Electron app (@memohai/desktop): hosted-server renderer, tray, menus, preload IPC
 │   └── web/                    #   Main web app (@memohai/web, Vue 3) — see apps/web/AGENTS.md
@@ -185,11 +191,11 @@ Memoh/
 
 ## Container / Workspace Management
 
-- Each bot can have an isolated **workspace container** for file editing, command execution, MCP tool hosting, and optional headed browser/desktop display sessions.
+- A bot is **bound to workspaces** (`workspaces`, `bot_workspace_bindings`): its **managed computer** is the isolated workspace container the server provisions (file editing, command execution, MCP tool hosting, optional headed browser/desktop display sessions), a **user computer** is a machine paired through Remote Runtime. Both are keyed by workspace id; the managed computer is still one per bot at this stage, but its id is not the bot id.
 - Container workspaces communicate with the host via a **gRPC bridge** over Unix Domain Sockets (UDS), not TCP.
-- The bridge binary (`cmd/bridge/`) runs inside each container as a read-only file mount, with UDS sockets under `/run/memoh/`. Toolkit binaries (node, python, uv), display dependencies, and runtime scripts come from the workspace image; agent CLIs and other managed dependencies are installed per bot into `/data` by the workspace dependency manager (`internal/workspacedeps/`). When display is enabled the bridge can supervise Xvnc and a headed Chrome/Chromium process with CDP on port `9222`; the web UI then exposes a Display pane backed by screenshots/WebRTC/input forwarding. Treat VNC as the container desktop transport, not as the whole browser automation feature.
+- The bridge binary (`cmd/bridge/`) runs inside each container as a read-only file mount, with UDS sockets under `/run/memoh/`. Toolkit binaries (node, python, uv), display dependencies, and runtime scripts come from the workspace image; agent CLIs and other managed dependencies are installed into the managed computer's `/data` by the workspace dependency manager (`internal/workspacedeps/`, records in `managed_computer_dependencies`). When display is enabled the bridge can supervise Xvnc and a headed Chrome/Chromium process with CDP on port `9222`; the web UI then exposes a Display pane backed by screenshots/WebRTC/input forwarding. Treat VNC as the container desktop transport, not as the whole browser automation feature.
 - The canonical workspace image is built from `docker/Dockerfile.workspace`. There is no image-level compatibility check: custom/provider images that expose the same toolkit and script paths (`/opt/memoh/toolkit`, `/opt/memoh/scripts`) get the same base capabilities, and anything missing is reported at the point of use or discovered as an installable dependency.
-- `internal/workspace/` manages workspace lifecycle (create, start, stop, reconcile) and maintains a bridge gRPC connection pool for container runtimes.
+- `internal/workspace/` owns workspaces and bindings (`WorkspaceService`, `BindingService`), the capability set of a computer, the single bridge entry point (`Connect` / `ConnectFor` by workspace id, `ManagedClient` for a bot's managed computer) and the managed-computer runtime (instance records, create/start/stop by instance key, bridge gRPC connection pool). `internal/botworkspace/` is the declarative lifecycle of a managed computer (desired/observed state and the reconciler, keyed by workspace id); `internal/userruntime/` is the Remote Runtime hub behind user computers.
 - `internal/container/` provides the container runtime abstraction layer and adapter subpackages (`docker`, `containerd`, `apple`). Snapshot/storage semantics differ by backend; do not assume containerd-style snapshot lineage for Docker or archive-backed flows.
 - SSE-based progress feedback is provided during container image pull and creation.
 
@@ -199,9 +205,9 @@ Memoh/
 The codebase has grown beyond the original agent/channel/container core. When working near these areas, read the local `AGENTS.md` and treat the corresponding `internal/` package as the source of truth; do not guess tool or schema details.
 
 - **External coding-agent runtimes (`internal/agent/runtime/external/`, `codex/`, `claudecode/`)** — the neutral `external.Driver` port plus the direct Codex and Claude Code runtimes (pinned protocol assets, device-code/OAuth login, native thread resume/fork, Memoh tool gateway mounts via `toolmount/`). **ACP (`internal/agent/runtime/acp/`)** is the generic channel for custom user-supplied ACP agents (single generic profile with a managed launch command), folded into the same driver port. The errors users can act on are package errors that `internal/agent/application` translates into catalog codes (`ExternalAgentError`).
-- **Workspace dependencies (`internal/workspacedeps/`)** — per-bot installation of agent CLIs and other managed dependencies into `/data`. The permission invariants (read-only launcher resolution, Manage-authorized install confirmation, no remote runtime support) are normative rules — see `AGENTS.md` → Container / Workspace Management. The Server/image upgrade boundary is documented in `docs/workspace-dependencies-upgrade.md`.
+- **Workspace dependencies (`internal/workspacedeps/`)** — installation of agent CLIs and other managed dependencies into a managed computer's `/data`; records are keyed by the computer (`managed_computer_dependencies`) and the bot-keyed API resolves the bot's managed computer at the service boundary. The permission invariants (read-only launcher resolution, Manage-authorized install confirmation, no user-computer support — it lacks the dependencies capability) are normative rules — see `AGENTS.md` → Container / Workspace Management. The Server/image upgrade boundary is documented in `docs/workspace-dependencies-upgrade.md`.
 - **Apps (`internal/apps/`, `internal/supermarket/`)** — Supermarket App discovery and installation state. Installed Apps expand into immutable Registry Skills in the selected workspace target.
 - **User input / `ask_user` (`internal/agent/decision/input/`)** — lets the in-process agent ask the user a question mid-conversation and wait for an answer.
 - **Bot backup / import / export (`internal/botbackup/`)** — archive-based bot portability with preview and merge/replace/skip strategies.
 - **Animated sticker rendering (`internal/media/lottie/`)** — Telegram animated stickers are gzipped Lottie, not images. The package rasterises them with ThorVG's published WebAssembly build running on wazero, so the server stays CGO-free and needs no native library. Three properties are normative, not incidental: the module's memory is capped and a render is aborted when its context expires (sticker data is attacker-supplied); every host import traps except the heap-growth hook, so an unverified code path fails the render instead of getting a fabricated answer; and each render gets a fresh module instance, so stickers never share linear memory. `thorvg.wasm` is vendored — the upgrade procedure, including remapping ThorVG's minified export names, is in the package's `doc.go`.
-- **Workspace resource limits (`internal/workspace/resource_limits.go`)** — per-bot CPU/memory/storage quotas and runtime metrics.
+- **Workspace resource limits (`internal/workspace/resource_limits.go`)** — per-managed-computer CPU/memory/storage quotas and runtime metrics.

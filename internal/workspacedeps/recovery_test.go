@@ -265,7 +265,7 @@ func TestReaperFencesPausedClaimBeforeNewOperation(t *testing.T) {
 
 func TestLegacyOperationWithoutIdentityRequiresExplicitRecovery(t *testing.T) {
 	f := newServiceFixture(t)
-	f.store.seed(Installation{BotID: testBot, DependencyID: "tool-y", Status: StatusInstalling, UpdatedAt: f.now.Add(-48 * time.Hour)})
+	f.store.seed(Installation{WorkspaceID: testWorkspace, DependencyID: "tool-y", Status: StatusInstalling, UpdatedAt: f.now.Add(-48 * time.Hour)})
 	if count, err := f.svc.ReapStale(f.ctx()); err != nil || count != 0 {
 		t.Fatalf("legacy intent was reclaimed without a safe fence: %d %v", count, err)
 	}

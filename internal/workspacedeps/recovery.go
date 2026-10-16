@@ -40,7 +40,7 @@ func (s *Service) recoverReceipt(ctx context.Context, key InstallationKey, dep c
 	if dep.ID != receipt.DependencyID || dep.ManifestDigest != receipt.ManifestDigest || dep.SourceURL != receipt.SourceURL || dep.RegistryID != receipt.RegistryID || dep.Revision != receipt.DefinitionRevision {
 		return nil, fmt.Errorf("%w: receipt publication does not match the verified definition", ErrDefinitionInvalid)
 	}
-	client, root, err := s.target(ctx, key.BotID)
+	client, root, err := s.target(ctx, key.WorkspaceID)
 	if err != nil {
 		return nil, err
 	}
@@ -69,7 +69,7 @@ func (s *Service) recoverReceipt(ctx context.Context, key InstallationKey, dep c
 		if _, err := s.store.FinishOperation(ctx, key, receipt.ID, nil); err != nil {
 			return nil, err
 		}
-		s.cache.Invalidate(key.BotID)
+		s.cache.Invalidate(key.WorkspaceID)
 		s.cleanupReceipt(ctx, op)
 		return nil, nil
 	case ActionRollback:
@@ -104,7 +104,7 @@ func (s *Service) markInterrupted(ctx context.Context, key InstallationKey, rec 
 		// them for explicit operator recovery, including legacy directory locks.
 		return Installation{}, ErrBusy
 	}
-	client, root, err := s.target(ctx, key.BotID)
+	client, root, err := s.target(ctx, key.WorkspaceID)
 	if err != nil {
 		return Installation{}, err
 	}

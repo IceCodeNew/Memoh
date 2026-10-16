@@ -125,7 +125,7 @@ func (s *Service) ensureRequires(ctx context.Context, op *operation, sink LogSin
 		if sink != nil {
 			sink.Log(StreamStdout, fmt.Sprintf("Installing %s, required by %s", dep.Name, op.dep.Name))
 		}
-		if err := s.installPrerequisite(ctx, cat, op.key.BotID, dep.ID, sink); err != nil {
+		if err := s.installPrerequisite(ctx, cat, op.key.WorkspaceID, dep.ID, sink); err != nil {
 			return fmt.Errorf("workspacedeps: install prerequisite %s of %s: %w", dep.ID, op.dep.ID, err)
 		}
 	}
@@ -184,7 +184,7 @@ func (s *Service) verifyRequires(ctx context.Context, op *operation) error {
 	if err != nil {
 		return err
 	}
-	records, err := s.store.ListForBot(ctx, op.key.BotID)
+	records, err := s.store.ListForWorkspace(ctx, op.key.WorkspaceID)
 	if err != nil {
 		return fmt.Errorf("workspacedeps: list installations: %w", err)
 	}
@@ -216,8 +216,8 @@ func (s *Service) InstallOrder(ctx context.Context, ids []string) ([]string, err
 	return installOrder(s.catalogFor(ctx), ids)
 }
 
-func (s *Service) installPrerequisite(ctx context.Context, cat *catalog.Catalog, botID, depID string, sink LogSink) error {
-	op, err := s.beginWith(ctx, cat, botID, depID, "", true)
+func (s *Service) installPrerequisite(ctx context.Context, cat *catalog.Catalog, workspaceID, depID string, sink LogSink) error {
+	op, err := s.beginWith(ctx, cat, workspaceID, depID, "", true)
 	if err != nil {
 		return err
 	}
@@ -228,21 +228,29 @@ func (s *Service) installPrerequisite(ctx context.Context, cat *catalog.Catalog,
 	return err
 }
 
-// Dependents lists the script-installed dependencies on the bot whose
-// requires name depID. A dependent's requires are read from the definition
-// it was installed from when that is cached, and from the current catalog as
-// well, so neither an older nor a newer revision loses a relationship. A
-// dependent with neither definition available counts as needing depID.
+// Dependents lists the script-installed dependencies on the bot's managed
+// computer whose requires name depID. A dependent's requires are read from
+// the definition it was installed from when that is cached, and from the
+// current catalog as well, so neither an older nor a newer revision loses a
+// relationship. A dependent with neither definition available counts as
+// needing depID. A bot without a managed computer has no dependents.
 func (s *Service) Dependents(ctx context.Context, botID, depID string) ([]string, error) {
 	ctx, _, err := s.prepareCatalog(ctx, false, false)
 	if err != nil {
 		return nil, err
 	}
-	return s.dependents(ctx, s.catalogFor(ctx), botID, depID)
+	workspaceID, err := s.computerOf(ctx, botID)
+	if errors.Is(err, ErrWorkspaceMissing) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return s.dependents(ctx, s.catalogFor(ctx), workspaceID, depID)
 }
 
-func (s *Service) dependents(ctx context.Context, cat *catalog.Catalog, botID, depID string) ([]string, error) {
-	records, err := s.store.ListForBot(ctx, botID)
+func (s *Service) dependents(ctx context.Context, cat *catalog.Catalog, workspaceID, depID string) ([]string, error) {
+	records, err := s.store.ListForWorkspace(ctx, workspaceID)
 	if err != nil {
 		return nil, fmt.Errorf("workspacedeps: list installations: %w", err)
 	}
@@ -299,8 +307,8 @@ func (s *Service) installedRequires(ctx context.Context, cat *catalog.Catalog, r
 // dependencies still need. Remove calls it after claiming its record; see
 // verifyRequires for the other half.
 func (s *Service) checkNotRequired(ctx context.Context, op *operation) error {
-	botID, depID := op.key.BotID, op.dep.ID
-	dependents, err := s.dependents(ctx, op.catalog, botID, depID)
+	workspaceID, depID := op.key.WorkspaceID, op.dep.ID
+	dependents, err := s.dependents(ctx, op.catalog, workspaceID, depID)
 	if err != nil {
 		return err
 	}

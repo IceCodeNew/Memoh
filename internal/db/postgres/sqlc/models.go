@@ -245,27 +245,6 @@ type BotChannelRoute struct {
 	TeamID                 pgtype.UUID        `json:"team_id"`
 }
 
-type BotDependencyInstallation struct {
-	ID                 pgtype.UUID        `json:"id"`
-	TeamID             pgtype.UUID        `json:"team_id"`
-	BotID              pgtype.UUID        `json:"bot_id"`
-	DependencyID       string             `json:"dependency_id"`
-	Source             string             `json:"source"`
-	Status             string             `json:"status"`
-	InstalledVersion   string             `json:"installed_version"`
-	LatestVersion      string             `json:"latest_version"`
-	LastCheckedAt      pgtype.Timestamptz `json:"last_checked_at"`
-	LastError          string             `json:"last_error"`
-	LastErrorCode      string             `json:"last_error_code"`
-	ManifestDigest     string             `json:"manifest_digest"`
-	SourceUrl          string             `json:"source_url"`
-	RegistryID         string             `json:"registry_id"`
-	DefinitionRevision string             `json:"definition_revision"`
-	OperationID        string             `json:"operation_id"`
-	CreatedAt          pgtype.Timestamptz `json:"created_at"`
-	UpdatedAt          pgtype.Timestamptz `json:"updated_at"`
-}
-
 type BotHistoryMessage struct {
 	ID                      pgtype.UUID        `json:"id"`
 	BotID                   pgtype.UUID        `json:"bot_id"`
@@ -556,6 +535,27 @@ type ManagedComputer struct {
 	LastStoppedAt      pgtype.Timestamptz `json:"last_stopped_at"`
 	CreatedAt          pgtype.Timestamptz `json:"created_at"`
 	UpdatedAt          pgtype.Timestamptz `json:"updated_at"`
+}
+
+type ManagedComputerDependency struct {
+	ID                 pgtype.UUID        `json:"id"`
+	TeamID             pgtype.UUID        `json:"team_id"`
+	DependencyID       string             `json:"dependency_id"`
+	Source             string             `json:"source"`
+	Status             string             `json:"status"`
+	InstalledVersion   string             `json:"installed_version"`
+	LatestVersion      string             `json:"latest_version"`
+	LastCheckedAt      pgtype.Timestamptz `json:"last_checked_at"`
+	LastError          string             `json:"last_error"`
+	LastErrorCode      string             `json:"last_error_code"`
+	ManifestDigest     string             `json:"manifest_digest"`
+	SourceUrl          string             `json:"source_url"`
+	RegistryID         string             `json:"registry_id"`
+	DefinitionRevision string             `json:"definition_revision"`
+	OperationID        string             `json:"operation_id"`
+	CreatedAt          pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt          pgtype.Timestamptz `json:"updated_at"`
+	WorkspaceID        pgtype.UUID        `json:"workspace_id"`
 }
 
 type ManagedComputerEvent struct {

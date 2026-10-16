@@ -38,14 +38,16 @@ const (
 	InstallationSourceManaged = "managed"
 )
 
-// Installation is one row of bot_dependency_installations.
+// Installation is one row of managed_computer_dependencies: one dependency on
+// one managed computer. WorkspaceID is the computer's workspace id; the bot
+// that asked is not recorded (it reaches the computer through its binding).
 type Installation struct {
 	OperationID        string
 	SourceURL          string
 	RegistryID         string
 	DefinitionRevision string
 	ID                 string
-	BotID              string
+	WorkspaceID        string
 
 	DependencyID     string
 	Source           string
@@ -65,7 +67,7 @@ type Installation struct {
 
 // InstallationKey identifies a record; the pair is unique per team.
 type InstallationKey struct {
-	BotID string
+	WorkspaceID string
 
 	DependencyID string
 }
@@ -112,8 +114,9 @@ type Store interface {
 	// owned by operationID. A superseded operation returns ErrBusy.
 	FinishOperation(ctx context.Context, key InstallationKey, operationID string, terminal *Installation) (Installation, error)
 	Get(ctx context.Context, key InstallationKey) (Installation, error)
-	ListForBot(ctx context.Context, botID string) ([]Installation, error)
-	// ListByStatus returns every record in the given status across bots.
+	// ListForWorkspace returns every record of one managed computer.
+	ListForWorkspace(ctx context.Context, workspaceID string) ([]Installation, error)
+	// ListByStatus returns every record in the given status across computers.
 	ListByStatus(ctx context.Context, status Status) ([]Installation, error)
 	// ListStaleOperations returns in-progress records not updated for at
 	// least olderThan, so the reaper can mark them failed.

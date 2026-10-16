@@ -25,6 +25,7 @@ PostgreSQL migrations live in `db/postgres/migrations/`:
 - **Down migration must fully reverse up**: The `.down.sql` must cleanly undo everything its `.up.sql` does, in reverse order.
 - **After creating or modifying migrations**, run `mise run sqlc-generate` to regenerate Go sqlc code, then validate the PostgreSQL migration path.
 - **0157 is reserved**: `0157_reserved_cloud_alignment` is intentionally empty. It realigns this stream with Memoh-Cloud's copy, which numbers every migration from 0141 onward one higher, so both use the same numbers from 0158 on. Never reuse a number or renumber a merged migration; Cloud-only schema changes belong in Cloud's own migration stream.
+- **Legacy tables and fresh installs**: since 0168 a fresh install's `0001` no longer declares the pre-workspace tables (`containers` and the other tables 0168–0170 merged or renamed); every historical migration that touches them is guarded by an existence check, and the empty shells that `IF NOT EXISTS` statements in the legacy chain still create (0092, 0107, 0148, 0153) are dropped by the migration that replaced them (0168, 0169, 0170).
 
 ## Database Tables
 
@@ -76,6 +77,8 @@ The canonical source of truth for the full PostgreSQL schema is `db/postgres/mig
 - `managed_computer_versions` — Version numbering per managed computer
 - `managed_computer_events` — Lifecycle events of a managed computer
 - `managed_computer_resource_limits` — Per-computer CPU/memory/storage quotas
+- `managed_computer_dependencies` — Dependency installation intent per managed computer (`(team_id, workspace_id, dependency_id)` unique; `source` image/managed, `status` state machine, `operation_id` claim token). A bot reaches its records through its managed binding; the HTTP routes stay bot-keyed
+- `workspace_dependency_definitions` / `workspace_dependency_catalogs` — Team-scoped cache of Supermarket dependency definitions (immutable revisions) and the catalog they were published in
 
 **Scheduling & Automation**
 - `schedule` — Scheduled tasks (cron)

@@ -2348,9 +2348,9 @@ CREATE POLICY bot_app_installations_team_delete ON public.bot_app_installations
     FOR DELETE USING (team_id = public.memoh_current_team_id());
 
 -- An App installation references the workspace dependencies it needs.
--- The dependency itself stays one record per (bot, target, dependency) in
--- bot_dependency_installations; a dependency is removed only when its last
--- referencing installation goes away.
+-- The dependency itself stays one record per (computer, dependency) in
+-- managed_computer_dependencies (end of this file); a dependency is removed
+-- only when its last referencing installation goes away.
 CREATE TABLE IF NOT EXISTS public.bot_app_dependency_refs (
     id              UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
     team_id         UUID        NOT NULL DEFAULT public.memoh_current_team_id()
@@ -2727,78 +2727,6 @@ ALTER TABLE public.bot_agents
 CREATE INDEX IF NOT EXISTS idx_bot_agents_agent_credential
     ON public.bot_agents (team_id, agent_credential_id)
     WHERE agent_credential_id IS NOT NULL;
-
--- ---------------------------------------------------------------------------
--- Workspace dependency installations
--- ---------------------------------------------------------------------------
--- Per-bot, per-workspace-target dependency installation intent for the
--- Workspace dependency manager.
--- Rows express what the user asked for; discovery corrects status/source and
--- never deletes a record.
-
-CREATE TABLE IF NOT EXISTS public.bot_dependency_installations (
-    id                  UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
-    team_id             UUID        NOT NULL DEFAULT public.memoh_current_team_id()
-                                    REFERENCES public.teams(id) ON DELETE RESTRICT,
-    bot_id              UUID        NOT NULL,
-    dependency_id       TEXT        NOT NULL,
-    source              TEXT        NOT NULL,
-    status              TEXT        NOT NULL,
-    installed_version   TEXT        NOT NULL DEFAULT '',
-    latest_version      TEXT        NOT NULL DEFAULT '',
-    last_checked_at     TIMESTAMPTZ,
-    last_error          TEXT        NOT NULL DEFAULT '',
-    last_error_code     TEXT        NOT NULL DEFAULT '',
-    manifest_digest     TEXT        NOT NULL DEFAULT '',
-    source_url          TEXT        NOT NULL DEFAULT '',
-    registry_id         TEXT        NOT NULL DEFAULT '',
-    definition_revision TEXT        NOT NULL DEFAULT '',
-    operation_id        TEXT        NOT NULL DEFAULT '',
-    created_at          TIMESTAMPTZ NOT NULL DEFAULT now(),
-    updated_at          TIMESTAMPTZ NOT NULL DEFAULT now(),
-    CONSTRAINT memoh_team_key_07a3be5666c2 UNIQUE (team_id, id),
-    CONSTRAINT bot_dependency_installations_identity_key
-        UNIQUE (team_id, bot_id, dependency_id),
-    CONSTRAINT bot_dependency_installations_bot_id_fkey
-        FOREIGN KEY (team_id, bot_id)
-        REFERENCES public.bots(team_id, id) ON DELETE CASCADE,
-    CONSTRAINT bot_dependency_installations_dependency_id_check
-        CHECK (dependency_id <> ''),
-    CONSTRAINT bot_dependency_installations_source_check
-        CHECK (source IN ('image', 'managed')),
-    CONSTRAINT bot_dependency_installations_status_check
-        CHECK (status IN ('installed', 'installing', 'updating', 'removing', 'missing', 'failed'))
-);
-
--- The operation token fences terminal writes from other Server instances.
-ALTER TABLE public.bot_dependency_installations
-    ADD COLUMN IF NOT EXISTS operation_id TEXT NOT NULL DEFAULT '';
-ALTER TABLE public.bot_dependency_installations
-    DROP CONSTRAINT IF EXISTS bot_dependency_installations_operation_id_check;
-ALTER TABLE public.bot_dependency_installations
-    ADD CONSTRAINT bot_dependency_installations_operation_id_check
-    CHECK (operation_id = '' OR operation_id ~ '^[a-f0-9]{32}$');
-
--- The identity unique key also serves target-scoped installation lookups.
-DROP INDEX IF EXISTS public.idx_bot_dependency_installations_bot;
-
-ALTER TABLE public.bot_dependency_installations ENABLE ROW LEVEL SECURITY;
-ALTER TABLE public.bot_dependency_installations FORCE ROW LEVEL SECURITY;
-
-DROP POLICY IF EXISTS bot_dependency_installations_team_select ON public.bot_dependency_installations;
-CREATE POLICY bot_dependency_installations_team_select ON public.bot_dependency_installations
-    FOR SELECT USING (team_id = public.memoh_current_team_id());
-DROP POLICY IF EXISTS bot_dependency_installations_team_insert ON public.bot_dependency_installations;
-CREATE POLICY bot_dependency_installations_team_insert ON public.bot_dependency_installations
-    FOR INSERT WITH CHECK (team_id = public.memoh_current_team_id());
-DROP POLICY IF EXISTS bot_dependency_installations_team_update ON public.bot_dependency_installations;
-CREATE POLICY bot_dependency_installations_team_update ON public.bot_dependency_installations
-    FOR UPDATE
-    USING (team_id = public.memoh_current_team_id())
-    WITH CHECK (team_id = public.memoh_current_team_id());
-DROP POLICY IF EXISTS bot_dependency_installations_team_delete ON public.bot_dependency_installations;
-CREATE POLICY bot_dependency_installations_team_delete ON public.bot_dependency_installations
-    FOR DELETE USING (team_id = public.memoh_current_team_id());
 
 -- Immutable dependency definitions and the independently refreshed catalog.
 -- Entries are shared only within a team and one configured Supermarket origin.
@@ -3350,4 +3278,73 @@ CREATE POLICY managed_computer_resource_limits_team_update ON public.managed_com
     USING (team_id = public.memoh_current_team_id())
     WITH CHECK (team_id = public.memoh_current_team_id());
 CREATE POLICY managed_computer_resource_limits_team_delete ON public.managed_computer_resource_limits
+    FOR DELETE USING (team_id = public.memoh_current_team_id());
+
+-- Dependency installations on a managed computer: what the user asked the
+-- workspace dependency manager to install there. Rows express intent;
+-- discovery corrects status/source and never deletes a record. The record
+-- belongs to the computer, not to the bot that asked (a bot reaches it
+-- through its managed binding), so it follows managed_computers at the end of
+-- the file and workspace_id is the last column: the 0170 upgrade appends it
+-- to the renamed legacy table, and both paths must end with the same column
+-- order. The helper key is md5('managed_computer_dependencies:managed_computer_dependencies_pkey').
+CREATE TABLE IF NOT EXISTS public.managed_computer_dependencies (
+    id                  UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+    team_id             UUID        NOT NULL DEFAULT public.memoh_current_team_id()
+                                    REFERENCES public.teams(id) ON DELETE RESTRICT,
+    dependency_id       TEXT        NOT NULL,
+    source              TEXT        NOT NULL,
+    status              TEXT        NOT NULL,
+    installed_version   TEXT        NOT NULL DEFAULT '',
+    latest_version      TEXT        NOT NULL DEFAULT '',
+    last_checked_at     TIMESTAMPTZ,
+    last_error          TEXT        NOT NULL DEFAULT '',
+    last_error_code     TEXT        NOT NULL DEFAULT '',
+    manifest_digest     TEXT        NOT NULL DEFAULT '',
+    source_url          TEXT        NOT NULL DEFAULT '',
+    registry_id         TEXT        NOT NULL DEFAULT '',
+    definition_revision TEXT        NOT NULL DEFAULT '',
+    operation_id        TEXT        NOT NULL DEFAULT '',
+    created_at          TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at          TIMESTAMPTZ NOT NULL DEFAULT now(),
+    workspace_id        UUID        NOT NULL,
+    CONSTRAINT memoh_team_key_5ab3fe40cf41 UNIQUE (team_id, id),
+    CONSTRAINT managed_computer_dependencies_identity_key
+        UNIQUE (team_id, workspace_id, dependency_id),
+    CONSTRAINT managed_computer_dependencies_dependency_id_check
+        CHECK (dependency_id <> ''),
+    CONSTRAINT managed_computer_dependencies_source_check
+        CHECK (source IN ('image', 'managed')),
+    CONSTRAINT managed_computer_dependencies_status_check
+        CHECK (status IN ('installed', 'installing', 'updating', 'removing', 'missing', 'failed')),
+    -- The operation token fences terminal writes from other Server instances.
+    CONSTRAINT managed_computer_dependencies_operation_id_check
+        CHECK (operation_id = '' OR operation_id ~ '^[a-f0-9]{32}$')
+);
+
+ALTER TABLE public.managed_computer_dependencies
+    DROP CONSTRAINT IF EXISTS managed_computer_dependencies_workspace_id_fkey;
+ALTER TABLE public.managed_computer_dependencies
+    ADD CONSTRAINT managed_computer_dependencies_workspace_id_fkey
+    FOREIGN KEY (team_id, workspace_id)
+    REFERENCES public.managed_computers(team_id, workspace_id) ON DELETE CASCADE
+    NOT VALID;
+
+ALTER TABLE public.managed_computer_dependencies ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.managed_computer_dependencies FORCE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS managed_computer_dependencies_team_select ON public.managed_computer_dependencies;
+DROP POLICY IF EXISTS managed_computer_dependencies_team_insert ON public.managed_computer_dependencies;
+DROP POLICY IF EXISTS managed_computer_dependencies_team_update ON public.managed_computer_dependencies;
+DROP POLICY IF EXISTS managed_computer_dependencies_team_delete ON public.managed_computer_dependencies;
+
+CREATE POLICY managed_computer_dependencies_team_select ON public.managed_computer_dependencies
+    FOR SELECT USING (team_id = public.memoh_current_team_id());
+CREATE POLICY managed_computer_dependencies_team_insert ON public.managed_computer_dependencies
+    FOR INSERT WITH CHECK (team_id = public.memoh_current_team_id());
+CREATE POLICY managed_computer_dependencies_team_update ON public.managed_computer_dependencies
+    FOR UPDATE
+    USING (team_id = public.memoh_current_team_id())
+    WITH CHECK (team_id = public.memoh_current_team_id());
+CREATE POLICY managed_computer_dependencies_team_delete ON public.managed_computer_dependencies
     FOR DELETE USING (team_id = public.memoh_current_team_id());

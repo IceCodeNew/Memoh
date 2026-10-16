@@ -58,9 +58,10 @@ var secretEnvMarkers = []string{"TOKEN", "SECRET", "PASSWORD", "PASSWD", "CREDEN
 
 // ScriptPreviewDetails is ScriptPreview with the execution details the UI
 // shows next to the script text. The environment mirrors buildEnv for the
-// given (bot, target): the dependency home follows the target's data root
-// and the platform entries come from the last probe when there is one.
-// Nothing is executed and the workspace is never started.
+// bot's managed computer: the dependency home follows its data root and the
+// platform entries come from the last probe when there is one. Nothing is
+// executed and the computer is never started; a bot without one previews
+// against the defaults.
 func (s *Service) ScriptPreviewDetails(ctx context.Context, botID, depID string, action catalog.Action) (ScriptPreview, error) {
 	if action == ActionRollback {
 		offline, _, err := s.prepareCatalog(ctx, false, true)
@@ -85,12 +86,14 @@ func (s *Service) ScriptPreviewDetails(ctx context.Context, botID, depID string,
 	}
 
 	dataRoot := config.DefaultDataMount
-	if root, err := s.workspace.DataRoot(ctx, botID); err == nil && strings.TrimSpace(root) != "" {
-		dataRoot = root
-	}
 	platform := Platform{OS: previewProbedAtRunTime, Arch: previewProbedAtRunTime, Libc: previewProbedAtRunTime}
-	if snap, ok := s.cache.Get(botID); ok {
-		platform = snap.Platform
+	if workspaceID, err := s.computerOf(ctx, botID); err == nil {
+		if root, err := s.workspace.DataRoot(ctx, workspaceID); err == nil && strings.TrimSpace(root) != "" {
+			dataRoot = root
+		}
+		if snap, ok := s.cache.Get(workspaceID); ok {
+			platform = snap.Platform
+		}
 	}
 	tmpDir := strings.TrimSpace(platform.TmpDir)
 	if tmpDir == "" {

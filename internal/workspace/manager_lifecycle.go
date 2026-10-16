@@ -307,6 +307,26 @@ func (m *Manager) EnsureNativeRunning(ctx context.Context, botID string) error {
 	return m.ensureInstanceRunning(ctx, botID, containerID)
 }
 
+// EnsureManagedRunning is EnsureNativeRunning keyed by the managed computer:
+// the container of the computer is started when it is not running and its
+// bridge is awaited. The bot bound to the computer only selects the network
+// overlay; a computer nothing is bound to is ErrWorkspaceUnbound, a computer
+// without a container ErrContainerNotFound.
+func (m *Manager) EnsureManagedRunning(ctx context.Context, workspaceID string) error {
+	botID, err := m.workspaceBot(ctx, workspaceID)
+	if err != nil {
+		return err
+	}
+	containerID, err := m.workspaceContainerID(ctx, workspaceID)
+	if err != nil {
+		return err
+	}
+	if err := m.ensureInstanceRunning(ctx, botID, containerID); err != nil {
+		return err
+	}
+	return m.waitForInstanceReady(ctx, workspaceID, containerID)
+}
+
 // ensureInstanceRunning starts the task of an existing container when it is
 // not running and attaches its network. botID selects the network overlay.
 func (m *Manager) ensureInstanceRunning(ctx context.Context, botID, containerID string) error {

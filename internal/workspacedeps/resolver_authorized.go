@@ -36,7 +36,13 @@ func (s *Service) RunAuthorizedOperation(ctx context.Context, botID, depID, sess
 	if revision, _ := ctx.Value(revisionContextKey{}).(string); strings.TrimSpace(revision) == "" {
 		return OperationResult{}, errors.New("dependency operation requires a confirmed definition revision")
 	}
-	key := InstallationKey{BotID: botID, DependencyID: strings.TrimSpace(depID)}
+	// The reservation is keyed by the computer, like the operation run
+	// will be; the background task stays attributed to the bot.
+	workspaceID, err := s.computerOf(ctx, botID)
+	if err != nil {
+		return OperationResult{}, err
+	}
+	key := InstallationKey{WorkspaceID: workspaceID, DependencyID: strings.TrimSpace(depID)}
 	reserved, release, err := s.reserveOperation(ctx, key)
 	if err != nil {
 		return OperationResult{}, err

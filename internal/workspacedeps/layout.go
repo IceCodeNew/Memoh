@@ -1,7 +1,9 @@
-// Package workspacedeps manages catalog dependencies inside each bot's isolated
-// workspace. Catalog scripts, discovery and cached state are scoped to the bot.
-// Path helpers take the data root explicitly so tests can use temporary roots;
-// production always uses the container's /data mount.
+// Package workspacedeps manages catalog dependencies on managed computers.
+// Records, catalog scripts, discovery and cached state are keyed by the
+// computer's workspace id; the bot-keyed API resolves a bot to its managed
+// computer at the service boundary. Path helpers take the data root
+// explicitly so tests can use temporary roots; production always uses the
+// container's /data mount.
 package workspacedeps
 
 import "path"

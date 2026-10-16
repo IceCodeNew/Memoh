@@ -49,12 +49,16 @@ func openDependencyPostgres(t *testing.T, ctx context.Context) *pgxpool.Pool {
 	return pool
 }
 
-// createDependencyBot seeds a user, its team membership, and a bot the
-// installations can reference. Deleting the bot cascades to the records.
-func createDependencyBot(t *testing.T, ctx context.Context, pool *pgxpool.Pool) string {
+// createDependencyComputer seeds a user, its team membership, a bot, the
+// bot's managed workspace (with an id of its own, as for a bot created after
+// 0167), the binding and the managed_computers row the records reference.
+// It returns the workspace id. Deleting the workspace cascades to the
+// records; the bot and user go with it in cleanup.
+func createDependencyComputer(t *testing.T, ctx context.Context, pool *pgxpool.Pool) string {
 	t.Helper()
 	uid := uuid.New()
 	bid := uuid.New()
+	wid := uuid.New()
 	name := "workspace-deps-it-" + uuid.NewString()
 	if _, err := pool.Exec(ctx, `
 		WITH created_user AS (
@@ -65,20 +69,34 @@ func createDependencyBot(t *testing.T, ctx context.Context, pool *pgxpool.Pool) 
 			INSERT INTO team_members (team_id, user_id, role)
 			SELECT $3, id, 'admin' FROM created_user
 			RETURNING user_id
+		), created_bot AS (
+			INSERT INTO bots (id, team_id, owner_user_id, name, status, metadata)
+			SELECT $4, $3, user_id, $2, 'ready', '{}'::jsonb
+			FROM created_member
+			RETURNING id, owner_user_id
+		), created_workspace AS (
+			INSERT INTO workspaces (id, team_id, owner_user_id, kind, name)
+			SELECT $5, $3, owner_user_id, 'managed', $2
+			FROM created_bot
+			RETURNING id
+		), created_binding AS (
+			INSERT INTO bot_workspace_bindings (team_id, bot_id, workspace_id, is_primary)
+			SELECT $3, $4, id, true FROM created_workspace
+			RETURNING workspace_id
 		)
-		INSERT INTO bots (id, team_id, owner_user_id, name, status, metadata)
-		SELECT $4, $3, user_id, $2, 'ready', '{}'::jsonb
-		FROM created_member`,
-		uid, name, team.DefaultTeamID, bid,
+		INSERT INTO managed_computers (workspace_id, team_id, desired_state)
+		SELECT workspace_id, $3, 'present' FROM created_binding`,
+		uid, name, team.DefaultTeamID, bid, wid,
 	); err != nil {
 		t.Fatalf("create dependency fixture: %v", err)
 	}
 	// The test context is already cancelled when cleanup runs.
 	t.Cleanup(func() { //nolint:contextcheck // cleanup outlives the test context
 		_, _ = pool.Exec(context.Background(), "DELETE FROM bots WHERE id = $1", bid)
+		_, _ = pool.Exec(context.Background(), "DELETE FROM workspaces WHERE id = $1", wid)
 		_, _ = pool.Exec(context.Background(), "DELETE FROM users WHERE id = $1", uid)
 	})
-	return bid.String()
+	return wid.String()
 }
 
 func newIntegrationStore(pool *pgxpool.Pool) Store {
@@ -89,9 +107,9 @@ func TestPostgresStoreLifecycle(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
 	pool := openDependencyPostgres(t, ctx)
-	botID := createDependencyBot(t, ctx, pool)
+	workspaceID := createDependencyComputer(t, ctx, pool)
 	store := newIntegrationStore(pool)
-	key := InstallationKey{BotID: botID, DependencyID: "codex"}
+	key := InstallationKey{WorkspaceID: workspaceID, DependencyID: "codex"}
 
 	// Upsert creates the intent row.
 	created, err := store.Upsert(ctx, UpsertInstallation{
@@ -104,7 +122,7 @@ func TestPostgresStoreLifecycle(t *testing.T) {
 	if err != nil {
 		t.Fatalf("upsert: %v", err)
 	}
-	if created.ID == "" || created.BotID != botID || created.Status != StatusInstalling || created.Source != InstallationSourceManaged {
+	if created.ID == "" || created.WorkspaceID != workspaceID || created.Status != StatusInstalling || created.Source != InstallationSourceManaged {
 		t.Fatalf("created = %+v", created)
 	}
 	if created.LastCheckedAt != nil || created.CreatedAt.IsZero() || created.UpdatedAt.IsZero() {
@@ -173,17 +191,17 @@ func TestPostgresStoreLifecycle(t *testing.T) {
 		t.Fatalf("pointer to empty string must clear only the failure code: %+v", cleared)
 	}
 
-	// Listing by target, bot, and status all see the row.
-	second := InstallationKey{BotID: botID, DependencyID: "claude-code"}
+	// Listing by computer and by status both see the row.
+	second := InstallationKey{WorkspaceID: workspaceID, DependencyID: "claude-code"}
 	if _, err := store.Upsert(ctx, UpsertInstallation{InstallationKey: second, Source: InstallationSourceManaged, Status: StatusMissing}); err != nil {
 		t.Fatalf("upsert second: %v", err)
 	}
-	forBot, err := store.ListForBot(ctx, botID)
+	forComputer, err := store.ListForWorkspace(ctx, workspaceID)
 	if err != nil {
-		t.Fatalf("list for bot: %v", err)
+		t.Fatalf("list for workspace: %v", err)
 	}
-	if len(forBot) != 2 {
-		t.Fatalf("list for bot = %+v", forBot)
+	if len(forComputer) != 2 {
+		t.Fatalf("list for workspace = %+v", forComputer)
 	}
 	missing, err := store.ListByStatus(ctx, StatusMissing)
 	if err != nil {
@@ -215,12 +233,12 @@ func TestPostgresStoreStaleOperations(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
 	pool := openDependencyPostgres(t, ctx)
-	botID := createDependencyBot(t, ctx, pool)
+	workspaceID := createDependencyComputer(t, ctx, pool)
 	store := newIntegrationStore(pool)
 
-	stuck := InstallationKey{BotID: botID, DependencyID: "codex"}
-	fresh := InstallationKey{BotID: botID, DependencyID: "claude-code"}
-	done := InstallationKey{BotID: botID, DependencyID: "hermes"}
+	stuck := InstallationKey{WorkspaceID: workspaceID, DependencyID: "codex"}
+	fresh := InstallationKey{WorkspaceID: workspaceID, DependencyID: "claude-code"}
+	done := InstallationKey{WorkspaceID: workspaceID, DependencyID: "hermes"}
 	for _, in := range []UpsertInstallation{
 		{InstallationKey: stuck, Source: InstallationSourceManaged, Status: StatusUpdating},
 		{InstallationKey: fresh, Source: InstallationSourceManaged, Status: StatusInstalling},
@@ -232,9 +250,9 @@ func TestPostgresStoreStaleOperations(t *testing.T) {
 	}
 	// Age the stuck record and the finished one; only in-progress rows count.
 	if _, err := pool.Exec(ctx, `
-		UPDATE bot_dependency_installations
+		UPDATE managed_computer_dependencies
 		SET updated_at = now() - interval '1 hour'
-		WHERE bot_id = $1 AND dependency_id IN ('codex', 'hermes')`, botID); err != nil {
+		WHERE workspace_id = $1 AND dependency_id IN ('codex', 'hermes')`, workspaceID); err != nil {
 		t.Fatalf("age records: %v", err)
 	}
 
@@ -278,9 +296,9 @@ func TestPostgresStoreRejectsUnknownStatusAndSource(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
 	pool := openDependencyPostgres(t, ctx)
-	botID := createDependencyBot(t, ctx, pool)
+	workspaceID := createDependencyComputer(t, ctx, pool)
 	store := newIntegrationStore(pool)
-	key := InstallationKey{BotID: botID, DependencyID: "codex"}
+	key := InstallationKey{WorkspaceID: workspaceID, DependencyID: "codex"}
 
 	if _, err := store.Upsert(ctx, UpsertInstallation{InstallationKey: key, Source: InstallationSourceManaged, Status: Status("bogus")}); err == nil {
 		t.Fatal("status CHECK must reject unknown values")
@@ -289,24 +307,24 @@ func TestPostgresStoreRejectsUnknownStatusAndSource(t *testing.T) {
 		t.Fatal("source CHECK must reject unknown values")
 	}
 	if _, err := store.Upsert(ctx, UpsertInstallation{
-		InstallationKey: InstallationKey{BotID: botID, DependencyID: ""},
+		InstallationKey: InstallationKey{WorkspaceID: workspaceID, DependencyID: ""},
 		Source:          InstallationSourceManaged,
 		Status:          StatusInstalled,
 	}); err == nil {
 		t.Fatal("dependency_id CHECK must reject the empty string")
 	}
 	if _, err := store.Upsert(ctx, UpsertInstallation{
-		InstallationKey: InstallationKey{BotID: uuid.NewString(), DependencyID: "codex"},
+		InstallationKey: InstallationKey{WorkspaceID: uuid.NewString(), DependencyID: "codex"},
 		Source:          InstallationSourceManaged,
 		Status:          StatusInstalled,
 	}); err == nil {
-		t.Fatal("bots foreign key must reject an unknown bot")
+		t.Fatal("managed_computers foreign key must reject a workspace without a computer record")
 	}
 }
 
 func containsKey(items []Installation, key InstallationKey) bool {
 	for _, item := range items {
-		if item.BotID == key.BotID && item.DependencyID == key.DependencyID {
+		if item.WorkspaceID == key.WorkspaceID && item.DependencyID == key.DependencyID {
 			return true
 		}
 	}

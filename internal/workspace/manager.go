@@ -143,7 +143,8 @@ type Manager struct {
 	legacyMu          sync.RWMutex
 	legacyIPs         map[string]string // containerID → IP for pre-bridge containers
 	bridgeResetMu     sync.Mutex
-	bridgeResetFns    []func(botID string) // see OnBridgeReset
+	bridgeResetFns    []func(botID string)       // see OnBridgeReset
+	managedResetFns   []func(workspaceID string) // see OnManagedBridgeReset
 }
 
 func NewManager(log *slog.Logger, service runtimeService, networkController netctl.Controller, cfg config.WorkspaceConfig, namespace string, conn *pgxpool.Pool, queryOverride ...dbstore.Queries) *Manager {

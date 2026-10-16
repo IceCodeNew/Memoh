@@ -21,17 +21,36 @@ func (m *Manager) OnBridgeReset(fn func(botID string)) {
 	m.bridgeResetMu.Unlock()
 }
 
+// OnManagedBridgeReset is OnBridgeReset for state keyed by the computer
+// rather than by its bots: fn receives the workspace id of the managed
+// computer whose bridge was reset, once per reset, whether or not a bot is
+// bound to it. The same rules apply: cheap, synchronous, never back into the
+// bridge path. A nil fn is ignored.
+func (m *Manager) OnManagedBridgeReset(fn func(workspaceID string)) {
+	if fn == nil {
+		return
+	}
+	m.bridgeResetMu.Lock()
+	m.managedResetFns = append(m.managedResetFns, fn)
+	m.bridgeResetMu.Unlock()
+}
+
 // resetBridge evicts the pooled bridge client of the container and then
-// notifies OnBridgeReset subscribers, in registration order, for every bot
-// bound to the computer. It is the single invalidation point for anything
-// cached against a workspace container process; every code path that used to
-// call grpcPool.Remove directly goes through here.
+// notifies the subscribers, in registration order: OnManagedBridgeReset once
+// for the computer, then OnBridgeReset for every bot bound to it. It is the
+// single invalidation point for anything cached against a workspace container
+// process; every code path that used to call grpcPool.Remove directly goes
+// through here.
 func (m *Manager) resetBridge(ctx context.Context, workspaceID, containerID string) {
 	m.grpcPool.Remove(containerID)
 
 	m.bridgeResetMu.Lock()
+	managedFns := slices.Clone(m.managedResetFns)
 	fns := slices.Clone(m.bridgeResetFns)
 	m.bridgeResetMu.Unlock()
+	for _, fn := range managedFns {
+		fn(workspaceID)
+	}
 	if len(fns) == 0 {
 		return
 	}

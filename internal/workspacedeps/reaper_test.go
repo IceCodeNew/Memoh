@@ -13,7 +13,7 @@ import (
 
 func TestStartReaperRunsImmediatelyAndOnInterval(t *testing.T) {
 	f := newServiceFixture(t)
-	f.store.seed(Installation{BotID: "b1", DependencyID: "agent-x", Status: StatusInstalling, OperationID: strings.Repeat("a", 32), UpdatedAt: f.now.Add(-2 * time.Minute)})
+	f.store.seed(Installation{WorkspaceID: "b1", DependencyID: "agent-x", Status: StatusInstalling, OperationID: strings.Repeat("a", 32), UpdatedAt: f.now.Add(-2 * time.Minute)})
 	ticks := make(chan time.Time)
 	type passResult struct {
 		count int
@@ -28,22 +28,22 @@ func TestStartReaperRunsImmediatelyAndOnInterval(t *testing.T) {
 	stop := startReaper(f.ctx(), reap, ticks, func() {}, slog.New(slog.DiscardHandler))
 	defer stop()
 
-	assertPass := func(botID string) {
+	assertPass := func(workspaceID string) {
 		t.Helper()
 		pass := <-completed
 		if pass.err != nil || pass.count != 1 {
 			t.Fatalf("reaper pass = %d, %v; want one fenced operation", pass.count, pass.err)
 		}
-		records, err := f.store.ListForBot(f.ctx(), botID)
+		records, err := f.store.ListForWorkspace(f.ctx(), workspaceID)
 		if err != nil || len(records) != 1 || records[0].Status != StatusFailed || records[0].OperationID != "" {
 			t.Fatalf("operation was not fenced and released: %+v %v", records, err)
 		}
 	}
 	assertPass("b1")
 
-	// This reachable workspace is added after the initial pass. Only an
+	// This reachable computer is added after the initial pass. Only an
 	// explicit tick can schedule the next recovery round.
-	f.store.seed(Installation{BotID: "b2", DependencyID: "agent-x", Status: StatusUpdating, OperationID: strings.Repeat("b", 32), UpdatedAt: f.now.Add(-2 * time.Minute)})
+	f.store.seed(Installation{WorkspaceID: "b2", DependencyID: "agent-x", Status: StatusUpdating, OperationID: strings.Repeat("b", 32), UpdatedAt: f.now.Add(-2 * time.Minute)})
 	ticks <- f.now
 	assertPass("b2")
 }

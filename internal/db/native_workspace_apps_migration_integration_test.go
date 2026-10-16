@@ -9,12 +9,15 @@ import (
 	"testing"
 )
 
+// The test materializes the 0152 boundary itself: the fixture bots have no
+// managed computer, so the later 0170 (which keys dependency records by the
+// computer) would drop their dependency rows and rename the table. The chain
+// is applied to its tip only at the end, to show it still runs on top.
 func TestNativeWorkspaceAppsMigration(t *testing.T) {
 	ctx := context.Background()
 	pool := teamScopedPool(t)
 	dsn := teamMigrationDSN(t)
-	steps := countMigrationsFrom(t, "0152_native_workspace_apps.up.sql")
-	stepDown(t, dsn, steps)
+	migrateTo(t, dsn, 151)
 	seedAppBot(t, pool)
 	const secondTeam = "00000000-0000-4000-8000-000000000002"
 	const secondBot = "20000000-0000-4000-8000-000000000002"
@@ -97,7 +100,7 @@ func TestNativeWorkspaceAppsMigration(t *testing.T) {
 			t.Fatal("target columns remain")
 		}
 	}
-	stepUp(t, dsn, steps)
+	migrateTo(t, dsn, 152)
 	check()
 	// DDL guards also support rerunning the cleanup against the canonical schema.
 	migrationSQL, err := fs.ReadFile(postgresMigrationsFS(t), "0152_native_workspace_apps.up.sql")
@@ -114,7 +117,7 @@ func TestNativeWorkspaceAppsMigration(t *testing.T) {
 	if _, err := pool.Exec(ctx, `INSERT INTO bot_dependency_installations(bot_id,dependency_id,source,status) VALUES ($1,'python','managed','installed')`, appBotOneID); sqlState(err) != "23505" {
 		t.Fatalf("dependency uniqueness: %v", err)
 	}
-	stepDown(t, dsn, steps)
+	migrateTo(t, dsn, 151)
 	for _, table := range []string{"bot_app_installations", "bot_dependency_installations"} {
 		var count int
 		if err := pool.QueryRow(ctx, "SELECT count(*) FROM public."+table+" WHERE workspace_target_id <> 'native'").Scan(&count); err != nil {
@@ -124,6 +127,7 @@ func TestNativeWorkspaceAppsMigration(t *testing.T) {
 			t.Fatalf("rollback invented remote rows in %s", table)
 		}
 	}
-	stepUp(t, dsn, steps)
+	migrateTo(t, dsn, 152)
 	check()
+	migrateUpAll(t, dsn)
 }

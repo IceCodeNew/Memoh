@@ -197,7 +197,7 @@ func TestInstallStopsWhenPrerequisiteFails(t *testing.T) {
 func TestRemoveRefusesDependencyOthersRequire(t *testing.T) {
 	f := newRequiresFixture(t)
 	for _, id := range []string{"base", "mid", "top"} {
-		f.store.seed(Installation{BotID: testBot, DependencyID: id, Source: InstallationSourceManaged, Status: StatusInstalled, InstalledVersion: "1.0.0", ManifestDigest: f.cat.MustGet(id).ManifestDigest})
+		f.store.seed(Installation{WorkspaceID: testWorkspace, DependencyID: id, Source: InstallationSourceManaged, Status: StatusInstalled, InstalledVersion: "1.0.0", ManifestDigest: f.cat.MustGet(id).ManifestDigest})
 		f.present(id, SourceManaged, "1.0.0", nil)
 	}
 
@@ -227,7 +227,7 @@ func TestRemoveRefusesDependencyOthersRequire(t *testing.T) {
 
 func TestDependentsIgnoreCopiesNoScriptInstalled(t *testing.T) {
 	f := newRequiresFixture(t)
-	f.store.seed(Installation{BotID: testBot, DependencyID: "mid", Source: InstallationSourceImage, Status: StatusInstalled})
+	f.store.seed(Installation{WorkspaceID: testWorkspace, DependencyID: "mid", Source: InstallationSourceImage, Status: StatusInstalled})
 	f.seed("top", StatusFailed, "")
 	// A PATH copy discovery adopted is recorded as managed without a digest.
 	f.seed("needs-img", StatusInstalled, "1.0.0")
@@ -313,7 +313,7 @@ func TestDependentsKeepFailedAndRemovingCopies(t *testing.T) {
 	f := newRequiresFixture(t)
 	digest := f.cat.MustGet("mid").ManifestDigest
 	for _, status := range []Status{StatusFailed, StatusRemoving} {
-		f.store.seed(Installation{BotID: testBot, DependencyID: "mid", Source: InstallationSourceManaged, Status: status, ManifestDigest: digest})
+		f.store.seed(Installation{WorkspaceID: testWorkspace, DependencyID: "mid", Source: InstallationSourceManaged, Status: status, ManifestDigest: digest})
 		dependents, err := f.svc.Dependents(f.ctx(), testBot, "base")
 		if err != nil || !slices.Equal(dependents, []string{"mid"}) {
 			t.Errorf("%s copy: Dependents(base) = %v, %v; want [mid]", status, dependents, err)
@@ -328,7 +328,7 @@ func TestClaimsSerializeInstallAgainstPrerequisiteRemoval(t *testing.T) {
 	t.Run("removal claimed first", func(t *testing.T) {
 		f := newRequiresFixture(t)
 		f.present("base", SourceManaged, "1.0.0", nil)
-		f.store.seed(Installation{BotID: testBot, DependencyID: "base", Source: InstallationSourceManaged, Status: StatusRemoving, ManifestDigest: f.cat.MustGet("base").ManifestDigest, OperationID: strings.Repeat("a", 32)})
+		f.store.seed(Installation{WorkspaceID: testWorkspace, DependencyID: "base", Source: InstallationSourceManaged, Status: StatusRemoving, ManifestDigest: f.cat.MustGet("base").ManifestDigest, OperationID: strings.Repeat("a", 32)})
 
 		if _, err := f.svc.Install(f.ctx(), testBot, "mid", "", nil); !errors.Is(err, ErrBusy) {
 			t.Fatalf("Install error = %v, want ErrBusy", err)
@@ -342,8 +342,8 @@ func TestClaimsSerializeInstallAgainstPrerequisiteRemoval(t *testing.T) {
 	})
 	t.Run("dependent claimed first", func(t *testing.T) {
 		f := newRequiresFixture(t)
-		f.store.seed(Installation{BotID: testBot, DependencyID: "base", Source: InstallationSourceManaged, Status: StatusInstalled, ManifestDigest: f.cat.MustGet("base").ManifestDigest})
-		f.store.seed(Installation{BotID: testBot, DependencyID: "mid", Source: InstallationSourceManaged, Status: StatusInstalling, OperationID: strings.Repeat("b", 32)})
+		f.store.seed(Installation{WorkspaceID: testWorkspace, DependencyID: "base", Source: InstallationSourceManaged, Status: StatusInstalled, ManifestDigest: f.cat.MustGet("base").ManifestDigest})
+		f.store.seed(Installation{WorkspaceID: testWorkspace, DependencyID: "mid", Source: InstallationSourceManaged, Status: StatusInstalling, OperationID: strings.Repeat("b", 32)})
 		f.present("base", SourceManaged, "1.0.0", nil)
 
 		if _, err := f.svc.Remove(f.ctx(), testBot, "base", nil); !errors.Is(err, ErrRequired) {

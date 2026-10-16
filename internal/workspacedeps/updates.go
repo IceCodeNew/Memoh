@@ -15,8 +15,8 @@ import (
 const DefaultUpdateCheckInterval = 24 * time.Hour
 
 // UpdateWorker periodically runs check_update for installed dependencies
-// that have a check_update script and no pin. Only running
-// bot workspaces are checked; stopped workspaces are left alone.
+// that have a check_update script and no pin. Only running managed
+// computers are checked; stopped ones are left alone.
 type UpdateWorker struct {
 	service  *Service
 	interval time.Duration
@@ -133,7 +133,7 @@ type groupKey struct {
 }
 
 // RunOnce performs one round: installed, unpinned dependencies with a
-// check_update script on running native workspaces are grouped by
+// check_update script on running managed computers are grouped by
 // (dependency, platform), each group runs check_update once, and the result
 // fans out to every member. It returns how many upstream checks ran.
 func (w *UpdateWorker) RunOnce(ctx context.Context) (int, error) {
@@ -154,7 +154,7 @@ func (w *UpdateWorker) RunOnce(ctx context.Context) (int, error) {
 		// The workspace selected for this grouped check is a real script
 		// execution site, so it must participate in the same lock as installs.
 		source := group.members[0]
-		sourceKey := InstallationKey{BotID: source.BotID, DependencyID: source.DependencyID}
+		sourceKey := InstallationKey{WorkspaceID: source.WorkspaceID, DependencyID: source.DependencyID}
 		if !s.locks.tryLock(sourceKey) {
 			continue
 		}
@@ -162,7 +162,7 @@ func (w *UpdateWorker) RunOnce(ctx context.Context) (int, error) {
 		check, checkErr := s.checkUpdate(ctx, group.client, group.dataRoot, group.platform, dep, source.InstalledVersion)
 		checks++
 		for _, rec := range group.members {
-			recKey := InstallationKey{BotID: rec.BotID, DependencyID: rec.DependencyID}
+			recKey := InstallationKey{WorkspaceID: rec.WorkspaceID, DependencyID: rec.DependencyID}
 			if recKey != sourceKey && !s.locks.tryLock(recKey) {
 				continue
 			}
@@ -184,16 +184,16 @@ func (w *UpdateWorker) RunOnce(ctx context.Context) (int, error) {
 }
 
 // groupRecords selects the records a round must check and buckets them.
-// Workspace state and platform are resolved once per bot.
+// Workspace state and platform are resolved once per computer.
 func (w *UpdateWorker) groupRecords(ctx context.Context, records []Installation) (map[groupKey]*checkGroup, []groupKey, []error) {
 	s := w.service
-	type botTarget struct {
+	type computerTarget struct {
 		client   *bridge.Client
 		dataRoot string
 		platform Platform
 		running  bool
 	}
-	targets := make(map[string]botTarget)
+	targets := make(map[string]computerTarget)
 	groups := make(map[groupKey]*checkGroup)
 	var order []groupKey
 	var errs []error
@@ -203,18 +203,18 @@ func (w *UpdateWorker) groupRecords(ctx context.Context, records []Installation)
 		if !ok || !upstreamCheckable(dep) {
 			continue
 		}
-		target, seen := targets[rec.BotID]
+		target, seen := targets[rec.WorkspaceID]
 		if !seen {
-			resolved, err := w.resolveNative(ctx, rec.BotID)
+			resolved, err := w.resolveComputer(ctx, rec.WorkspaceID)
 			if err != nil {
 				errs = append(errs, err)
-				targets[rec.BotID] = botTarget{}
+				targets[rec.WorkspaceID] = computerTarget{}
 				continue
 			}
 			if resolved != nil {
-				target = botTarget{client: resolved.client, dataRoot: resolved.dataRoot, platform: resolved.platform, running: true}
+				target = computerTarget{client: resolved.client, dataRoot: resolved.dataRoot, platform: resolved.platform, running: true}
 			}
-			targets[rec.BotID] = target
+			targets[rec.WorkspaceID] = target
 		}
 		if !target.running {
 			continue
@@ -231,30 +231,30 @@ func (w *UpdateWorker) groupRecords(ctx context.Context, records []Installation)
 	return groups, order, errs
 }
 
-type resolvedNative struct {
+type resolvedComputer struct {
 	client   *bridge.Client
 	dataRoot string
 	platform Platform
 }
 
-// resolveNative returns the bot's native workspace when it is running, nil
-// when it is stopped or missing.
-func (w *UpdateWorker) resolveNative(ctx context.Context, botID string) (*resolvedNative, error) {
+// resolveComputer returns the managed computer when it is running, nil when
+// it is stopped or missing.
+func (w *UpdateWorker) resolveComputer(ctx context.Context, workspaceID string) (*resolvedComputer, error) {
 	s := w.service
-	state, err := s.workspace.State(ctx, botID)
+	state, err := s.workspace.State(ctx, workspaceID)
 	if err != nil {
-		return nil, fmt.Errorf("workspacedeps: workspace state of bot %s: %w", botID, err)
+		return nil, fmt.Errorf("workspacedeps: workspace state of %s: %w", workspaceID, err)
 	}
 	if state != WorkspaceRunning {
 		return nil, nil
 	}
-	client, dataRoot, err := s.target(ctx, botID)
+	client, dataRoot, err := s.target(ctx, workspaceID)
 	if err != nil {
-		return nil, fmt.Errorf("workspacedeps: bot %s: %w", botID, err)
+		return nil, fmt.Errorf("workspacedeps: workspace %s: %w", workspaceID, err)
 	}
-	platform, err := s.platformFor(ctx, botID, client)
+	platform, err := s.platformFor(ctx, workspaceID, client)
 	if err != nil {
-		return nil, fmt.Errorf("workspacedeps: probe platform of bot %s: %w", botID, err)
+		return nil, fmt.Errorf("workspacedeps: probe platform of workspace %s: %w", workspaceID, err)
 	}
-	return &resolvedNative{client: client, dataRoot: dataRoot, platform: platform}, nil
+	return &resolvedComputer{client: client, dataRoot: dataRoot, platform: platform}, nil
 }

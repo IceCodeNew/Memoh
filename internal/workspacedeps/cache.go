@@ -5,7 +5,8 @@ import (
 	"time"
 )
 
-// Snapshot caches the probed platform and observed dependencies for a bot.
+// Snapshot caches the probed platform and observed dependencies of one
+// managed computer.
 type Snapshot struct {
 	CatalogDigest string
 	Platform      Platform
@@ -13,10 +14,9 @@ type Snapshot struct {
 	At            time.Time
 }
 
-// Cache holds discovery snapshots per bot. It is safe
-// for concurrent use. Wiring Invalidate to the workspace manager's bridge
-// reset hook is the service layer's job; this package does not import
-// internal/workspace.
+// Cache holds discovery snapshots per managed computer, keyed by workspace
+// id. It is safe for concurrent use. Wiring Invalidate to the workspace
+// manager's bridge reset hook is the service layer's job.
 type Cache struct {
 	mu      sync.RWMutex
 	ttl     time.Duration
@@ -35,10 +35,10 @@ func NewCache(ttl time.Duration) *Cache {
 	}
 }
 
-// Get returns the snapshot for botID. An expired snapshot is a
-// miss and is evicted.
-func (c *Cache) Get(botID string) (Snapshot, bool) {
-	key := botID
+// Get returns the snapshot of the computer. An expired snapshot is a miss
+// and is evicted.
+func (c *Cache) Get(workspaceID string) (Snapshot, bool) {
+	key := workspaceID
 	c.mu.RLock()
 	snap, ok := c.entries[key]
 	c.mu.RUnlock()
@@ -57,32 +57,32 @@ func (c *Cache) Get(botID string) (Snapshot, bool) {
 	return snap, true
 }
 
-// Put stores snap for botID, stamping At when the caller left it
+// Put stores snap for the computer, stamping At when the caller left it
 // zero. The Observed map is copied so later mutation by the caller cannot
 // leak into the cache.
-func (c *Cache) Put(botID string, snap Snapshot) {
+func (c *Cache) Put(workspaceID string, snap Snapshot) {
 	if snap.At.IsZero() {
 		snap.At = c.now()
 	}
 	snap.Observed = cloneObserved(snap.Observed)
 	c.mu.Lock()
-	c.entries[botID] = snap
+	c.entries[workspaceID] = snap
 	c.mu.Unlock()
 }
 
-// Invalidate drops the snapshot for botID. Call it whenever the
-// bot's container is restarted or rebuilt.
-func (c *Cache) Invalidate(botID string) {
+// Invalidate drops the snapshot of the computer. Call it whenever its
+// container is restarted or rebuilt.
+func (c *Cache) Invalidate(workspaceID string) {
 	c.mu.Lock()
-	delete(c.entries, botID)
+	delete(c.entries, workspaceID)
 	c.mu.Unlock()
 }
 
-// ObserveVersion overwrites the cached version of depID for botID,
+// ObserveVersion overwrites the cached version of depID on the computer,
 // for callers that learned the real version out of band such as
 // the runtime handshake. It is a no-op when nothing is cached.
-func (c *Cache) ObserveVersion(botID, depID, version string) {
-	key := botID
+func (c *Cache) ObserveVersion(workspaceID, depID, version string) {
+	key := workspaceID
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	snap, ok := c.entries[key]
@@ -112,8 +112,8 @@ func (c *Cache) ObserveVersion(botID, depID, version string) {
 // copy actually ran (the launcher resolver) use it so a handshake-reported
 // version is never attributed to a different copy. It is a no-op when
 // nothing is cached or no candidate has that path.
-func (c *Cache) ObserveVersionAt(botID, depID, path, version string) {
-	key := botID
+func (c *Cache) ObserveVersionAt(workspaceID, depID, path, version string) {
+	key := workspaceID
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	snap, ok := c.entries[key]

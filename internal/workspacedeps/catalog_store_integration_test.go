@@ -126,9 +126,9 @@ func TestPostgresCatalogTeamPolicies(t *testing.T) {
 func TestPostgresInstallationDefinitionProvenance(t *testing.T) {
 	ctx := t.Context()
 	pool := openDependencyPostgres(t, ctx)
-	botID := createDependencyBot(t, ctx, pool)
+	workspaceID := createDependencyComputer(t, ctx, pool)
 	store := newIntegrationStore(pool)
-	key := InstallationKey{BotID: botID, DependencyID: "codex"}
+	key := InstallationKey{WorkspaceID: workspaceID, DependencyID: "codex"}
 	revision := "4111dba29084f12372fb90545b0e85f8fd5c6a87e74e9203068526bc69095ac2"
 	created, err := store.Upsert(ctx, UpsertInstallation{InstallationKey: key, Source: InstallationSourceManaged, Status: StatusInstalled, InstalledVersion: "1.0.0", SourceURL: "https://catalog.example", RegistryID: "memoh", DefinitionRevision: revision})
 	if err != nil {
@@ -160,11 +160,11 @@ func TestPostgresCatalogPrunesOnlyUnreferencedHistory(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	botID := createDependencyBot(t, ctx, pool)
+	workspaceID := createDependencyComputer(t, ctx, pool)
 	// Current intent may use another registry while rollback state still
 	// references this source. Preserve every source for an installed identity.
 	codex := first.Catalog.MustGet("codex")
-	_, err = newIntegrationStore(pool).Upsert(ctx, UpsertInstallation{InstallationKey: InstallationKey{BotID: botID, DependencyID: "codex"}, Source: InstallationSourceManaged, Status: StatusInstalled, SourceURL: p.sourceURL + "/new-registry", RegistryID: "memoh", DefinitionRevision: codex.Revision})
+	_, err = newIntegrationStore(pool).Upsert(ctx, UpsertInstallation{InstallationKey: InstallationKey{WorkspaceID: workspaceID, DependencyID: "codex"}, Source: InstallationSourceManaged, Status: StatusInstalled, SourceURL: p.sourceURL + "/new-registry", RegistryID: "memoh", DefinitionRevision: codex.Revision})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -280,7 +280,7 @@ func TestPostgresUpsertClearsPriorOperationFailure(t *testing.T) {
 	ctx := t.Context()
 	pool := openDependencyPostgres(t, ctx)
 	store := newIntegrationStore(pool)
-	key := InstallationKey{BotID: createDependencyBot(t, ctx, pool), DependencyID: "codex"}
+	key := InstallationKey{WorkspaceID: createDependencyComputer(t, ctx, pool), DependencyID: "codex"}
 	intent := UpsertInstallation{InstallationKey: key, Source: InstallationSourceManaged, Status: StatusInstalling}
 	if _, err := store.Upsert(ctx, intent); err != nil {
 		t.Fatal(err)

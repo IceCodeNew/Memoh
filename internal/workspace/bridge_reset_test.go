@@ -119,3 +119,28 @@ func TestResetBridgeCallbackMayRegisterAnother(t *testing.T) {
 		t.Fatalf("callbacks after first reset = %v", calls)
 	}
 }
+
+func TestResetBridgeNotifiesManagedSubscribersOncePerComputer(t *testing.T) {
+	m := newBridgeResetTestManager()
+	ctx := context.Background()
+
+	var calls []string
+	m.OnManagedBridgeReset(func(workspaceID string) { calls = append(calls, "computer:"+workspaceID) })
+	m.OnBridgeReset(func(botID string) { calls = append(calls, "bot:"+botID) })
+	m.OnManagedBridgeReset(nil)
+
+	const unbound = "cccccccc-cccc-4ccc-8ccc-00000000000c"
+	m.resetBridge(ctx, bridgeResetComputerA, ContainerPrefix+bridgeResetComputerA)
+	m.resetBridge(ctx, unbound, ContainerPrefix+unbound)
+
+	// The computer-keyed subscriber runs once per reset, before the bot-keyed
+	// fan-out, and also for a computer nothing is bound to.
+	want := []string{
+		"computer:" + bridgeResetComputerA,
+		"bot:" + bridgeResetBotA1, "bot:" + bridgeResetBotA2,
+		"computer:" + unbound,
+	}
+	if !slices.Equal(calls, want) {
+		t.Fatalf("callbacks = %v, want %v", calls, want)
+	}
+}

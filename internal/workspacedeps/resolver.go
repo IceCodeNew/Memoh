@@ -48,11 +48,15 @@ func (s *Service) ResolveLauncher(ctx context.Context, botID, depID string) (ext
 		dep = fallback.MustGet(depID)
 	}
 
-	snap, err := s.snapshot(ctx, botID, false)
+	workspaceID, err := s.computerOf(ctx, botID)
 	if err != nil {
 		return external.Launcher{}, err
 	}
-	key := InstallationKey{BotID: botID, DependencyID: dep.ID}
+	snap, err := s.snapshot(ctx, workspaceID, false)
+	if err != nil {
+		return external.Launcher{}, err
+	}
+	key := InstallationKey{WorkspaceID: workspaceID, DependencyID: dep.ID}
 	candidate, ok := selectLauncherCandidate(snap.Observed[dep.ID].Candidates)
 	if !ok {
 		s.forgetLaunched(key)
@@ -70,25 +74,29 @@ func (s *Service) ResolveLauncher(ctx context.Context, botID, depID string) (ext
 
 // ObserveLauncherVersion feeds the version a runtime reported during its
 // handshake back into the discovery cache. The version is written to the copy
-// ResolveLauncher last handed out for the bot's isolated workspace, falling back
-// to the default winning copy when none was recorded. Errors are logged only;
-// the correction is best effort.
-func (s *Service) ObserveLauncherVersion(_ context.Context, botID, depID, version string) {
+// ResolveLauncher last handed out on the bot's managed computer, falling back
+// to the default winning copy when none was recorded. The correction is best
+// effort: a bot that cannot be resolved to a computer is ignored.
+func (s *Service) ObserveLauncherVersion(ctx context.Context, botID, depID, version string) {
 	depID = strings.TrimSpace(depID)
 	version = strings.TrimSpace(version)
 	if depID == "" || version == "" {
 		return
 	}
+	workspaceID, err := s.computerOf(ctx, botID)
+	if err != nil {
+		return
+	}
 
-	key := InstallationKey{BotID: botID, DependencyID: depID}
+	key := InstallationKey{WorkspaceID: workspaceID, DependencyID: depID}
 	s.resolverMu.Lock()
 	path := s.launched[key]
 	s.resolverMu.Unlock()
 	if path != "" {
-		s.cache.ObserveVersionAt(botID, depID, path, version)
+		s.cache.ObserveVersionAt(workspaceID, depID, path, version)
 		return
 	}
-	s.cache.ObserveVersion(botID, depID, version)
+	s.cache.ObserveVersion(workspaceID, depID, version)
 }
 
 func (s *Service) rememberLaunched(key InstallationKey, path string) {

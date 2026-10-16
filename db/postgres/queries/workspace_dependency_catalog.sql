@@ -52,7 +52,7 @@ WHERE definition.team_id = public.memoh_current_team_id()
     WHERE reference.dependency_id = definition.dependency_id AND reference.revision = definition.revision
   )
   AND NOT EXISTS (
-    SELECT 1 FROM bot_dependency_installations AS installation
+    SELECT 1 FROM managed_computer_dependencies AS installation
     WHERE installation.team_id = definition.team_id
       AND installation.dependency_id = definition.dependency_id
   );

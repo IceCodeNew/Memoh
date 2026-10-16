@@ -122,7 +122,7 @@ func newFakeStore(now func() time.Time) *fakeStore {
 }
 
 func keyOf(rec Installation) InstallationKey {
-	return InstallationKey{BotID: rec.BotID, DependencyID: rec.DependencyID}
+	return InstallationKey{WorkspaceID: rec.WorkspaceID, DependencyID: rec.DependencyID}
 }
 
 // seed stores rec verbatim without counting it as a write.
@@ -180,16 +180,16 @@ func (f *fakeStore) list(match func(Installation) bool) []Installation {
 	}
 	sort.Slice(out, func(i, j int) bool {
 		a, b := out[i], out[j]
-		if a.BotID != b.BotID {
-			return a.BotID < b.BotID
+		if a.WorkspaceID != b.WorkspaceID {
+			return a.WorkspaceID < b.WorkspaceID
 		}
 		return a.DependencyID < b.DependencyID
 	})
 	return out
 }
 
-func (f *fakeStore) ListForBot(_ context.Context, botID string) ([]Installation, error) {
-	return f.list(func(rec Installation) bool { return rec.BotID == botID }), nil
+func (f *fakeStore) ListForWorkspace(_ context.Context, workspaceID string) ([]Installation, error) {
+	return f.list(func(rec Installation) bool { return rec.WorkspaceID == workspaceID }), nil
 }
 
 func (f *fakeStore) ListByStatus(_ context.Context, status Status) ([]Installation, error) {
@@ -212,7 +212,7 @@ func (f *fakeStore) ClaimOperation(_ context.Context, in UpsertInstallation, ope
 	}
 	if !exists {
 		f.nextID++
-		rec = Installation{ID: "rec-" + strconv.Itoa(f.nextID), BotID: in.BotID, DependencyID: in.DependencyID, Source: in.Source, SourceURL: in.SourceURL, RegistryID: in.RegistryID, DefinitionRevision: in.DefinitionRevision, CreatedAt: f.now()}
+		rec = Installation{ID: "rec-" + strconv.Itoa(f.nextID), WorkspaceID: in.WorkspaceID, DependencyID: in.DependencyID, Source: in.Source, SourceURL: in.SourceURL, RegistryID: in.RegistryID, DefinitionRevision: in.DefinitionRevision, CreatedAt: f.now()}
 	}
 	rec.Status, rec.LastError, rec.LastErrorCode, rec.OperationID = in.Status, "", "", operationID
 	rec.UpdatedAt = f.now()
@@ -235,7 +235,7 @@ func (f *fakeStore) FinishOperation(_ context.Context, key InstallationKey, oper
 		return rec, nil
 	}
 	finished := *terminal
-	finished.ID, finished.BotID, finished.DependencyID = rec.ID, rec.BotID, rec.DependencyID
+	finished.ID, finished.WorkspaceID, finished.DependencyID = rec.ID, rec.WorkspaceID, rec.DependencyID
 	finished.CreatedAt, finished.UpdatedAt, finished.OperationID = rec.CreatedAt, f.now(), ""
 	f.records[key] = finished
 	f.history[key] = append(f.history[key], finished.Status)
@@ -252,7 +252,7 @@ func (f *fakeStore) Upsert(_ context.Context, in UpsertInstallation) (Installati
 	}
 	if !ok {
 		f.nextID++
-		rec = Installation{ID: "rec-" + strconv.Itoa(f.nextID), BotID: in.BotID, DependencyID: in.DependencyID, CreatedAt: f.now()}
+		rec = Installation{ID: "rec-" + strconv.Itoa(f.nextID), WorkspaceID: in.WorkspaceID, DependencyID: in.DependencyID, CreatedAt: f.now()}
 	}
 	rec.Source = in.Source
 	rec.Status = in.Status
@@ -333,26 +333,49 @@ func (f *fakeStore) Delete(_ context.Context, key InstallationKey) error {
 	return nil
 }
 
+// managedWorkspaceOf is the fake's binding rule: every bot's managed computer
+// has an id of its own, so service state keyed by the bot id instead of the
+// computer would miss.
+func managedWorkspaceOf(botID string) string { return "ws-" + botID }
+
 // fakeWorkspace is a WorkspaceAccess over one bridge client and data root
-// with per-target states.
+// with per-computer states. Bots resolve through managedWorkspaceOf unless
+// marked unbound.
 type fakeWorkspace struct {
 	mu          sync.Mutex
 	client      *bridge.Client
 	dataRoot    string
 	states      map[string]WorkspaceState
+	unbound     map[string]bool
 	ensureErr   error
 	ensureCalls []string
 	resetFns    []func(string)
 }
 
 func newFakeWorkspace(client *bridge.Client, dataRoot string) *fakeWorkspace {
-	return &fakeWorkspace{client: client, dataRoot: dataRoot, states: make(map[string]WorkspaceState)}
+	return &fakeWorkspace{client: client, dataRoot: dataRoot, states: make(map[string]WorkspaceState), unbound: make(map[string]bool)}
 }
 
-func (f *fakeWorkspace) setState(botID string, state WorkspaceState) {
+func (f *fakeWorkspace) setState(workspaceID string, state WorkspaceState) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	f.states[botID] = state
+	f.states[workspaceID] = state
+}
+
+// setUnbound makes the bot one without a managed computer.
+func (f *fakeWorkspace) setUnbound(botID string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.unbound[botID] = true
+}
+
+func (f *fakeWorkspace) ManagedWorkspaceID(_ context.Context, botID string) (string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.unbound[botID] {
+		return "", ErrWorkspaceMissing
+	}
+	return managedWorkspaceOf(botID), nil
 }
 
 func (f *fakeWorkspace) Client(_ context.Context, _ string) (*bridge.Client, error) {
@@ -363,38 +386,38 @@ func (f *fakeWorkspace) DataRoot(_ context.Context, _ string) (string, error) {
 	return f.dataRoot, nil
 }
 
-func (f *fakeWorkspace) State(_ context.Context, botID string) (WorkspaceState, error) {
+func (f *fakeWorkspace) State(_ context.Context, workspaceID string) (WorkspaceState, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	if state, ok := f.states[botID]; ok {
+	if state, ok := f.states[workspaceID]; ok {
 		return state, nil
 	}
 	return WorkspaceRunning, nil
 }
 
-func (f *fakeWorkspace) EnsureRunning(_ context.Context, botID string) error {
+func (f *fakeWorkspace) EnsureRunning(_ context.Context, workspaceID string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	f.ensureCalls = append(f.ensureCalls, botID)
+	f.ensureCalls = append(f.ensureCalls, workspaceID)
 	if f.ensureErr != nil {
 		return f.ensureErr
 	}
-	f.states[botID] = WorkspaceRunning
+	f.states[workspaceID] = WorkspaceRunning
 	return nil
 }
 
-func (f *fakeWorkspace) OnBridgeReset(fn func(botID string)) {
+func (f *fakeWorkspace) OnBridgeReset(fn func(workspaceID string)) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.resetFns = append(f.resetFns, fn)
 }
 
-func (f *fakeWorkspace) reset(botID string) {
+func (f *fakeWorkspace) reset(workspaceID string) {
 	f.mu.Lock()
 	fns := slices.Clone(f.resetFns)
 	f.mu.Unlock()
 	for _, fn := range fns {
-		fn(botID)
+		fn(workspaceID)
 	}
 }
 
@@ -422,8 +445,10 @@ type serviceFixture struct {
 }
 
 const (
-	testBot    = "bot-a"
-	testTarget = "native"
+	testBot = "bot-a"
+	// testWorkspace is testBot's managed computer (managedWorkspaceOf).
+	testWorkspace = "ws-bot-a"
+	testTarget    = "native"
 )
 
 func newServiceFixture(t *testing.T) *serviceFixture {
@@ -481,7 +506,7 @@ func (f *serviceFixture) ctx() context.Context {
 }
 
 func (*serviceFixture) key(depID string) InstallationKey {
-	return InstallationKey{BotID: testBot, DependencyID: depID}
+	return InstallationKey{WorkspaceID: testWorkspace, DependencyID: depID}
 }
 
 func (f *serviceFixture) home(depID string) string {
@@ -549,7 +574,7 @@ func (f *serviceFixture) discovered() int {
 }
 
 func (f *serviceFixture) seed(depID string, status Status, version string) {
-	f.store.seed(Installation{BotID: testBot, DependencyID: depID, Source: InstallationSourceManaged, Status: status, InstalledVersion: version})
+	f.store.seed(Installation{WorkspaceID: testWorkspace, DependencyID: depID, Source: InstallationSourceManaged, Status: status, InstalledVersion: version})
 }
 
 func (*serviceFixture) entry(t *testing.T, result ListResult, depID string) Entry {
@@ -697,7 +722,7 @@ func TestListReconcilesThreeStatesAndCaches(t *testing.T) {
 	if f.discovered() != 2 {
 		t.Errorf("discover calls after Refresh = %d, want 2", f.discovered())
 	}
-	f.ws.reset(testBot)
+	f.ws.reset(testWorkspace)
 	if _, err := f.svc.List(f.ctx(), testBot); err != nil {
 		t.Fatalf("List after bridge reset: %v", err)
 	}
@@ -709,7 +734,7 @@ func TestListReconcilesThreeStatesAndCaches(t *testing.T) {
 func TestListLeavesInProgressAndFailedRecordsAlone(t *testing.T) {
 	f := newServiceFixture(t)
 	f.seed("agent-x", StatusInstalling, "")
-	f.store.seed(Installation{BotID: testBot, DependencyID: "tool-y", Source: InstallationSourceManaged, Status: StatusFailed, InstalledVersion: "1.0.0", LastError: "boom"})
+	f.store.seed(Installation{WorkspaceID: testWorkspace, DependencyID: "tool-y", Source: InstallationSourceManaged, Status: StatusFailed, InstalledVersion: "1.0.0", LastError: "boom"})
 	f.present("agent-x", SourceManaged, "1.9.0", nil)
 	f.present("tool-y", SourceManaged, "1.0.1", nil)
 	before := f.store.writeCount()
@@ -737,7 +762,7 @@ func TestListLeavesInProgressAndFailedRecordsAlone(t *testing.T) {
 	}
 
 	f.absent("tool-y")
-	f.svc.cache.Invalidate(testBot)
+	f.svc.cache.Invalidate(testWorkspace)
 	result, err = f.svc.List(f.ctx(), testBot)
 	if err != nil {
 		t.Fatalf("List: %v", err)
@@ -754,7 +779,7 @@ func TestListLeavesInProgressAndFailedRecordsAlone(t *testing.T) {
 func TestListImageBaselineAndOverlay(t *testing.T) {
 	f := newServiceFixture(t)
 	f.present("agent-x", SourceToolkit, "1.9.0", nil)
-	f.store.seed(Installation{BotID: testBot, DependencyID: "tool-y", Source: InstallationSourceManaged, Status: StatusInstalled, InstalledVersion: "1.0.0", LatestVersion: "1.2.0"})
+	f.store.seed(Installation{WorkspaceID: testWorkspace, DependencyID: "tool-y", Source: InstallationSourceManaged, Status: StatusInstalled, InstalledVersion: "1.0.0", LatestVersion: "1.2.0"})
 	managedTool := Candidate{Source: SourceManaged, Path: filepath.Join(f.home("tool-y"), "current", "bin", "tool-y"), Version: "1.0.0"}
 	imageTool := Candidate{Source: SourceToolkit, Path: "/opt/memoh/toolkit/bin/tool-y", Version: "0.9.0"}
 	f.presentCandidates("tool-y", &State{Version: "1.0.0", PreviousVersion: "0.9.5"}, managedTool, imageTool)
@@ -805,7 +830,7 @@ func TestListWhenWorkspaceUnavailable(t *testing.T) {
 	f := newServiceFixture(t)
 	f.seed("tool-y", StatusInstalled, "1.0.0")
 	for _, state := range []WorkspaceState{WorkspaceNotRunning, WorkspaceMissing} {
-		f.ws.setState(testBot, state)
+		f.ws.setState(testWorkspace, state)
 		result, err := f.svc.List(f.ctx(), testBot)
 		if err != nil {
 			t.Fatalf("List(%s): %v", state, err)
@@ -854,7 +879,7 @@ func TestPreflight(t *testing.T) {
 
 	// Any present copy satisfies preflight; there is no version to match.
 	f.present("agent-x", SourceManaged, "1.9.0", nil)
-	f.svc.cache.Invalidate(testBot)
+	f.svc.cache.Invalidate(testWorkspace)
 	result, err = f.svc.Preflight(f.ctx(), testBot, []string{"agent-x"})
 	if err != nil {
 		t.Fatalf("Preflight: %v", err)
@@ -863,7 +888,7 @@ func TestPreflight(t *testing.T) {
 		t.Errorf("older copy item = %+v, want satisfied", item)
 	}
 
-	f.ws.setState(testBot, WorkspaceMissing)
+	f.ws.setState(testWorkspace, WorkspaceMissing)
 	result, err = f.svc.Preflight(f.ctx(), testBot, []string{"agent-x"})
 	if err != nil {
 		t.Fatalf("Preflight: %v", err)
@@ -1089,8 +1114,8 @@ func TestInstallBusy(t *testing.T) {
 func TestBusyVerdictRestoresRecord(t *testing.T) {
 	f := newServiceFixture(t)
 	f.setRun(func(RunSpec) (Result, error) { return Result{ExitCode: exitCodeLocked}, ErrLocked })
-	f.store.seed(Installation{BotID: testBot, DependencyID: "tool-y", Source: InstallationSourceManaged, Status: StatusFailed, InstalledVersion: "1.0.0", LastError: "boom"})
-	f.store.seed(Installation{BotID: testBot, DependencyID: "mac-only", Source: InstallationSourceManaged, Status: StatusInstalling, UpdatedAt: f.now.Add(-time.Hour)})
+	f.store.seed(Installation{WorkspaceID: testWorkspace, DependencyID: "tool-y", Source: InstallationSourceManaged, Status: StatusFailed, InstalledVersion: "1.0.0", LastError: "boom"})
+	f.store.seed(Installation{WorkspaceID: testWorkspace, DependencyID: "mac-only", Source: InstallationSourceManaged, Status: StatusInstalling, UpdatedAt: f.now.Add(-time.Hour)})
 	before := f.store.writeCount()
 
 	if _, err := f.svc.Install(f.ctx(), testBot, "tool-y", "", nil); !errors.Is(err, ErrBusy) {
@@ -1277,7 +1302,7 @@ func TestListReclaimsInterruptedOperations(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			f := newServiceFixture(t)
 			dep := f.cat.MustGet("tool-y")
-			f.store.seed(Installation{BotID: testBot, DependencyID: "tool-y", Source: InstallationSourceManaged, Status: StatusInstalling, OperationID: strings.Repeat("a", 32), UpdatedAt: f.now.Add(-tc.age(dep))})
+			f.store.seed(Installation{WorkspaceID: testWorkspace, DependencyID: "tool-y", Source: InstallationSourceManaged, Status: StatusInstalling, OperationID: strings.Repeat("a", 32), UpdatedAt: f.now.Add(-tc.age(dep))})
 			if tc.lockHeld || tc.lockAbandoned {
 				f.mu.Lock()
 				f.observed["tool-y"] = Observed{DepID: "tool-y", LockHeld: tc.lockHeld, LockAbandoned: tc.lockAbandoned, Receipt: &OperationReceipt{ID: strings.Repeat("a", 32), DependencyID: "tool-y"}}
@@ -1319,7 +1344,7 @@ func TestListReclaimOnlyTrustsSnapshotsTakenAfterTheOperation(t *testing.T) {
 	if _, err := f.svc.List(f.ctx(), testBot); err != nil {
 		t.Fatalf("List: %v", err)
 	}
-	f.store.seed(Installation{BotID: testBot, DependencyID: "tool-y", Source: InstallationSourceManaged, Status: StatusInstalling, OperationID: strings.Repeat("b", 32), UpdatedAt: f.now})
+	f.store.seed(Installation{WorkspaceID: testWorkspace, DependencyID: "tool-y", Source: InstallationSourceManaged, Status: StatusInstalling, OperationID: strings.Repeat("b", 32), UpdatedAt: f.now})
 	f.now = f.now.Add(2 * time.Minute)
 
 	result, err := f.svc.List(f.ctx(), testBot)
@@ -1349,7 +1374,7 @@ func TestListReclaimOnlyTrustsSnapshotsTakenAfterTheOperation(t *testing.T) {
 func TestListDegradesWhenDiscoveryFails(t *testing.T) {
 	f := newServiceFixture(t)
 	f.seed("tool-y", StatusInstalled, "1.0.0")
-	f.store.seed(Installation{BotID: testBot, DependencyID: "agent-x", Source: InstallationSourceManaged, Status: StatusFailed, LastError: "boom"})
+	f.store.seed(Installation{WorkspaceID: testWorkspace, DependencyID: "agent-x", Source: InstallationSourceManaged, Status: StatusFailed, LastError: "boom"})
 	f.svc.discover = func(context.Context, *bridge.Client, *catalog.Catalog, string, []string, Platform) (map[string]Observed, error) {
 		f.mu.Lock()
 		defer f.mu.Unlock()
@@ -1427,11 +1452,11 @@ func TestInstallGuards(t *testing.T) {
 		t.Error("remove of an unrecorded dependency left a record behind")
 	}
 
-	f.ws.setState(testBot, WorkspaceMissing)
+	f.ws.setState(testWorkspace, WorkspaceMissing)
 	if _, err := f.svc.Install(f.ctx(), testBot, "tool-y", "", nil); !errors.Is(err, ErrWorkspaceMissing) {
 		t.Errorf("missing workspace install error = %v", err)
 	}
-	f.ws.setState(testBot, WorkspaceMissing)
+	f.ws.setState(testWorkspace, WorkspaceMissing)
 	if _, err := f.svc.Install(f.ctx(), testBot, "tool-y", "", nil); !errors.Is(err, ErrWorkspaceMissing) {
 		t.Errorf("missing workspace install error = %v", err)
 	}
@@ -1439,15 +1464,15 @@ func TestInstallGuards(t *testing.T) {
 		t.Errorf("guards must not start anything: %v", f.ws.ensureCalls)
 	}
 
-	f.ws.setState(testBot, WorkspaceNotRunning)
+	f.ws.setState(testWorkspace, WorkspaceNotRunning)
 	if _, err := f.svc.Install(f.ctx(), testBot, "tool-y", "", nil); err != nil {
 		t.Fatalf("install on stopped native workspace: %v", err)
 	}
-	if len(f.ws.ensureCalls) != 1 || f.ws.ensureCalls[0] != testBot {
+	if len(f.ws.ensureCalls) != 1 || f.ws.ensureCalls[0] != testWorkspace {
 		t.Errorf("EnsureRunning calls = %v", f.ws.ensureCalls)
 	}
 
-	f.ws.setState(testBot, WorkspaceNotRunning)
+	f.ws.setState(testWorkspace, WorkspaceNotRunning)
 	f.ws.ensureErr = errors.New("containerd down")
 	_, err := f.svc.Install(f.ctx(), testBot, "agent-x", "", nil)
 	if !errors.Is(err, ErrWorkspaceNotRunning) || !strings.Contains(err.Error(), "containerd down") {
@@ -1642,12 +1667,12 @@ func TestRollback(t *testing.T) {
 
 func TestReapStaleUsesWorkspaceLiveness(t *testing.T) {
 	f := newServiceFixture(t)
-	for _, bot := range []string{"live", "dead", "stopped", "offline", "local"} {
-		f.store.seed(Installation{BotID: bot, DependencyID: "agent-x", Status: StatusInstalling, OperationID: strings.Repeat("c", 32), UpdatedAt: f.now.Add(-48 * time.Hour)})
+	for _, computer := range []string{"live", "dead", "stopped", "offline", "local"} {
+		f.store.seed(Installation{WorkspaceID: computer, DependencyID: "agent-x", Status: StatusInstalling, OperationID: strings.Repeat("c", 32), UpdatedAt: f.now.Add(-48 * time.Hour)})
 	}
 	f.ws.setState("stopped", WorkspaceNotRunning)
 	f.ws.setState("offline", WorkspaceMissing)
-	local := InstallationKey{BotID: "local", DependencyID: "agent-x"}
+	local := InstallationKey{WorkspaceID: "local", DependencyID: "agent-x"}
 	f.svc.locks.tryLock(local)
 	defer f.svc.locks.unlock(local)
 	// Every reachable workspace reports a live owner. Even a 48-hour-old row
@@ -1662,10 +1687,10 @@ func TestReapStaleUsesWorkspaceLiveness(t *testing.T) {
 	if recovered != 0 {
 		t.Errorf("recovered = %d, want no unreachable or live workspace reclaimed", recovered)
 	}
-	for _, bot := range []string{"live", "dead", "stopped", "offline", "local"} {
-		recs, _ := f.store.ListForBot(f.ctx(), bot)
+	for _, computer := range []string{"live", "dead", "stopped", "offline", "local"} {
+		recs, _ := f.store.ListForWorkspace(f.ctx(), computer)
 		if recs[0].Status != StatusInstalling {
-			t.Errorf("%s: incorrectly expired live/unknown owner", bot)
+			t.Errorf("%s: incorrectly expired live/unknown owner", computer)
 		}
 	}
 	f.mu.Lock()
@@ -1801,7 +1826,7 @@ func TestCheckUpdates(t *testing.T) {
 		t.Errorf("record after busy check = %+v, want %+v untouched", after, before)
 	}
 
-	f.ws.setState(testBot, WorkspaceNotRunning)
+	f.ws.setState(testWorkspace, WorkspaceNotRunning)
 	result, err = f.svc.CheckUpdates(f.ctx(), testBot)
 	if err != nil || result.Workspace != WorkspaceNotRunning || len(f.runSpecs()) != 3 {
 		t.Errorf("CheckUpdates on stopped workspace = %+v, %v (runs = %d)", result.Workspace, err, len(f.runSpecs()))
@@ -2160,5 +2185,70 @@ func TestListFollowsLauncherCandidate(t *testing.T) {
 	}
 	if item := pre.Items[0]; !item.Satisfied || item.InstalledVersion != "1.8.0" {
 		t.Errorf("preflight item = %+v", item)
+	}
+}
+
+// A bot without a managed computer has nothing to list, nothing to install
+// on and no dependents; reads answer with a missing workspace, writes with
+// ErrWorkspaceMissing, and nothing is keyed by the bot id in the meantime.
+func TestBotWithoutManagedComputer(t *testing.T) {
+	f := newServiceFixture(t)
+	const unbound = "bot-unbound"
+	f.ws.setUnbound(unbound)
+
+	list, err := f.svc.List(f.ctx(), unbound)
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if list.Workspace != WorkspaceMissing || len(list.Entries) != len(f.cat.List()) || list.DataRoot != f.dataRoot {
+		t.Fatalf("List = %+v, want every catalog entry offline against a missing workspace", list)
+	}
+	for _, entry := range list.Entries {
+		if entry.Installation != nil || entry.Status != "" {
+			t.Errorf("entry %s = %+v, want no record", entry.Dependency.ID, entry)
+		}
+	}
+	checked, err := f.svc.CheckUpdates(f.ctx(), unbound)
+	if err != nil || checked.Workspace != WorkspaceMissing || len(f.runSpecs()) != 0 {
+		t.Fatalf("CheckUpdates = %+v, %v (runs = %d), want missing and no script", checked, err, len(f.runSpecs()))
+	}
+	preflight, err := f.svc.Preflight(f.ctx(), unbound, []string{"agent-x"})
+	if err != nil || preflight.Workspace != WorkspaceMissing || len(preflight.Items) != 0 {
+		t.Fatalf("Preflight = %+v, %v; want missing without items", preflight, err)
+	}
+	dependents, err := f.svc.Dependents(f.ctx(), unbound, "tool-y")
+	if err != nil || len(dependents) != 0 {
+		t.Fatalf("Dependents = %v, %v; want none", dependents, err)
+	}
+	for name, op := range map[string]func() error{
+		"Install":       func() error { _, err := f.svc.Install(f.ctx(), unbound, "tool-y", "", nil); return err },
+		"Update":        func() error { _, err := f.svc.Update(f.ctx(), unbound, "tool-y", "", nil); return err },
+		"Remove":        func() error { _, err := f.svc.Remove(f.ctx(), unbound, "tool-y", nil); return err },
+		"Rollback":      func() error { _, err := f.svc.Rollback(f.ctx(), unbound, "tool-y"); return err },
+		"EnsureRunning": func() error { return f.svc.EnsureRunning(f.ctx(), unbound) },
+		"ResolveLauncher": func() error {
+			_, err := f.svc.ResolveLauncher(f.ctx(), unbound, "agent-x")
+			return err
+		},
+	} {
+		if err := op(); !errors.Is(err, ErrWorkspaceMissing) {
+			t.Errorf("%s error = %v, want ErrWorkspaceMissing", name, err)
+		}
+	}
+	if len(f.ws.ensureCalls) != 0 || f.discovered() != 0 || f.store.writeCount() != 0 {
+		t.Errorf("a bot without a computer started something: ensure=%v discover=%d writes=%d", f.ws.ensureCalls, f.discovered(), f.store.writeCount())
+	}
+	// The bot's records live under its computer's id, never under the bot id.
+	f.seed("tool-y", StatusInstalled, "1.0.0")
+	if _, ok := f.store.get(InstallationKey{WorkspaceID: testBot, DependencyID: "tool-y"}); ok {
+		t.Fatal("a record keyed by the bot id must not exist")
+	}
+	f.present("tool-y", SourceManaged, "1.0.0", nil)
+	result, err := f.svc.List(f.ctx(), testBot)
+	if err != nil {
+		t.Fatalf("List(bound): %v", err)
+	}
+	if entry := f.entry(t, result, "tool-y"); entry.Installation == nil || entry.Installation.WorkspaceID != testWorkspace {
+		t.Fatalf("bound bot's record = %+v, want keyed by %s", entry.Installation, testWorkspace)
 	}
 }

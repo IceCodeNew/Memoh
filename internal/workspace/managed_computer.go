@@ -51,6 +51,22 @@ func (m *Manager) managedWorkspaceID(ctx context.Context, botID string) (string,
 	return m.bindings.ManagedWorkspaceID(ctx, botID)
 }
 
+// ManagedWorkspaceID is managedWorkspaceID for callers outside the package
+// that key their own state by the computer (the dependency manager): the
+// bot's managed computer, resolved once at their boundary.
+// ErrContainerNotFound when the bot has no managed computer, as every other
+// bot-keyed entry point reports it.
+func (m *Manager) ManagedWorkspaceID(ctx context.Context, botID string) (string, error) {
+	workspaceID, err := m.managedWorkspaceID(ctx, botID)
+	if err != nil {
+		if noManagedComputer(err) {
+			return "", ErrContainerNotFound
+		}
+		return "", err
+	}
+	return workspaceID, nil
+}
+
 // workspaceBot is the bot a managed computer is operated for: the first bot
 // bound to it. ErrWorkspaceUnbound when there is none.
 func (m *Manager) workspaceBot(ctx context.Context, workspaceID string) (string, error) {

@@ -67,7 +67,7 @@ DROP TABLE IF EXISTS subagents CASCADE;
 DROP TABLE IF EXISTS bot_preauth_keys CASCADE;
 DROP TABLE IF EXISTS bot_members CASCADE;
 DROP TABLE IF EXISTS bot_remote_runtime_bindings CASCADE;
-DROP TABLE IF EXISTS bot_dependency_installations CASCADE;
+DROP TABLE IF EXISTS managed_computer_dependencies CASCADE;
 DROP TABLE IF EXISTS bot_skill_package_installations CASCADE;
 DROP TABLE IF EXISTS user_computers CASCADE;
 DROP TABLE IF EXISTS connectors CASCADE;

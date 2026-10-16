@@ -15,8 +15,10 @@ import (
 
 const checkPayload = `{"installed":"1.0.0","latest":"1.2.0","update_available":true}`
 
-func seedInstalled(f *serviceFixture, botID, depID, version string) InstallationKey {
-	rec := Installation{BotID: botID, DependencyID: depID, Source: InstallationSourceManaged, Status: StatusInstalled, InstalledVersion: version}
+// seedInstalled records an installed dependency on the computer. The worker
+// is keyed by computers only; no bot is involved.
+func seedInstalled(f *serviceFixture, workspaceID, depID, version string) InstallationKey {
+	rec := Installation{WorkspaceID: workspaceID, DependencyID: depID, Source: InstallationSourceManaged, Status: StatusInstalled, InstalledVersion: version}
 	f.store.seed(rec)
 	return keyOf(rec)
 }
@@ -29,7 +31,7 @@ func TestUpdateWorkerRunOnceDedupesAndFansOut(t *testing.T) {
 	keyD := seedInstalled(f, "bot-d", "tool-y", "1.0.0")
 	keyE := seedInstalled(f, "bot-e", "tool-y", "1.0.0")
 	keyAgent := seedInstalled(f, "bot-a", "agent-x", "1.9.0")
-	f.store.seed(Installation{BotID: "bot-f", DependencyID: "tool-y", Status: StatusFailed})
+	f.store.seed(Installation{WorkspaceID: "bot-f", DependencyID: "tool-y", Status: StatusFailed})
 	f.ws.setState("bot-c", WorkspaceNotRunning)
 	// bot-e runs on another platform, so it forms its own group.
 	f.svc.cache.Put("bot-e", Snapshot{Platform: Platform{OS: "linux", Arch: "arm64", Libc: "musl", TmpDir: "/tmp"}})
@@ -74,16 +76,16 @@ func TestUpdateWorkerRunOnceDedupesAndFansOut(t *testing.T) {
 	for _, key := range []InstallationKey{keyA, keyB, keyD, keyE} {
 		rec, _ := f.store.get(key)
 		if rec.LatestVersion != "1.2.0" || rec.LastCheckedAt == nil || !rec.LastCheckedAt.Equal(f.now) || rec.LastError != "" || rec.Status != StatusInstalled {
-			t.Errorf("record %s/%s = %+v, want fanned-out result", key.BotID, key.DependencyID, rec)
+			t.Errorf("record %s/%s = %+v, want fanned-out result", key.WorkspaceID, key.DependencyID, rec)
 		}
 	}
 	for _, key := range []InstallationKey{keyC, keyAgent} {
 		rec, _ := f.store.get(key)
 		if rec.LatestVersion != "" || rec.LastCheckedAt != nil {
-			t.Errorf("record %s/%s = %+v, want untouched", key.BotID, key.DependencyID, rec)
+			t.Errorf("record %s/%s = %+v, want untouched", key.WorkspaceID, key.DependencyID, rec)
 		}
 	}
-	if rec, _ := f.store.get(InstallationKey{BotID: "bot-f", DependencyID: "tool-y"}); rec.LastCheckedAt != nil {
+	if rec, _ := f.store.get(InstallationKey{WorkspaceID: "bot-f", DependencyID: "tool-y"}); rec.LastCheckedAt != nil {
 		t.Errorf("failed record was checked: %+v", rec)
 	}
 
@@ -174,7 +176,7 @@ func TestUpdateWorkerReportsListErrors(t *testing.T) {
 
 func TestUpdateWorkerSharesInstallLock(t *testing.T) {
 	f := newServiceFixture(t)
-	key := seedInstalled(f, testBot, "tool-y", "1.0.0")
+	key := seedInstalled(f, testWorkspace, "tool-y", "1.0.0")
 	worker := NewUpdateWorker(f.svc, 0, slog.New(slog.DiscardHandler))
 	f.svc.locks.tryLock(key)
 	checks, err := worker.RunOnce(f.ctx())

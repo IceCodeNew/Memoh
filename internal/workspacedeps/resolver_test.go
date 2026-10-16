@@ -40,14 +40,14 @@ func (f *serviceFixture) seedCandidates(candidates ...Candidate) {
 		obs.Version = candidates[0].Version
 		obs.Candidates = candidates
 	}
-	f.svc.cache.Put(testBot, Snapshot{
+	f.svc.cache.Put(testWorkspace, Snapshot{
 		Platform: f.platform,
 		Observed: map[string]Observed{"agent-x": obs},
 	})
 }
 
 func (f *serviceFixture) cachedCandidates() []Candidate {
-	snap, ok := f.svc.cache.Get(testBot)
+	snap, ok := f.svc.cache.Get(testWorkspace)
 	if !ok {
 		f.t.Fatal("no snapshot cached for bot")
 	}
@@ -149,7 +149,7 @@ func TestResolveLauncherRejectsUnknownDependencies(t *testing.T) {
 		t.Fatalf("ResolveLauncher(img-z) = %+v, %v; want the toolkit copy", got, err)
 	}
 	f.absent("img-z")
-	f.svc.cache.Invalidate(testBot)
+	f.svc.cache.Invalidate(testWorkspace)
 	_, err = f.svc.ResolveLauncher(f.ctx(), testBot, "img-z")
 	var missing *external.DependencyMissingError
 	if !errors.As(err, &missing) || missing.DependencyID != "img-z" || missing.TaskID != "" {
@@ -254,7 +254,7 @@ func TestObserveLauncherVersionRewritesTheLaunchedCopy(t *testing.T) {
 	if got[0].Version != "2.0.0" || got[1].Version != "1.9.5" {
 		t.Fatalf("candidates = %+v, want the managed copy corrected and the toolkit one untouched", got)
 	}
-	snap, _ := f.svc.cache.Get(testBot)
+	snap, _ := f.svc.cache.Get(testWorkspace)
 	if snap.Observed["agent-x"].Version != "2.0.0" {
 		t.Fatalf("winner version = %q, want unchanged", snap.Observed["agent-x"].Version)
 	}

@@ -124,7 +124,7 @@ type Service struct {
 }
 
 // NewService wires a Service and subscribes the cache to bridge resets so a
-// restarted or rebuilt container is re-discovered. It panics
+// restarted or rebuilt computer is re-discovered. It panics
 // when a required option is nil, which is a wiring error.
 func NewService(opts Options) *Service {
 	switch {
@@ -178,7 +178,7 @@ func NewService(opts Options) *Service {
 	return s
 }
 
-// Entry is one catalog dependency as seen for a bot after
+// Entry is one catalog dependency as seen on a managed computer after
 // reconciliation.
 type Entry struct {
 	Dependency catalog.Dependency
@@ -225,7 +225,7 @@ type ListResult struct {
 	// Platform is zero when the workspace is not running and was never
 	// probed.
 	Platform Platform
-	// Workspace is the bot workspace state; Entries carry no discovery data
+	// Workspace is the managed computer's state; Entries carry no discovery data
 	// unless it is WorkspaceRunning.
 	Workspace WorkspaceState
 	// DataRoot is the workspace data root every managed dependency lives
@@ -286,23 +286,70 @@ func (s *Service) Refresh(ctx context.Context, botID string) (ListResult, error)
 	return s.list(ctx, botID, true)
 }
 
-// EnsureRunning starts a stopped native workspace the way a mutating
+// EnsureRunning starts the bot's stopped managed computer the way a mutating
 // operation would, so a caller can act on live discovery facts.
 func (s *Service) EnsureRunning(ctx context.Context, botID string) error {
-	return s.ensureWorkspace(ctx, botID)
+	workspaceID, err := s.computerOf(ctx, botID)
+	if err != nil {
+		return err
+	}
+	return s.ensureWorkspace(ctx, workspaceID)
 }
 
+// computerOf is the service boundary between bots and computers: the bot is
+// resolved to its managed computer once and everything below is keyed by
+// that workspace id (records, locks, the discovery cache). The workspace id
+// of a bot created after 0167 is not the bot id. ErrWorkspaceMissing when
+// the bot has no managed computer.
+func (s *Service) computerOf(ctx context.Context, botID string) (string, error) {
+	workspaceID, err := s.workspace.ManagedWorkspaceID(ctx, botID)
+	if err != nil {
+		return "", fmt.Errorf("workspacedeps: managed computer of bot %s: %w", botID, err)
+	}
+	return workspaceID, nil
+}
+
+// list is List / Refresh for a bot: its managed computer is listed. A bot
+// without one lists the catalog against a missing workspace, as a bot whose
+// container was never created always did.
 func (s *Service) list(ctx context.Context, botID string, force bool) (ListResult, error) {
 	ctx, catalogResult, err := s.prepareCatalog(ctx, force, false)
 	if err != nil {
 		return ListResult{}, err
 	}
+	workspaceID, err := s.computerOf(ctx, botID)
+	if errors.Is(err, ErrWorkspaceMissing) {
+		return s.missingList(ctx, catalogResult), nil
+	}
+	if err != nil {
+		return ListResult{}, err
+	}
+	return s.listComputer(ctx, catalogResult, workspaceID, force)
+}
 
-	state, err := s.workspace.State(ctx, botID)
+// missingList is the list of a bot without a managed computer: every catalog
+// entry offline against a missing workspace and no records. The data root is
+// a property of the managed-computer image, not of one computer, so it is
+// reported even before the computer exists.
+func (s *Service) missingList(ctx context.Context, catalogResult CatalogResult) ListResult {
+	result := ListResult{Workspace: WorkspaceMissing, CatalogStale: catalogResult.Stale, CatalogFetchedAt: catalogResult.FetchedAt, CatalogRefreshing: catalogResult.Refreshing}
+	if dataRoot, err := s.workspace.DataRoot(ctx, ""); err == nil {
+		result.DataRoot = dataRoot
+	}
+	for _, dep := range s.catalogFor(ctx).List() {
+		result.Entries = append(result.Entries, offlineEntry(dep, nil, result.Platform))
+	}
+	return result
+}
+
+// listComputer reconciles the catalog with the computer's records and, when
+// it runs, its discovered state.
+func (s *Service) listComputer(ctx context.Context, catalogResult CatalogResult, workspaceID string, force bool) (ListResult, error) {
+	state, err := s.workspace.State(ctx, workspaceID)
 	if err != nil {
 		return ListResult{}, fmt.Errorf("workspacedeps: workspace state: %w", err)
 	}
-	records, err := s.store.ListForBot(ctx, botID)
+	records, err := s.store.ListForWorkspace(ctx, workspaceID)
 	if err != nil {
 		return ListResult{}, fmt.Errorf("workspacedeps: list installations: %w", err)
 	}
@@ -311,16 +358,15 @@ func (s *Service) list(ctx context.Context, botID string, force bool) (ListResul
 	}
 	byDep := indexRecords(records)
 	result := ListResult{Workspace: state, CatalogStale: catalogResult.Stale, CatalogFetchedAt: catalogResult.FetchedAt, CatalogRefreshing: catalogResult.Refreshing}
-	// The data root always belongs to the isolated workspace.
-	if dataRoot, err := s.workspace.DataRoot(ctx, botID); err == nil {
+	if dataRoot, err := s.workspace.DataRoot(ctx, workspaceID); err == nil {
 		result.DataRoot = dataRoot
 	}
 	deps := s.catalogFor(ctx).List()
 
 	if state != WorkspaceRunning {
-		// A stopped workspace keeps its last probed platform in the cache,
+		// A stopped computer keeps its last probed platform in the cache,
 		// which is enough to grey out unsupported dependencies.
-		if snap, ok := s.cache.Get(botID); ok {
+		if snap, ok := s.cache.Get(workspaceID); ok {
 			result.Platform = snap.Platform
 		}
 		for _, dep := range deps {
@@ -329,7 +375,7 @@ func (s *Service) list(ctx context.Context, botID string, force bool) (ListResul
 		return result, nil
 	}
 
-	snap, err := s.snapshot(ctx, botID, force)
+	snap, err := s.snapshot(ctx, workspaceID, force)
 	if err != nil {
 		if ctx.Err() != nil {
 			return ListResult{}, err
@@ -341,9 +387,9 @@ func (s *Service) list(ctx context.Context, botID string, force bool) (ListResul
 		// here; it keeps its own semantics above.
 		event := errlog.Event(ctx, "workspacedeps.discover", errs.Wrap(err, "discover workspace dependencies"), errlog.Options{})
 		s.logger.LogAttrs(ctx, event.Level, "workspace dependency discovery failed; listing records only",
-			append([]slog.Attr{slog.String("bot_id", botID)}, event.Attrs()...)...)
+			append([]slog.Attr{slog.String("workspace_id", workspaceID)}, event.Attrs()...)...)
 		result.DiscoveryFailed = true
-		if snap, ok := s.cache.Get(botID); ok {
+		if snap, ok := s.cache.Get(workspaceID); ok {
 			result.Platform = snap.Platform
 		}
 		for _, dep := range deps {
@@ -353,7 +399,7 @@ func (s *Service) list(ctx context.Context, botID string, force bool) (ListResul
 	}
 	result.Platform = snap.Platform
 	for _, dep := range deps {
-		key := InstallationKey{BotID: botID, DependencyID: dep.ID}
+		key := InstallationKey{WorkspaceID: workspaceID, DependencyID: dep.ID}
 		entry, err := s.reconcile(ctx, key, dep, snap, byDep[dep.ID])
 		if err != nil {
 			return ListResult{}, err
@@ -363,15 +409,15 @@ func (s *Service) list(ctx context.Context, botID string, force bool) (ListResul
 	return result, nil
 }
 
-// snapshot returns the cached discovery for the bot or performs one.
-func (s *Service) snapshot(ctx context.Context, botID string, force bool) (Snapshot, error) {
+// snapshot returns the cached discovery of the computer or performs one.
+func (s *Service) snapshot(ctx context.Context, workspaceID string, force bool) (Snapshot, error) {
 	fingerprint := s.catalogFor(ctx).Fingerprint()
 	if !force {
-		if snap, ok := s.cache.Get(botID); ok && (s.provider == nil || snap.CatalogDigest == fingerprint) {
+		if snap, ok := s.cache.Get(workspaceID); ok && (s.provider == nil || snap.CatalogDigest == fingerprint) {
 			return snap, nil
 		}
 	}
-	client, dataRoot, err := s.target(ctx, botID)
+	client, dataRoot, err := s.target(ctx, workspaceID)
 	if err != nil {
 		return Snapshot{}, err
 	}
@@ -384,7 +430,7 @@ func (s *Service) snapshot(ctx context.Context, botID string, force bool) (Snaps
 		return Snapshot{}, err
 	}
 	snap := Snapshot{Platform: platform, Observed: observed, At: s.now(), CatalogDigest: fingerprint}
-	s.cache.Put(botID, snap)
+	s.cache.Put(workspaceID, snap)
 	return snap, nil
 }
 
@@ -437,7 +483,7 @@ func (s *Service) reconcile(ctx context.Context, key InstallationKey, dep catalo
 				return Entry{}, err
 			}
 			rec = recovered
-			if refreshed, err := s.snapshot(ctx, key.BotID, true); err == nil {
+			if refreshed, err := s.snapshot(ctx, key.WorkspaceID, true); err == nil {
 				snap, obs = refreshed, refreshed.Observed[dep.ID]
 			}
 		} else {
@@ -456,7 +502,7 @@ func (s *Service) reconcile(ctx context.Context, key InstallationKey, dep catalo
 			return Entry{}, fmt.Errorf("workspacedeps: mark interrupted %s failed: %w", dep.ID, err)
 		}
 		s.logger.WarnContext(ctx, "interrupted dependency operation marked failed",
-			slog.String("bot_id", key.BotID),
+			slog.String("workspace_id", key.WorkspaceID),
 			slog.String("dependency_id", key.DependencyID),
 			slog.String("status", string(rec.Status)),
 		)
@@ -754,8 +800,15 @@ func (s *Service) Preflight(ctx context.Context, botID string, depIDs []string) 
 	if err != nil {
 		return PreflightResult{}, err
 	}
+	workspaceID, err := s.computerOf(ctx, botID)
+	if errors.Is(err, ErrWorkspaceMissing) {
+		return PreflightResult{Workspace: WorkspaceMissing}, nil
+	}
+	if err != nil {
+		return PreflightResult{}, err
+	}
 
-	state, err := s.workspace.State(ctx, botID)
+	state, err := s.workspace.State(ctx, workspaceID)
 	if err != nil {
 		return PreflightResult{}, fmt.Errorf("workspacedeps: workspace state: %w", err)
 	}
@@ -763,7 +816,7 @@ func (s *Service) Preflight(ctx context.Context, botID string, depIDs []string) 
 	if state != WorkspaceRunning {
 		return result, nil
 	}
-	snap, err := s.snapshot(ctx, botID, false)
+	snap, err := s.snapshot(ctx, workspaceID, false)
 	if err != nil {
 		return PreflightResult{}, err
 	}
@@ -901,7 +954,7 @@ func (s *Service) Remove(ctx context.Context, botID, depID string, sink LogSink)
 		return OperationResult{}, s.fail(ctx, op, fmt.Errorf("workspacedeps: delete record for %s: %w", op.dep.ID, err))
 	}
 	s.cleanupReceipt(ctx, op)
-	s.cache.Invalidate(op.key.BotID)
+	s.cache.Invalidate(op.key.WorkspaceID)
 	return OperationResult{DependencyID: op.dep.ID, Action: catalog.ActionRemove, SourceURL: op.dep.SourceURL, RegistryID: op.dep.RegistryID, DefinitionRevision: op.dep.Revision}, nil
 }
 
@@ -982,17 +1035,25 @@ func (s *Service) CheckUpdates(ctx context.Context, botID string) (ListResult, e
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), s.updateCheckBudget)
 	defer cancel()
 	defer s.cancelOnShutdown(cancel)()
-	ctx, _, err := s.prepareCatalog(ctx, false, false)
+	ctx, catalogResult, err := s.prepareCatalog(ctx, false, false)
+	if err != nil {
+		return ListResult{}, err
+	}
+	workspaceID, err := s.computerOf(ctx, botID)
+	if errors.Is(err, ErrWorkspaceMissing) {
+		// Without a computer there is nothing to check against.
+		return s.missingList(ctx, catalogResult), nil
+	}
 	if err != nil {
 		return ListResult{}, err
 	}
 
-	result, err := s.list(ctx, botID, true)
+	result, err := s.listComputer(ctx, catalogResult, workspaceID, true)
 	if err != nil && ctx.Err() != nil {
 		// Discovery alone spent the budget: answer with what is recorded.
 		listCtx, cancel := finalizeContext(ctx)
 		defer cancel()
-		result, err = s.list(listCtx, botID, false)
+		result, err = s.listComputer(listCtx, catalogResult, workspaceID, false)
 		result.ChecksIncomplete = err == nil
 		return result, err
 	}
@@ -1000,7 +1061,7 @@ func (s *Service) CheckUpdates(ctx context.Context, botID string) (ListResult, e
 		// Without discovery facts there is nothing to check against.
 		return result, err
 	}
-	client, dataRoot, err := s.target(ctx, botID)
+	client, dataRoot, err := s.target(ctx, workspaceID)
 	if err != nil {
 		return ListResult{}, err
 	}
@@ -1016,7 +1077,7 @@ func (s *Service) CheckUpdates(ctx context.Context, botID string) (ListResult, e
 		if !upstreamCheckable(entry.Dependency) || !entry.Observed.Present || entry.Installation == nil {
 			continue
 		}
-		key := InstallationKey{BotID: botID, DependencyID: entry.Dependency.ID}
+		key := InstallationKey{WorkspaceID: workspaceID, DependencyID: entry.Dependency.ID}
 		if !s.locks.tryLock(key) {
 			continue
 		}
@@ -1061,7 +1122,7 @@ func (s *Service) CheckUpdates(ctx context.Context, botID string) (ListResult, e
 		// discovery above and gets its own short deadline.
 		listCtx, cancel := finalizeContext(ctx)
 		defer cancel()
-		if result, err = s.list(listCtx, botID, false); err != nil {
+		if result, err = s.listComputer(listCtx, catalogResult, workspaceID, false); err != nil {
 			return ListResult{}, err
 		}
 	}
@@ -1112,11 +1173,11 @@ func (s *Service) ReapStale(ctx context.Context) (int, error) {
 	var errs []error
 	snapshots := make(map[string]Snapshot)
 	for _, rec := range records {
-		key := InstallationKey{BotID: rec.BotID, DependencyID: rec.DependencyID}
+		key := InstallationKey{WorkspaceID: rec.WorkspaceID, DependencyID: rec.DependencyID}
 		if !rec.Status.InProgress() || s.locks.locked(key) {
 			continue
 		}
-		state, err := s.workspace.State(ctx, rec.BotID)
+		state, err := s.workspace.State(ctx, rec.WorkspaceID)
 		if err != nil {
 			errs = append(errs, err)
 			continue
@@ -1130,15 +1191,14 @@ func (s *Service) ReapStale(ctx context.Context) (int, error) {
 		if !known {
 			continue
 		}
-		botID := rec.BotID
-		snap, ok := snapshots[botID]
+		snap, ok := snapshots[rec.WorkspaceID]
 		if !ok {
-			snap, err = s.snapshot(ctx, rec.BotID, true)
+			snap, err = s.snapshot(ctx, rec.WorkspaceID, true)
 			if err != nil {
 				errs = append(errs, err)
 				continue
 			}
-			snapshots[botID] = snap
+			snapshots[rec.WorkspaceID] = snap
 		}
 		entry, err := s.reconcile(ctx, key, dep, snap, &rec)
 		if err != nil {
@@ -1181,9 +1241,10 @@ type operation struct {
 	requires *catalog.Catalog
 }
 
-// begin validates the dependency, takes the in-memory lock, makes sure the
-// workspace can run scripts, and resolves everything the action needs. The
-// caller must release the returned operation.
+// begin validates the dependency, resolves the bot's managed computer, takes
+// the in-memory lock, makes sure the computer can run scripts, and resolves
+// everything the action needs. The caller must release the returned
+// operation.
 func (s *Service) begin(ctx context.Context, botID, depID, version string, requirePlatform bool) (*operation, error) {
 	version = strings.TrimSpace(version)
 	if !ValidRequestedVersion(version) {
@@ -1194,17 +1255,22 @@ func (s *Service) begin(ctx context.Context, botID, depID, version string, requi
 	if err != nil {
 		return nil, err
 	}
-	return s.beginWith(ctx, cat, botID, depID, version, requirePlatform)
+	workspaceID, err := s.computerOf(ctx, botID)
+	if err != nil {
+		return nil, err
+	}
+	return s.beginWith(ctx, cat, workspaceID, depID, version, requirePlatform)
 }
 
-// beginWith is begin with the catalog already resolved. Prerequisites use it
-// so they resolve against the catalog their dependent was prepared with.
-func (s *Service) beginWith(ctx context.Context, cat *catalog.Catalog, botID, depID, version string, requirePlatform bool) (*operation, error) {
+// beginWith is begin with the catalog and the computer already resolved.
+// Prerequisites use it so they resolve against the catalog their dependent
+// was prepared with, on the same computer.
+func (s *Service) beginWith(ctx context.Context, cat *catalog.Catalog, workspaceID, depID, version string, requirePlatform bool) (*operation, error) {
 	dep, ok := cat.Get(strings.TrimSpace(depID))
 	if !ok {
 		return nil, ErrDependencyNotFound
 	}
-	key := InstallationKey{BotID: botID, DependencyID: dep.ID}
+	key := InstallationKey{WorkspaceID: workspaceID, DependencyID: dep.ID}
 	unlock, err := s.acquireOperation(ctx, key)
 	if err != nil {
 		return nil, err
@@ -1227,15 +1293,15 @@ func (s *Service) beginWith(ctx context.Context, cat *catalog.Catalog, botID, de
 }
 
 func (s *Service) prepare(ctx context.Context, op *operation, requirePlatform bool) error {
-	botID := op.key.BotID
-	if err := s.ensureWorkspace(ctx, botID); err != nil {
+	workspaceID := op.key.WorkspaceID
+	if err := s.ensureWorkspace(ctx, workspaceID); err != nil {
 		return err
 	}
-	client, dataRoot, err := s.target(ctx, botID)
+	client, dataRoot, err := s.target(ctx, workspaceID)
 	if err != nil {
 		return err
 	}
-	platform, err := s.platformFor(ctx, botID, client)
+	platform, err := s.platformFor(ctx, workspaceID, client)
 	if err != nil {
 		return err
 	}
@@ -1250,11 +1316,11 @@ func (s *Service) prepare(ctx context.Context, op *operation, requirePlatform bo
 	return nil
 }
 
-// ensureWorkspace makes the target runnable for a user-requested operation:
-// a stopped native container is started, anything else that is
-// not running is refused.
-func (s *Service) ensureWorkspace(ctx context.Context, botID string) error {
-	state, err := s.workspace.State(ctx, botID)
+// ensureWorkspace makes the computer runnable for a user-requested
+// operation: a stopped container is started, anything else that is not
+// running is refused.
+func (s *Service) ensureWorkspace(ctx context.Context, workspaceID string) error {
+	state, err := s.workspace.State(ctx, workspaceID)
 	if err != nil {
 		return fmt.Errorf("workspacedeps: workspace state: %w", err)
 	}
@@ -1262,7 +1328,7 @@ func (s *Service) ensureWorkspace(ctx context.Context, botID string) error {
 	case WorkspaceRunning:
 		return nil
 	case WorkspaceNotRunning:
-		if err := s.workspace.EnsureRunning(ctx, botID); err != nil {
+		if err := s.workspace.EnsureRunning(ctx, workspaceID); err != nil {
 			return fmt.Errorf("%w: %w", ErrWorkspaceNotRunning, err)
 		}
 		return nil
@@ -1273,13 +1339,13 @@ func (s *Service) ensureWorkspace(ctx context.Context, botID string) error {
 	}
 }
 
-// target resolves the bridge client and data root of the bot workspace.
-func (s *Service) target(ctx context.Context, botID string) (*bridge.Client, string, error) {
-	client, err := s.workspace.Client(ctx, botID)
+// target resolves the bridge client and data root of the managed computer.
+func (s *Service) target(ctx context.Context, workspaceID string) (*bridge.Client, string, error) {
+	client, err := s.workspace.Client(ctx, workspaceID)
 	if err != nil {
 		return nil, "", fmt.Errorf("workspacedeps: workspace client: %w", err)
 	}
-	dataRoot, err := s.workspace.DataRoot(ctx, botID)
+	dataRoot, err := s.workspace.DataRoot(ctx, workspaceID)
 	if err != nil {
 		return nil, "", fmt.Errorf("workspacedeps: workspace data root: %w", err)
 	}
@@ -1287,8 +1353,8 @@ func (s *Service) target(ctx context.Context, botID string) (*bridge.Client, str
 }
 
 // platformFor reuses the cached probe when there is one.
-func (s *Service) platformFor(ctx context.Context, botID string, client *bridge.Client) (Platform, error) {
-	if snap, ok := s.cache.Get(botID); ok {
+func (s *Service) platformFor(ctx context.Context, workspaceID string, client *bridge.Client) (Platform, error) {
+	if snap, ok := s.cache.Get(workspaceID); ok {
 		return snap.Platform, nil
 	}
 	return s.probe(ctx, client)
@@ -1388,7 +1454,7 @@ func (s *Service) record(ctx context.Context, op *operation, action catalog.Acti
 		return OperationResult{}, s.fail(ctx, op, fmt.Errorf("workspacedeps: record %s %s: %w", action, op.dep.ID, err))
 	}
 	s.cleanupReceipt(ctx, op)
-	s.cache.Invalidate(op.key.BotID)
+	s.cache.Invalidate(op.key.WorkspaceID)
 	return OperationResult{
 		DependencyID: op.dep.ID,
 		SourceURL:    state.SourceURL, RegistryID: state.RegistryID, DefinitionRevision: state.DefinitionRevision,
@@ -1418,7 +1484,7 @@ func (s *Service) runScript(ctx context.Context, op *operation, action catalog.A
 	if s.scriptEnv != nil {
 		spec.ExtraEnv = s.scriptEnv(ctx)
 	}
-	s.logger.InfoContext(ctx, "execute dependency definition", slog.String("bot_id", op.key.BotID), slog.String("dependency_id", op.dep.ID), slog.String("action", string(action)), slog.String("definition_revision", op.dep.Revision))
+	s.logger.InfoContext(ctx, "execute dependency definition", slog.String("workspace_id", op.key.WorkspaceID), slog.String("dependency_id", op.dep.ID), slog.String("action", string(action)), slog.String("definition_revision", op.dep.Revision))
 	spec.Receipt = &OperationReceipt{
 		ID: op.operationID, DependencyID: op.dep.ID, Action: action, SourceURL: op.dep.SourceURL, RegistryID: op.dep.RegistryID,
 		DefinitionRevision: op.dep.Revision, ManifestDigest: op.dep.ManifestDigest,
@@ -1476,7 +1542,7 @@ func finalizeContext(ctx context.Context) (context.Context, context.CancelFunc) 
 
 func (s *Service) fail(ctx context.Context, op *operation, cause error) error {
 	if op.finalizing && op.receipt != nil && op.receipt.Completed && op.receipt.ExitCode == 0 && !errors.Is(cause, errInvalidResult) {
-		s.cache.Invalidate(op.key.BotID)
+		s.cache.Invalidate(op.key.WorkspaceID)
 		return errors.Join(ErrOperationUncertain, cause)
 	}
 	if errors.Is(cause, ErrBusy) {
@@ -1486,7 +1552,7 @@ func (s *Service) fail(ctx context.Context, op *operation, cause error) error {
 	if errors.Is(cause, ErrOperationUncertain) {
 		// Stream loss is not a script exit. Keep the intent until discovery can
 		// prove whether the workspace process ended and whether it committed.
-		s.cache.Invalidate(op.key.BotID)
+		s.cache.Invalidate(op.key.WorkspaceID)
 		return cause
 	}
 	storeCtx, cancel := finalizeContext(ctx)
@@ -1509,12 +1575,12 @@ func (s *Service) fail(ctx context.Context, op *operation, cause error) error {
 	}
 	if err != nil {
 		s.logger.WarnContext(ctx, "record failed dependency operation",
-			slog.String("bot_id", op.key.BotID),
+			slog.String("workspace_id", op.key.WorkspaceID),
 			slog.String("dependency_id", op.dep.ID),
 			slog.Any("error", err),
 		)
 	}
-	s.cache.Invalidate(op.key.BotID)
+	s.cache.Invalidate(op.key.WorkspaceID)
 	return cause
 }
 
@@ -1527,7 +1593,7 @@ func (s *Service) restore(ctx context.Context, op *operation) {
 	_, err := s.store.FinishOperation(storeCtx, op.key, op.operationID, op.prior)
 	if err != nil {
 		s.logger.WarnContext(ctx, "restore dependency record after busy verdict",
-			slog.String("bot_id", op.key.BotID),
+			slog.String("workspace_id", op.key.WorkspaceID),
 			slog.String("dependency_id", op.dep.ID),
 			slog.Any("error", err),
 		)
@@ -1565,7 +1631,7 @@ func (s *Service) readStateBestEffort(ctx context.Context, op *operation) *State
 	op.previous = state
 	if err != nil {
 		s.logger.WarnContext(ctx, "ignoring unreadable dependency state",
-			slog.String("bot_id", op.key.BotID),
+			slog.String("workspace_id", op.key.WorkspaceID),
 			slog.String("dependency_id", op.dep.ID),
 			slog.Any("error", err),
 		)

@@ -114,7 +114,7 @@ func TestSlowOperationNotificationDoesNotBlockOtherBotLaunchers(t *testing.T) {
 		finished <- err
 	}()
 	<-blocked
-	f.svc.cache.Put("other-bot", Snapshot{Platform: f.platform, Observed: map[string]Observed{"agent-x": {DepID: "agent-x", Present: true, Candidates: []Candidate{toolkit("2.0.0")}}}})
+	f.svc.cache.Put(managedWorkspaceOf("other-bot"), Snapshot{Platform: f.platform, Observed: map[string]Observed{"agent-x": {DepID: "agent-x", Present: true, Candidates: []Candidate{toolkit("2.0.0")}}}})
 	resolved := make(chan error, 1)
 	go func() { _, err := f.svc.ResolveLauncher(f.ctx(), "other-bot", "agent-x"); resolved <- err }()
 	ctx, cancel := context.WithTimeout(t.Context(), time.Second)
