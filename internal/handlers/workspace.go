@@ -19,6 +19,12 @@ type containerWorkspace interface {
 	// that needs the capability; handlers say what they need, not which kind
 	// of computer they expect.
 	ManagedClient(ctx context.Context, botID string, capability workspace.Capability) (*bridge.Client, error)
+	// ResolveWorkspaceTarget resolves a client-facing target (empty: the
+	// request override, then the bot's primary) to the workspace behind it.
+	ResolveWorkspaceTarget(ctx context.Context, botID, targetID string) (workspace.ResolvedWorkspaceTarget, error)
+	// ConnectFor is the one connection entry, gated on the capability the
+	// operation needs.
+	ConnectFor(ctx context.Context, workspaceID string, capability workspace.Capability) (*bridge.Client, error)
 	BotDisplayEnabled(ctx context.Context, botID string) bool
 	DisplaySocketPath(ctx context.Context, botID string) string
 	EnsureRunning(ctx context.Context, botID string) error

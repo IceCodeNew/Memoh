@@ -237,6 +237,25 @@ func TestResolvedTargetsCarryCapabilities(t *testing.T) {
 	if err != nil || primary != env.rootClient {
 		t.Fatalf("MCPClient(primary) = %v, %v; want the user computer's connection", primary, err)
 	}
+
+	// A bot-keyed path that follows the current target — stdio MCP does —
+	// resolves the empty target to the user computer while it is primary and
+	// connects there with the files capability; a native override lands on
+	// the managed computer.
+	current, err := env.manager.ResolveWorkspaceTarget(ctx, remoteTestBotID, "")
+	if err != nil || current.WorkspaceID != remoteTestRuntimeID || !current.Primary {
+		t.Fatalf("ResolveWorkspaceTarget(current) = %+v, %v; want the user computer primary", current, err)
+	}
+	if client, err := env.manager.ConnectFor(ctx, current.WorkspaceID, CapabilityFiles); err != nil || client != env.rootClient {
+		t.Fatalf("ConnectFor(current primary, files) = %v, %v; want the user computer's connection", client, err)
+	}
+	overridden, err := env.manager.ResolveWorkspaceTarget(WithWorkspaceTarget(ctx, WorkspaceTargetNative), remoteTestBotID, "")
+	if err != nil || overridden.WorkspaceID != env.managedID {
+		t.Fatalf("ResolveWorkspaceTarget(native override) = %+v, %v; want the managed computer", overridden, err)
+	}
+	if client, err := env.manager.ConnectFor(ctx, overridden.WorkspaceID, CapabilityFiles); err != nil || client == nil || client == env.rootClient {
+		t.Fatalf("ConnectFor(managed, files) = %v, %v; want the managed computer's client", client, err)
+	}
 	listed, err := env.remote.ListMounts(ctx, remoteTestBotID)
 	if err != nil || len(listed) != 1 || !listed[0].Capabilities.Has(CapabilityFiles) || listed[0].Capabilities.Has(CapabilityDisplay) {
 		t.Fatalf("ListMounts = %+v, %v; want one files-only target", listed, err)
