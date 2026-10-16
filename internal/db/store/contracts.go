@@ -38,12 +38,16 @@ type CreateUserRuntimeInput struct {
 
 // UserRuntimeAttach runs inside the transaction that inserts a runtime, with
 // the transaction-scoped Queries, so companion rows (the runtime's user
-// workspace) commit with the credential or not at all.
+// workspace) commit with the credential or not at all. The record lives in
+// user_computers and is keyed by the user workspace it shares its id with.
 type UserRuntimeAttach func(ctx context.Context, q Queries, runtime UserRuntimeRecord) error
 
 type UserRuntimeStore interface {
 	// CreateUserRuntime inserts the credential row and, when attach is not
-	// nil, runs it in the same transaction.
+	// nil, runs it in the same transaction. The row references the user
+	// workspace it shares its id with (checked at commit), so a caller that
+	// passes no attach must create that workspace itself before the
+	// transaction ends.
 	CreateUserRuntime(ctx context.Context, input CreateUserRuntimeInput, attach UserRuntimeAttach) (UserRuntimeRecord, error)
 	GetUserRuntimeByAPIToken(ctx context.Context, apiToken string) (UserRuntimeRecord, error)
 	ActivateUserRuntime(ctx context.Context, runtimeID, apiToken string) (UserRuntimeRecord, error)
@@ -94,7 +98,7 @@ type BotRemoteRuntimeBindingStore interface {
 
 // Workspace kinds. A managed workspace is the one the server provisions for
 // a bot; a user workspace is a machine paired through Remote Runtime and
-// shares the user_runtimes id.
+// shares the user_computers id.
 const (
 	WorkspaceKindManaged = "managed"
 	WorkspaceKindUser    = "user"
@@ -158,6 +162,12 @@ type BotWorkspaceBindingStore interface {
 	ListBotWorkspaceBindingsByBot(ctx context.Context, botID string) ([]BotWorkspaceBindingRecord, error)
 	ListBotWorkspaceBindingsByWorkspace(ctx context.Context, workspaceID string) ([]BotWorkspaceBindingRecord, error)
 	GetPrimaryBotWorkspaceBinding(ctx context.Context, botID string) (BotWorkspaceBindingRecord, error)
+	// GetBotWorkspaceBindingByWorkspace returns the bot's binding to one
+	// workspace.
+	GetBotWorkspaceBindingByWorkspace(ctx context.Context, botID, workspaceID string) (BotWorkspaceBindingRecord, error)
+	// GetBotManagedWorkspaceBinding returns the binding behind the bot's
+	// managed computer (its first managed binding).
+	GetBotManagedWorkspaceBinding(ctx context.Context, botID string) (BotWorkspaceBindingRecord, error)
 	// SetPrimaryBotWorkspaceBinding clears the bot's current primary and makes
 	// bindingID primary in one transaction.
 	SetPrimaryBotWorkspaceBinding(ctx context.Context, botID, bindingID string) error
@@ -168,16 +178,18 @@ type BotWorkspaceBindingStore interface {
 	DeleteBotWorkspaceBindingsByWorkspace(ctx context.Context, workspaceID string) (int64, error)
 }
 
-// BotWorkdirRecord is a named per-bot working directory: a workspace target
-// (native, or a remote runtime binding) plus an absolute directory path.
-// RemoteBindingID is empty for native workdirs. ArchivedAt is zero while the
-// workdir is live.
+// BotWorkdirRecord is a named per-bot working directory: the workspace it
+// lives on plus an absolute directory path. WorkspaceKind and BindingID are
+// read alongside (the workspace's kind, the bot's binding to it) so the
+// client-facing target address can be derived without a second lookup.
+// ArchivedAt is zero while the workdir is live.
 type BotWorkdirRecord struct {
 	ID              string
 	BotID           string
 	Name            string
-	TargetKind      string
-	RemoteBindingID string
+	WorkspaceID     string
+	WorkspaceKind   string
+	BindingID       string
 	Path            string
 	CreatedByUserID string
 	ArchivedAt      time.Time
@@ -185,11 +197,11 @@ type BotWorkdirRecord struct {
 	UpdatedAt       time.Time
 }
 
+// CreateBotWorkdirInput creates a workdir on a workspace the bot is bound to.
 type CreateBotWorkdirInput struct {
 	BotID           string
 	Name            string
-	TargetKind      string
-	RemoteBindingID string
+	WorkspaceID     string
 	Path            string
 	CreatedByUserID string
 }

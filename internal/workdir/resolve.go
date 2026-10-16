@@ -7,7 +7,6 @@ import (
 
 	"github.com/felinics/memoh/internal/db"
 	dbstore "github.com/felinics/memoh/internal/db/store"
-	"github.com/felinics/memoh/internal/workspace"
 )
 
 // ResolveForSession resolves a session's workdir binding to the target it
@@ -34,14 +33,12 @@ func (s *Service) ResolveForSession(ctx context.Context, botID, workdirID string
 }
 
 func resolvedFromRecord(record dbstore.BotWorkdirRecord) Resolved {
-	targetID := workspace.WorkspaceTargetNative
-	if record.TargetKind == TargetKindRemote {
-		targetID = record.RemoteBindingID
-	}
+	kind, targetID := targetAddress(record)
 	return Resolved{
-		WorkdirID: record.ID,
-		TargetID:  targetID,
-		Kind:      record.TargetKind,
-		WorkDir:   record.Path,
+		WorkdirID:   record.ID,
+		TargetID:    targetID,
+		Kind:        kind,
+		WorkspaceID: record.WorkspaceID,
+		WorkDir:     record.Path,
 	}
 }

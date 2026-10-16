@@ -1,11 +1,11 @@
--- name: CreateUserRuntime :one
-INSERT INTO user_runtimes (user_id, name, api_token)
+-- name: CreateUserComputer :one
+INSERT INTO user_computers (user_id, name, api_token)
 VALUES (sqlc.arg(user_id), sqlc.arg(name), sqlc.arg(api_token))
 RETURNING *;
 
--- name: GetUserRuntimeByAPIToken :one
+-- name: GetUserComputerByAPIToken :one
 SELECT runtime.*
-FROM user_runtimes runtime
+FROM user_computers runtime
 JOIN team_members owner_membership
   ON owner_membership.team_id = public.memoh_current_team_id()
  AND owner_membership.user_id = runtime.user_id
@@ -16,10 +16,10 @@ WHERE runtime.team_id = public.memoh_current_team_id()
   AND runtime.revoked_at IS NULL
   AND (runtime.activated_at IS NOT NULL OR runtime.pending_expires_at > now());
 
--- name: ActivateUserRuntime :one
+-- name: ActivateUserComputer :one
 -- The first ready connection consumes the short-lived pending state. Existing
 -- activated credentials remain reusable for later reconnects.
-UPDATE user_runtimes runtime
+UPDATE user_computers runtime
 SET activated_at = COALESCE(runtime.activated_at, now()),
     pending_expires_at = NULL,
     updated_at = CASE WHEN runtime.activated_at IS NULL THEN now() ELSE runtime.updated_at END
@@ -36,11 +36,11 @@ WHERE runtime.team_id = public.memoh_current_team_id()
   AND owner.is_active = TRUE
 RETURNING runtime.*;
 
--- name: ExpirePendingUserRuntimes :exec
+-- name: ExpirePendingUserComputers :exec
 -- Expired attempts can no longer authenticate. Mark them revoked and remove
 -- any defensive direct-API bindings so they release names and grant rows too.
 WITH expired AS (
-  UPDATE user_runtimes
+  UPDATE user_computers
   SET revoked_at = now(), updated_at = now()
   WHERE team_id = public.memoh_current_team_id()
     AND user_id = sqlc.arg(user_id)
@@ -54,24 +54,24 @@ USING expired
 WHERE binding.team_id = public.memoh_current_team_id()
   AND binding.workspace_id = expired.id;
 
--- name: ListUserRuntimes :many
-SELECT * FROM user_runtimes
+-- name: ListUserComputers :many
+SELECT * FROM user_computers
 WHERE team_id = public.memoh_current_team_id()
   AND user_id = sqlc.arg(user_id) AND revoked_at IS NULL
 ORDER BY created_at ASC, id ASC;
 
--- name: RevokeUserRuntime :one
-UPDATE user_runtimes
+-- name: RevokeUserComputer :one
+UPDATE user_computers
 SET revoked_at = now(), updated_at = now()
 WHERE team_id = public.memoh_current_team_id()
   AND id = sqlc.arg(id) AND user_id = sqlc.arg(user_id) AND revoked_at IS NULL
 RETURNING *;
 
--- name: BackfillUserRuntimeName :execrows
+-- name: BackfillUserComputerName :execrows
 -- Fills the display name from the connecting machine, but ONLY while the row
 -- still carries its creation-time default (or an empty name): a user-chosen
 -- name is never overwritten by a later handshake.
-UPDATE user_runtimes
+UPDATE user_computers
 SET name = sqlc.arg(name), updated_at = now()
 WHERE team_id = public.memoh_current_team_id()
   AND id = sqlc.arg(id)
@@ -80,14 +80,14 @@ WHERE team_id = public.memoh_current_team_id()
   AND (name = '' OR name = sqlc.arg(default_name));
 
 -- Remote mounts are bot_workspace_bindings whose workspace has kind 'user';
--- that workspace shares the user_runtimes id, so runtime_id below is the
+-- that workspace shares the user_computers id, so runtime_id below is the
 -- binding's workspace_id.
 
 -- name: CreateOrUpdateBotRemoteRuntimeMount :one
 INSERT INTO bot_workspace_bindings (bot_id, workspace_id)
 SELECT b.id, ws.id
 FROM bots b
-JOIN user_runtimes r
+JOIN user_computers r
   ON r.id = sqlc.arg(runtime_id)
  AND r.team_id = public.memoh_current_team_id()
  AND r.user_id = b.owner_user_id
@@ -123,7 +123,7 @@ SELECT
   bot.owner_user_id AS bot_owner_user_id
 FROM bot_workspace_bindings binding
 JOIN workspaces ws ON ws.id = binding.workspace_id AND ws.team_id = public.memoh_current_team_id() AND ws.kind = 'user'
-JOIN user_runtimes runtime ON runtime.id = ws.id AND runtime.team_id = public.memoh_current_team_id()
+JOIN user_computers runtime ON runtime.id = ws.id AND runtime.team_id = public.memoh_current_team_id()
 JOIN bots bot ON bot.id = binding.bot_id AND bot.team_id = public.memoh_current_team_id()
 JOIN team_members owner_membership
   ON owner_membership.team_id = public.memoh_current_team_id()
@@ -149,7 +149,7 @@ SELECT
   bot.owner_user_id AS bot_owner_user_id
 FROM bot_workspace_bindings binding
 JOIN workspaces ws ON ws.id = binding.workspace_id AND ws.team_id = public.memoh_current_team_id() AND ws.kind = 'user'
-JOIN user_runtimes runtime ON runtime.id = ws.id AND runtime.team_id = public.memoh_current_team_id()
+JOIN user_computers runtime ON runtime.id = ws.id AND runtime.team_id = public.memoh_current_team_id()
 JOIN bots bot ON bot.id = binding.bot_id AND bot.team_id = public.memoh_current_team_id()
 JOIN team_members owner_membership
   ON owner_membership.team_id = public.memoh_current_team_id()
@@ -176,7 +176,7 @@ SELECT
   bot.owner_user_id AS bot_owner_user_id
 FROM bot_workspace_bindings binding
 JOIN workspaces ws ON ws.id = binding.workspace_id AND ws.team_id = public.memoh_current_team_id() AND ws.kind = 'user'
-JOIN user_runtimes runtime ON runtime.id = ws.id AND runtime.team_id = public.memoh_current_team_id()
+JOIN user_computers runtime ON runtime.id = ws.id AND runtime.team_id = public.memoh_current_team_id()
 JOIN bots bot ON bot.id = binding.bot_id AND bot.team_id = public.memoh_current_team_id()
 JOIN team_members owner_membership
   ON owner_membership.team_id = public.memoh_current_team_id()
@@ -199,7 +199,7 @@ SELECT
 FROM bot_workspace_bindings binding
 JOIN workspaces ws ON ws.id = binding.workspace_id AND ws.team_id = public.memoh_current_team_id() AND ws.kind = 'user'
 JOIN bots bot ON bot.id = binding.bot_id AND bot.team_id = public.memoh_current_team_id()
-JOIN user_runtimes runtime ON runtime.id = ws.id AND runtime.team_id = public.memoh_current_team_id()
+JOIN user_computers runtime ON runtime.id = ws.id AND runtime.team_id = public.memoh_current_team_id()
 WHERE binding.team_id = public.memoh_current_team_id()
   AND bot.owner_user_id = sqlc.arg(owner_user_id)
   AND runtime.revoked_at IS NULL

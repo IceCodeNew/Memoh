@@ -34,6 +34,9 @@ type SessionContext struct {
 	WorkspaceTargetID   string
 	WorkspaceTargetKind string
 	WorkspaceTargetName string
+	// WorkspaceID is the workspace behind WorkspaceTargetID: the key the
+	// execution location is persisted and compared by.
+	WorkspaceID string
 	// WorkdirPath is the session's immutable working directory, resolved
 	// once per run from the session's workdir binding.
 	WorkdirPath string

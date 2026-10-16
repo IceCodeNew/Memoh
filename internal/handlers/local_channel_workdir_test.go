@@ -55,9 +55,9 @@ func TestLocalChannelWSFirstSendBindsRequestedWorkdir(t *testing.T) {
 		foreignWorkdirID = "55555555-5555-5555-5555-555555555555"
 	)
 	workdirs := workdir.NewService(ownedWorkdirStore{records: []dbstore.BotWorkdirRecord{
-		{ID: activeWorkdirID, BotID: botID, TargetKind: workdir.TargetKindNative, Path: "/data/project"},
-		{ID: archivedWorkdir, BotID: botID, TargetKind: workdir.TargetKindNative, Path: "/data/old", ArchivedAt: time.Now()},
-		{ID: foreignWorkdirID, BotID: otherBotID, TargetKind: workdir.TargetKindNative, Path: "/data/theirs"},
+		{ID: activeWorkdirID, BotID: botID, WorkspaceID: "ws-managed", WorkspaceKind: dbstore.WorkspaceKindManaged, Path: "/data/project"},
+		{ID: archivedWorkdir, BotID: botID, WorkspaceID: "ws-managed", WorkspaceKind: dbstore.WorkspaceKindManaged, Path: "/data/old", ArchivedAt: time.Now()},
+		{ID: foreignWorkdirID, BotID: otherBotID, WorkspaceID: "ws-theirs", WorkspaceKind: dbstore.WorkspaceKindManaged, Path: "/data/theirs"},
 	}}, nil)
 
 	tests := []struct {

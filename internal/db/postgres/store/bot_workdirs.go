@@ -15,18 +15,23 @@ func (s *Store) CreateWorkdir(ctx context.Context, input dbstore.CreateBotWorkdi
 	if err != nil {
 		return dbstore.BotWorkdirRecord{}, err
 	}
-	row, err := s.queries.CreateBotWorkdir(ctx, dbsqlc.CreateBotWorkdirParams{
+	workspaceID, err := db.ParseUUID(input.WorkspaceID)
+	if err != nil {
+		return dbstore.BotWorkdirRecord{}, err
+	}
+	id, err := s.queries.CreateBotWorkdir(ctx, dbsqlc.CreateBotWorkdirParams{
 		BotID:           botID,
 		Name:            input.Name,
-		TargetKind:      input.TargetKind,
-		RemoteBindingID: db.ParseUUIDOrEmpty(input.RemoteBindingID),
+		WorkspaceID:     workspaceID,
 		Path:            input.Path,
 		CreatedByUserID: db.ParseUUIDOrEmpty(input.CreatedByUserID),
 	})
 	if err != nil {
 		return dbstore.BotWorkdirRecord{}, mapQueryErr(err)
 	}
-	return botWorkdirRecord(row), nil
+	// The insert returns the bare row; the record carries the workspace kind
+	// and binding id the service derives the target address from.
+	return s.GetWorkdir(ctx, input.BotID, id.String())
 }
 
 func (s *Store) ListWorkdirs(ctx context.Context, botID string, includeArchived bool) ([]dbstore.BotWorkdirRecord, error) {
@@ -43,7 +48,7 @@ func (s *Store) ListWorkdirs(ctx context.Context, botID string, includeArchived 
 	}
 	items := make([]dbstore.BotWorkdirRecord, 0, len(rows))
 	for _, row := range rows {
-		items = append(items, botWorkdirRecord(row))
+		items = append(items, botWorkdirRecord(dbsqlc.GetBotWorkdirRow(row)))
 	}
 	return items, nil
 }
@@ -68,15 +73,14 @@ func (s *Store) RenameWorkdir(ctx context.Context, botID, workdirID, name string
 	if err != nil {
 		return dbstore.BotWorkdirRecord{}, err
 	}
-	row, err := s.queries.RenameBotWorkdir(ctx, dbsqlc.RenameBotWorkdirParams{
+	if _, err := s.queries.RenameBotWorkdir(ctx, dbsqlc.RenameBotWorkdirParams{
 		BotID:     botUUID,
 		WorkdirID: workdirUUID,
 		Name:      name,
-	})
-	if err != nil {
+	}); err != nil {
 		return dbstore.BotWorkdirRecord{}, mapQueryErr(err)
 	}
-	return botWorkdirRecord(row), nil
+	return s.GetWorkdir(ctx, botID, workdirID)
 }
 
 func (s *Store) ArchiveWorkdir(ctx context.Context, botID, workdirID string) error {
@@ -100,19 +104,20 @@ func parseBotWorkdirIDs(botID, workdirID string) (botUUID, workdirUUID pgtype.UU
 	return botUUID, workdirUUID, err
 }
 
-func botWorkdirRecord(row dbsqlc.BotWorkdir) dbstore.BotWorkdirRecord {
+func botWorkdirRecord(row dbsqlc.GetBotWorkdirRow) dbstore.BotWorkdirRecord {
 	record := dbstore.BotWorkdirRecord{
-		ID:         row.ID.String(),
-		BotID:      row.BotID.String(),
-		Name:       row.Name,
-		TargetKind: row.TargetKind,
-		Path:       row.Path,
-		ArchivedAt: db.TimeFromPg(row.ArchivedAt),
-		CreatedAt:  db.TimeFromPg(row.CreatedAt),
-		UpdatedAt:  db.TimeFromPg(row.UpdatedAt),
+		ID:            row.ID.String(),
+		BotID:         row.BotID.String(),
+		Name:          row.Name,
+		WorkspaceID:   row.WorkspaceID.String(),
+		WorkspaceKind: row.WorkspaceKind,
+		Path:          row.Path,
+		ArchivedAt:    db.TimeFromPg(row.ArchivedAt),
+		CreatedAt:     db.TimeFromPg(row.CreatedAt),
+		UpdatedAt:     db.TimeFromPg(row.UpdatedAt),
 	}
-	if row.RemoteBindingID.Valid {
-		record.RemoteBindingID = row.RemoteBindingID.String()
+	if row.BindingID.Valid {
+		record.BindingID = row.BindingID.String()
 	}
 	if row.CreatedByUserID.Valid {
 		record.CreatedByUserID = row.CreatedByUserID.String()

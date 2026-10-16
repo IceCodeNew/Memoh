@@ -453,8 +453,7 @@ type BotWorkdir struct {
 	TeamID          pgtype.UUID        `json:"team_id"`
 	BotID           pgtype.UUID        `json:"bot_id"`
 	Name            string             `json:"name"`
-	TargetKind      string             `json:"target_kind"`
-	RemoteBindingID pgtype.UUID        `json:"remote_binding_id"`
+	WorkspaceID     pgtype.UUID        `json:"workspace_id"`
 	Path            string             `json:"path"`
 	CreatedByUserID pgtype.UUID        `json:"created_by_user_id"`
 	ArchivedAt      pgtype.Timestamptz `json:"archived_at"`
@@ -953,7 +952,7 @@ type ToolApprovalRequest struct {
 	SessionID                    pgtype.UUID        `json:"session_id"`
 	RouteID                      pgtype.UUID        `json:"route_id"`
 	ChannelIdentityID            pgtype.UUID        `json:"channel_identity_id"`
-	WorkspaceTargetID            string             `json:"workspace_target_id"`
+	WorkspaceID                  pgtype.UUID        `json:"workspace_id"`
 	ToolCallID                   string             `json:"tool_call_id"`
 	ToolName                     string             `json:"tool_name"`
 	Operation                    string             `json:"operation"`
@@ -1037,13 +1036,26 @@ type UserChannelIdentityBinding struct {
 	TeamID            pgtype.UUID        `json:"team_id"`
 }
 
+type UserComputer struct {
+	ID               pgtype.UUID        `json:"id"`
+	UserID           pgtype.UUID        `json:"user_id"`
+	Name             string             `json:"name"`
+	ApiToken         string             `json:"api_token"`
+	RevokedAt        pgtype.Timestamptz `json:"revoked_at"`
+	ActivatedAt      pgtype.Timestamptz `json:"activated_at"`
+	PendingExpiresAt pgtype.Timestamptz `json:"pending_expires_at"`
+	CreatedAt        pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt        pgtype.Timestamptz `json:"updated_at"`
+	TeamID           pgtype.UUID        `json:"team_id"`
+}
+
 type UserInputRequest struct {
 	ID                           pgtype.UUID        `json:"id"`
 	BotID                        pgtype.UUID        `json:"bot_id"`
 	SessionID                    pgtype.UUID        `json:"session_id"`
 	RouteID                      pgtype.UUID        `json:"route_id"`
 	ChannelIdentityID            pgtype.UUID        `json:"channel_identity_id"`
-	WorkspaceTargetID            string             `json:"workspace_target_id"`
+	WorkspaceID                  pgtype.UUID        `json:"workspace_id"`
 	ToolCallID                   string             `json:"tool_call_id"`
 	ToolName                     string             `json:"tool_name"`
 	ShortID                      int32              `json:"short_id"`
@@ -1088,19 +1100,6 @@ type UserProviderOauthToken struct {
 	State            string             `json:"state"`
 	PkceCodeVerifier string             `json:"pkce_code_verifier"`
 	Metadata         []byte             `json:"metadata"`
-	CreatedAt        pgtype.Timestamptz `json:"created_at"`
-	UpdatedAt        pgtype.Timestamptz `json:"updated_at"`
-	TeamID           pgtype.UUID        `json:"team_id"`
-}
-
-type UserRuntime struct {
-	ID               pgtype.UUID        `json:"id"`
-	UserID           pgtype.UUID        `json:"user_id"`
-	Name             string             `json:"name"`
-	ApiToken         string             `json:"api_token"`
-	RevokedAt        pgtype.Timestamptz `json:"revoked_at"`
-	ActivatedAt      pgtype.Timestamptz `json:"activated_at"`
-	PendingExpiresAt pgtype.Timestamptz `json:"pending_expires_at"`
 	CreatedAt        pgtype.Timestamptz `json:"created_at"`
 	UpdatedAt        pgtype.Timestamptz `json:"updated_at"`
 	TeamID           pgtype.UUID        `json:"team_id"`

@@ -41,7 +41,25 @@ type Service struct {
 	reasoningResolver ReasoningOptionsResolver
 	botAgents         *botagents.Service
 	builtinMemory     BuiltinMemoryResolver
+	managedApproval   ManagedWorkspaceApprovalWriter
 	logger            *slog.Logger
+}
+
+// ManagedWorkspaceApprovalWriter mirrors the bot's native tool approval
+// policy onto its managed workspace binding, where the native target reads
+// it. workspace.BindingService implements it; db.ErrNoManagedWorkspaceBinding
+// means the bot has no managed computer and nothing to mirror onto.
+type ManagedWorkspaceApprovalWriter interface {
+	UpdateManagedToolApproval(ctx context.Context, botID string, config ToolApprovalConfig) error
+}
+
+// SetManagedWorkspaceApproval wires the managed-binding mirror of the native
+// tool approval policy (setter injection: the binding service is built from
+// stores this service does not otherwise depend on).
+func (s *Service) SetManagedWorkspaceApproval(writer ManagedWorkspaceApprovalWriter) {
+	if s != nil {
+		s.managedApproval = writer
+	}
 }
 
 type defaultAgentTransactionalQueries interface {
@@ -513,6 +531,15 @@ func (s *Service) UpsertBot(ctx context.Context, botID string, req UpsertRequest
 	updated, err := s.upsertBotSettings(ctx, upsertParams)
 	if err != nil {
 		return Settings{}, rollbackNetworkChange(err)
+	}
+	// The native target reads its tool approval policy from the bot's managed
+	// workspace binding; bots.tool_approval_config is written alongside for
+	// one more version. A bot without a managed computer has no binding to
+	// mirror onto.
+	if req.ToolApprovalConfig != nil && s.managedApproval != nil {
+		if err := s.managedApproval.UpdateManagedToolApproval(ctx, botID, current.ToolApprovalConfig); err != nil && !errors.Is(err, db.ErrNoManagedWorkspaceBinding) {
+			return Settings{}, fmt.Errorf("mirror tool approval onto managed workspace: %w", err)
+		}
 	}
 	createdByUserID := ""
 	if botRow.OwnerUserID.Valid {

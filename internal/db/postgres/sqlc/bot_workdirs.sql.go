@@ -34,61 +34,62 @@ func (q *Queries) ArchiveBotWorkdir(ctx context.Context, arg ArchiveBotWorkdirPa
 }
 
 const createBotWorkdir = `-- name: CreateBotWorkdir :one
+
 INSERT INTO bot_workdirs (
-  bot_id, name, target_kind, remote_binding_id, path, created_by_user_id
+  bot_id, name, workspace_id, path, created_by_user_id
 )
 VALUES (
   $1,
   $2,
   $3,
-  $4::uuid,
-  $5,
-  $6::uuid
+  $4,
+  $5::uuid
 )
-RETURNING id, team_id, bot_id, name, target_kind, remote_binding_id, path, created_by_user_id, archived_at, created_at, updated_at
+RETURNING id
 `
 
 type CreateBotWorkdirParams struct {
 	BotID           pgtype.UUID `json:"bot_id"`
 	Name            string      `json:"name"`
-	TargetKind      string      `json:"target_kind"`
-	RemoteBindingID pgtype.UUID `json:"remote_binding_id"`
+	WorkspaceID     pgtype.UUID `json:"workspace_id"`
 	Path            string      `json:"path"`
 	CreatedByUserID pgtype.UUID `json:"created_by_user_id"`
 }
 
-func (q *Queries) CreateBotWorkdir(ctx context.Context, arg CreateBotWorkdirParams) (BotWorkdir, error) {
+// A workdir is stored by the workspace it lives on. Every read joins the
+// workspace's kind and the bot's binding to it so the service can derive the
+// client-facing target address ("native" for a managed computer, the binding
+// id for a user's computer) without a second lookup. The binding always
+// exists: bot_workdirs_binding_fkey hangs the row off it.
+func (q *Queries) CreateBotWorkdir(ctx context.Context, arg CreateBotWorkdirParams) (pgtype.UUID, error) {
 	row := q.db.QueryRow(ctx, createBotWorkdir,
 		arg.BotID,
 		arg.Name,
-		arg.TargetKind,
-		arg.RemoteBindingID,
+		arg.WorkspaceID,
 		arg.Path,
 		arg.CreatedByUserID,
 	)
-	var i BotWorkdir
-	err := row.Scan(
-		&i.ID,
-		&i.TeamID,
-		&i.BotID,
-		&i.Name,
-		&i.TargetKind,
-		&i.RemoteBindingID,
-		&i.Path,
-		&i.CreatedByUserID,
-		&i.ArchivedAt,
-		&i.CreatedAt,
-		&i.UpdatedAt,
-	)
-	return i, err
+	var id pgtype.UUID
+	err := row.Scan(&id)
+	return id, err
 }
 
 const getBotWorkdir = `-- name: GetBotWorkdir :one
-SELECT id, team_id, bot_id, name, target_kind, remote_binding_id, path, created_by_user_id, archived_at, created_at, updated_at
-FROM bot_workdirs
-WHERE team_id = public.memoh_current_team_id()
-  AND bot_id = $1
-  AND id = $2
+SELECT
+  d.id, d.team_id, d.bot_id, d.name, d.workspace_id, d.path, d.created_by_user_id, d.archived_at, d.created_at, d.updated_at,
+  w.kind AS workspace_kind,
+  binding.id AS binding_id
+FROM bot_workdirs d
+JOIN workspaces w
+  ON w.team_id = d.team_id
+ AND w.id = d.workspace_id
+JOIN bot_workspace_bindings binding
+  ON binding.team_id = d.team_id
+ AND binding.bot_id = d.bot_id
+ AND binding.workspace_id = d.workspace_id
+WHERE d.team_id = public.memoh_current_team_id()
+  AND d.bot_id = $1
+  AND d.id = $2
 `
 
 type GetBotWorkdirParams struct {
@@ -96,35 +97,61 @@ type GetBotWorkdirParams struct {
 	WorkdirID pgtype.UUID `json:"workdir_id"`
 }
 
+type GetBotWorkdirRow struct {
+	ID              pgtype.UUID        `json:"id"`
+	TeamID          pgtype.UUID        `json:"team_id"`
+	BotID           pgtype.UUID        `json:"bot_id"`
+	Name            string             `json:"name"`
+	WorkspaceID     pgtype.UUID        `json:"workspace_id"`
+	Path            string             `json:"path"`
+	CreatedByUserID pgtype.UUID        `json:"created_by_user_id"`
+	ArchivedAt      pgtype.Timestamptz `json:"archived_at"`
+	CreatedAt       pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt       pgtype.Timestamptz `json:"updated_at"`
+	WorkspaceKind   string             `json:"workspace_kind"`
+	BindingID       pgtype.UUID        `json:"binding_id"`
+}
+
 // Archived rows are returned on purpose: sessions bound to an archived
 // workdir keep resolving their working directory; callers that must refuse
 // archived workdirs (session creation) check archived_at themselves.
-func (q *Queries) GetBotWorkdir(ctx context.Context, arg GetBotWorkdirParams) (BotWorkdir, error) {
+func (q *Queries) GetBotWorkdir(ctx context.Context, arg GetBotWorkdirParams) (GetBotWorkdirRow, error) {
 	row := q.db.QueryRow(ctx, getBotWorkdir, arg.BotID, arg.WorkdirID)
-	var i BotWorkdir
+	var i GetBotWorkdirRow
 	err := row.Scan(
 		&i.ID,
 		&i.TeamID,
 		&i.BotID,
 		&i.Name,
-		&i.TargetKind,
-		&i.RemoteBindingID,
+		&i.WorkspaceID,
 		&i.Path,
 		&i.CreatedByUserID,
 		&i.ArchivedAt,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.WorkspaceKind,
+		&i.BindingID,
 	)
 	return i, err
 }
 
 const listBotWorkdirs = `-- name: ListBotWorkdirs :many
-SELECT id, team_id, bot_id, name, target_kind, remote_binding_id, path, created_by_user_id, archived_at, created_at, updated_at
-FROM bot_workdirs
-WHERE team_id = public.memoh_current_team_id()
-  AND bot_id = $1
-  AND ($2::bool OR archived_at IS NULL)
-ORDER BY created_at ASC, id ASC
+SELECT
+  d.id, d.team_id, d.bot_id, d.name, d.workspace_id, d.path, d.created_by_user_id, d.archived_at, d.created_at, d.updated_at,
+  w.kind AS workspace_kind,
+  binding.id AS binding_id
+FROM bot_workdirs d
+JOIN workspaces w
+  ON w.team_id = d.team_id
+ AND w.id = d.workspace_id
+JOIN bot_workspace_bindings binding
+  ON binding.team_id = d.team_id
+ AND binding.bot_id = d.bot_id
+ AND binding.workspace_id = d.workspace_id
+WHERE d.team_id = public.memoh_current_team_id()
+  AND d.bot_id = $1
+  AND ($2::bool OR d.archived_at IS NULL)
+ORDER BY d.created_at ASC, d.id ASC
 `
 
 type ListBotWorkdirsParams struct {
@@ -132,27 +159,43 @@ type ListBotWorkdirsParams struct {
 	IncludeArchived bool        `json:"include_archived"`
 }
 
-func (q *Queries) ListBotWorkdirs(ctx context.Context, arg ListBotWorkdirsParams) ([]BotWorkdir, error) {
+type ListBotWorkdirsRow struct {
+	ID              pgtype.UUID        `json:"id"`
+	TeamID          pgtype.UUID        `json:"team_id"`
+	BotID           pgtype.UUID        `json:"bot_id"`
+	Name            string             `json:"name"`
+	WorkspaceID     pgtype.UUID        `json:"workspace_id"`
+	Path            string             `json:"path"`
+	CreatedByUserID pgtype.UUID        `json:"created_by_user_id"`
+	ArchivedAt      pgtype.Timestamptz `json:"archived_at"`
+	CreatedAt       pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt       pgtype.Timestamptz `json:"updated_at"`
+	WorkspaceKind   string             `json:"workspace_kind"`
+	BindingID       pgtype.UUID        `json:"binding_id"`
+}
+
+func (q *Queries) ListBotWorkdirs(ctx context.Context, arg ListBotWorkdirsParams) ([]ListBotWorkdirsRow, error) {
 	rows, err := q.db.Query(ctx, listBotWorkdirs, arg.BotID, arg.IncludeArchived)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	var items []BotWorkdir
+	var items []ListBotWorkdirsRow
 	for rows.Next() {
-		var i BotWorkdir
+		var i ListBotWorkdirsRow
 		if err := rows.Scan(
 			&i.ID,
 			&i.TeamID,
 			&i.BotID,
 			&i.Name,
-			&i.TargetKind,
-			&i.RemoteBindingID,
+			&i.WorkspaceID,
 			&i.Path,
 			&i.CreatedByUserID,
 			&i.ArchivedAt,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.WorkspaceKind,
+			&i.BindingID,
 		); err != nil {
 			return nil, err
 		}
@@ -171,7 +214,7 @@ WHERE team_id = public.memoh_current_team_id()
   AND bot_id = $2
   AND id = $3
   AND archived_at IS NULL
-RETURNING id, team_id, bot_id, name, target_kind, remote_binding_id, path, created_by_user_id, archived_at, created_at, updated_at
+RETURNING id
 `
 
 type RenameBotWorkdirParams struct {
@@ -180,21 +223,9 @@ type RenameBotWorkdirParams struct {
 	WorkdirID pgtype.UUID `json:"workdir_id"`
 }
 
-func (q *Queries) RenameBotWorkdir(ctx context.Context, arg RenameBotWorkdirParams) (BotWorkdir, error) {
+func (q *Queries) RenameBotWorkdir(ctx context.Context, arg RenameBotWorkdirParams) (pgtype.UUID, error) {
 	row := q.db.QueryRow(ctx, renameBotWorkdir, arg.Name, arg.BotID, arg.WorkdirID)
-	var i BotWorkdir
-	err := row.Scan(
-		&i.ID,
-		&i.TeamID,
-		&i.BotID,
-		&i.Name,
-		&i.TargetKind,
-		&i.RemoteBindingID,
-		&i.Path,
-		&i.CreatedByUserID,
-		&i.ArchivedAt,
-		&i.CreatedAt,
-		&i.UpdatedAt,
-	)
-	return i, err
+	var id pgtype.UUID
+	err := row.Scan(&id)
+	return id, err
 }

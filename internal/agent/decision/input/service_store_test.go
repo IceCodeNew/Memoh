@@ -48,6 +48,10 @@ type fakeUserInputQueries struct {
 	nextShort map[string]int32                  // session -> last issued short_id
 }
 
+// storeTestWorkspaceID is the workspace a request is raised on: the stored
+// key behind the request's client-facing target id.
+var storeTestWorkspaceID = pgtype.UUID{Bytes: [16]byte(uuid.MustParse("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa")), Valid: true}
+
 func newFakeUserInputQueries() *fakeUserInputQueries {
 	return &fakeUserInputQueries{
 		rows:      map[string]*sqlc.UserInputRequest{},
@@ -92,7 +96,7 @@ func (q *fakeUserInputQueries) CreateUserInputRequest(_ context.Context, arg sql
 		row := q.rows[id]
 		if !storeRowIsLivePending(row, now) || !storeFenceMatches(row.RuntimeFencingToken, arg.RuntimeFencingToken) ||
 			!bytes.Equal(row.InputJson, arg.InputJson) || !bytes.Equal(row.UiPayloadJson, arg.UiPayloadJson) ||
-			!bytes.Equal(row.ProviderMetadata, arg.ProviderMetadata) || row.WorkspaceTargetID != arg.WorkspaceTargetID {
+			!bytes.Equal(row.ProviderMetadata, arg.ProviderMetadata) || row.WorkspaceID != arg.WorkspaceID {
 			// ON CONFLICT DO UPDATE ... WHERE status='pending' matched no row.
 			return sqlc.UserInputRequest{}, pgx.ErrNoRows
 		}
@@ -112,7 +116,7 @@ func (q *fakeUserInputQueries) CreateUserInputRequest(_ context.Context, arg sql
 		SessionID:                    arg.SessionID,
 		RouteID:                      arg.RouteID,
 		ChannelIdentityID:            arg.ChannelIdentityID,
-		WorkspaceTargetID:            arg.WorkspaceTargetID,
+		WorkspaceID:                  arg.WorkspaceID,
 		ToolCallID:                   arg.ToolCallID,
 		ToolName:                     arg.ToolName,
 		ShortID:                      q.nextShort[sessionKey],
@@ -281,7 +285,7 @@ func TestFakeUserInputQueriesMatchesFencedSQLGuards(t *testing.T) {
 		row, err := queries.CreateUserInputRequest(context.Background(), sqlc.CreateUserInputRequestParams{
 			BotID:               botID,
 			SessionID:           sessionID,
-			WorkspaceTargetID:   "workspace-a",
+			WorkspaceID:         storeTestWorkspaceID,
 			ToolCallID:          callID,
 			ToolName:            ToolNameAskUser,
 			RuntimeFencingToken: pgtype.Int8{Int64: token, Valid: true},
@@ -299,7 +303,7 @@ func TestFakeUserInputQueriesMatchesFencedSQLGuards(t *testing.T) {
 	replayExpiry := time.Now().Add(time.Hour).Round(time.Microsecond)
 	requesterID := pgtype.UUID{Bytes: [16]byte(uuid.New()), Valid: true}
 	replay, err := queries.CreateUserInputRequest(context.Background(), sqlc.CreateUserInputRequestParams{
-		BotID: botID, SessionID: sessionID, WorkspaceTargetID: "workspace-a",
+		BotID: botID, SessionID: sessionID, WorkspaceID: storeTestWorkspaceID,
 		ToolCallID: "same-fence", ToolName: ToolNameAskUser,
 		RuntimeFencingToken: pgtype.Int8{Int64: 7, Valid: true},
 		InputJson:           []byte(`{"questions":[]}`), UiPayloadJson: []byte(`{"questions":[]}`), ProviderMetadata: []byte(`{}`),
@@ -320,7 +324,7 @@ func TestFakeUserInputQueriesMatchesFencedSQLGuards(t *testing.T) {
 	if _, err := queries.CreateUserInputRequest(context.Background(), sqlc.CreateUserInputRequestParams{
 		BotID:               botID,
 		SessionID:           sessionID,
-		WorkspaceTargetID:   "workspace-a",
+		WorkspaceID:         storeTestWorkspaceID,
 		ToolCallID:          "same-fence",
 		ToolName:            ToolNameAskUser,
 		RuntimeFencingToken: pgtype.Int8{Int64: 8, Valid: true},

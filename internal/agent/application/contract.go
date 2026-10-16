@@ -122,11 +122,14 @@ type ChatRequest struct {
 }
 
 // WorkspaceTarget is the immutable execution-location snapshot resolved for
-// one application request.
+// one application request. TargetID is the client-facing address ("native"
+// or a remote mount id); WorkspaceID is the workspace behind it and the key
+// stored state is compared and persisted by.
 type WorkspaceTarget struct {
-	TargetID string `json:"target_id"`
-	Kind     string `json:"kind"`
-	Name     string `json:"name"`
+	TargetID    string `json:"target_id"`
+	Kind        string `json:"kind"`
+	Name        string `json:"name"`
+	WorkspaceID string `json:"workspace_id,omitempty"`
 }
 
 // InjectedMessageRecord records where an injected message belongs in the

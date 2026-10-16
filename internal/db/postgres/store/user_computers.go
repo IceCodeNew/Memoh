@@ -15,7 +15,7 @@ func (s *Store) CreateUserRuntime(ctx context.Context, input dbstore.CreateUserR
 	}
 	var record dbstore.UserRuntimeRecord
 	err = s.inTx(ctx, func(queries *dbsqlc.Queries) error {
-		row, err := queries.CreateUserRuntime(ctx, dbsqlc.CreateUserRuntimeParams{
+		row, err := queries.CreateUserComputer(ctx, dbsqlc.CreateUserComputerParams{
 			UserID: userID, Name: input.Name, ApiToken: input.APIToken,
 		})
 		if err != nil {
@@ -34,7 +34,7 @@ func (s *Store) CreateUserRuntime(ctx context.Context, input dbstore.CreateUserR
 }
 
 func (s *Store) GetUserRuntimeByAPIToken(ctx context.Context, apiToken string) (dbstore.UserRuntimeRecord, error) {
-	row, err := s.queries.GetUserRuntimeByAPIToken(ctx, apiToken)
+	row, err := s.queries.GetUserComputerByAPIToken(ctx, apiToken)
 	if err != nil {
 		return dbstore.UserRuntimeRecord{}, mapQueryErr(err)
 	}
@@ -46,7 +46,7 @@ func (s *Store) ActivateUserRuntime(ctx context.Context, runtimeID, apiToken str
 	if err != nil {
 		return dbstore.UserRuntimeRecord{}, err
 	}
-	row, err := s.queries.ActivateUserRuntime(ctx, dbsqlc.ActivateUserRuntimeParams{ID: id, ApiToken: apiToken})
+	row, err := s.queries.ActivateUserComputer(ctx, dbsqlc.ActivateUserComputerParams{ID: id, ApiToken: apiToken})
 	if err != nil {
 		return dbstore.UserRuntimeRecord{}, mapQueryErr(err)
 	}
@@ -58,7 +58,7 @@ func (s *Store) ExpirePendingUserRuntimes(ctx context.Context, userID string) er
 	if err != nil {
 		return err
 	}
-	return mapQueryErr(s.queries.ExpirePendingUserRuntimes(ctx, id))
+	return mapQueryErr(s.queries.ExpirePendingUserComputers(ctx, id))
 }
 
 func (s *Store) ListUserRuntimes(ctx context.Context, userID string) ([]dbstore.UserRuntimeRecord, error) {
@@ -66,7 +66,7 @@ func (s *Store) ListUserRuntimes(ctx context.Context, userID string) ([]dbstore.
 	if err != nil {
 		return nil, err
 	}
-	rows, err := s.queries.ListUserRuntimes(ctx, id)
+	rows, err := s.queries.ListUserComputers(ctx, id)
 	if err != nil {
 		return nil, err
 	}
@@ -87,7 +87,7 @@ func (s *Store) RevokeUserRuntime(ctx context.Context, runtimeID, userID string)
 		return err
 	}
 	return s.inTx(ctx, func(queries *dbsqlc.Queries) error {
-		if _, err := queries.RevokeUserRuntime(ctx, dbsqlc.RevokeUserRuntimeParams{ID: id, UserID: ownerID}); err != nil {
+		if _, err := queries.RevokeUserComputer(ctx, dbsqlc.RevokeUserComputerParams{ID: id, UserID: ownerID}); err != nil {
 			return mapQueryErr(err)
 		}
 		// Cascade: dead mounts of the revoked runtime must not linger as
@@ -107,7 +107,7 @@ func (s *Store) BackfillUserRuntimeName(ctx context.Context, runtimeID, userID, 
 	if err != nil {
 		return false, err
 	}
-	rows, err := s.queries.BackfillUserRuntimeName(ctx, dbsqlc.BackfillUserRuntimeNameParams{
+	rows, err := s.queries.BackfillUserComputerName(ctx, dbsqlc.BackfillUserComputerNameParams{
 		ID: id, UserID: ownerID, Name: name, DefaultName: defaultName,
 	})
 	if err != nil {
@@ -116,7 +116,7 @@ func (s *Store) BackfillUserRuntimeName(ctx context.Context, runtimeID, userID, 
 	return rows > 0, nil
 }
 
-func userRuntimeRecord(row dbsqlc.UserRuntime) dbstore.UserRuntimeRecord {
+func userRuntimeRecord(row dbsqlc.UserComputer) dbstore.UserRuntimeRecord {
 	return dbstore.UserRuntimeRecord{
 		ID: row.ID.String(), TeamID: row.TeamID.String(), UserID: row.UserID.String(), Name: row.Name,
 		APIToken: row.ApiToken, ActivatedAt: db.TimeFromPg(row.ActivatedAt),

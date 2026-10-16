@@ -326,7 +326,7 @@ func TestWorkspaceBindingStoreRemoteMountsOverBindings(t *testing.T) {
 	if err != nil || workspace.Kind != dbstore.WorkspaceKindUser || workspace.OwnerUserID != appUserID {
 		t.Fatalf("user workspace = %+v err=%v, want kind user owned by %s", workspace, err, appUserID)
 	}
-	if _, err := pool.Exec(ctx, `UPDATE user_runtimes SET activated_at = now(), pending_expires_at = NULL WHERE id = $1`, runtime.ID); err != nil {
+	if _, err := pool.Exec(ctx, `UPDATE user_computers SET activated_at = now(), pending_expires_at = NULL WHERE id = $1`, runtime.ID); err != nil {
 		t.Fatalf("activate runtime: %v", err)
 	}
 

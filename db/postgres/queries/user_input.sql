@@ -31,7 +31,7 @@ INSERT INTO user_input_requests (
   turn_id,
   route_id,
   channel_identity_id,
-  workspace_target_id,
+  workspace_id,
   tool_call_id,
   tool_name,
   short_id,
@@ -51,7 +51,7 @@ INSERT INTO user_input_requests (
   runtime_scope.turn_id,
   sqlc.narg(route_id),
   sqlc.narg(channel_identity_id),
-  sqlc.arg(workspace_target_id),
+  sqlc.narg(workspace_id)::uuid,
   sqlc.arg(tool_call_id),
   sqlc.arg(tool_name),
   next_short_id.short_id,
@@ -81,7 +81,7 @@ WHERE user_input_requests.status = 'pending'
   AND user_input_requests.input_json = EXCLUDED.input_json
   AND user_input_requests.ui_payload_json = EXCLUDED.ui_payload_json
   AND user_input_requests.provider_metadata = EXCLUDED.provider_metadata
-  AND user_input_requests.workspace_target_id = EXCLUDED.workspace_target_id
+  AND user_input_requests.workspace_id IS NOT DISTINCT FROM EXCLUDED.workspace_id
   AND (user_input_requests.expires_at IS NULL OR user_input_requests.expires_at > now())
 RETURNING *;
 

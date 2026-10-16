@@ -404,16 +404,26 @@ func (s *Service) buildPersistInputs(ctx context.Context, req ChatRequest, messa
 	return persistInputs, nil
 }
 
+// workspaceTargetSnapshotMetadata is the stored form of a target snapshot:
+// the client-facing address plus, when known, the workspace behind it.
+func workspaceTargetSnapshotMetadata(target *WorkspaceTarget) map[string]any {
+	snapshot := map[string]any{
+		"target_id": strings.TrimSpace(target.TargetID),
+		"kind":      strings.TrimSpace(target.Kind),
+		"name":      strings.TrimSpace(target.Name),
+	}
+	if workspaceID := strings.TrimSpace(target.WorkspaceID); workspaceID != "" {
+		snapshot["workspace_id"] = workspaceID
+	}
+	return snapshot
+}
+
 func workspaceTargetMetadata(target *WorkspaceTarget) map[string]any {
 	if target == nil || strings.TrimSpace(target.TargetID) == "" {
 		return nil
 	}
 	return map[string]any{
-		"execution_location": map[string]any{
-			"target_id": strings.TrimSpace(target.TargetID),
-			"kind":      strings.TrimSpace(target.Kind),
-			"name":      strings.TrimSpace(target.Name),
-		},
+		"execution_location": workspaceTargetSnapshotMetadata(target),
 	}
 }
 
@@ -429,13 +439,12 @@ func (s *Service) persistSessionWorkspaceTarget(ctx context.Context, req ChatReq
 	for key, value := range sess.Metadata {
 		metadata[key] = value
 	}
+	// workspace_target_id and workspace_target.target_id keep the client-facing
+	// address (the web client restores its composer selection from them);
+	// workspace_target.workspace_id is the key the server compares by.
 	target := req.WorkspaceTarget
 	metadata["workspace_target_id"] = strings.TrimSpace(target.TargetID)
-	metadata["workspace_target"] = map[string]any{
-		"target_id": strings.TrimSpace(target.TargetID),
-		"kind":      strings.TrimSpace(target.Kind),
-		"name":      strings.TrimSpace(target.Name),
-	}
+	metadata["workspace_target"] = workspaceTargetSnapshotMetadata(target)
 	_, err = s.sessionService.UpdateMetadata(ctx, req.ThreadID, metadata)
 	return err
 }

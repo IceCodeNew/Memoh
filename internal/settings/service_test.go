@@ -11,6 +11,7 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 
 	"github.com/felinics/memoh/internal/botagents"
+	"github.com/felinics/memoh/internal/db"
 	"github.com/felinics/memoh/internal/db/postgres/sqlc"
 	dbstore "github.com/felinics/memoh/internal/db/store"
 	"github.com/felinics/memoh/internal/reasoning"
@@ -788,5 +789,58 @@ func TestReasoningEffortAllowsFullModelLadder(t *testing.T) {
 		if got.ReasoningEffort != effort {
 			t.Fatalf("normalizeBotSetting effort = %q, want %q", got.ReasoningEffort, effort)
 		}
+	}
+}
+
+type recordingManagedApproval struct {
+	calls  int
+	botID  string
+	config ToolApprovalConfig
+	err    error
+}
+
+func (w *recordingManagedApproval) UpdateManagedToolApproval(_ context.Context, botID string, config ToolApprovalConfig) error {
+	w.calls++
+	w.botID = botID
+	w.config = config
+	return w.err
+}
+
+// The native tool approval policy is read from the managed workspace
+// binding: a settings write mirrors it there, a write that leaves the policy
+// alone does not touch the binding, and a bot without a managed computer is
+// not an error.
+func TestUpsertBotMirrorsToolApprovalOntoManagedBinding(t *testing.T) {
+	t.Parallel()
+
+	botID := pgtype.UUID{Bytes: uuid.MustParse("00000000-0000-0000-0000-000000000760"), Valid: true}
+	botIDText := uuid.UUID(botID.Bytes).String()
+	config := DefaultToolApprovalConfig()
+	config.Exec.Mode = ToolApprovalDeny
+
+	writer := &recordingManagedApproval{}
+	service := NewService(slog.Default(), &reasoningPolicyQueries{botID: botID}, nil, nil)
+	service.SetManagedWorkspaceApproval(writer)
+	if _, err := service.UpsertBot(context.Background(), botIDText, UpsertRequest{ToolApprovalConfig: &config}); err != nil {
+		t.Fatal(err)
+	}
+	if writer.calls != 1 || writer.botID != botIDText || writer.config.Exec.Mode != ToolApprovalDeny {
+		t.Fatalf("managed binding write = %+v, want one call with the deny exec policy", writer)
+	}
+
+	if _, err := service.UpsertBot(context.Background(), botIDText, UpsertRequest{CommandUILanguage: "en"}); err != nil {
+		t.Fatal(err)
+	}
+	if writer.calls != 1 {
+		t.Fatalf("unrelated write touched the managed binding: %d calls", writer.calls)
+	}
+
+	writer.err = db.ErrNoManagedWorkspaceBinding
+	if _, err := service.UpsertBot(context.Background(), botIDText, UpsertRequest{ToolApprovalConfig: &config}); err != nil {
+		t.Fatalf("bot without managed computer: %v", err)
+	}
+	writer.err = errors.New("binding store down")
+	if _, err := service.UpsertBot(context.Background(), botIDText, UpsertRequest{ToolApprovalConfig: &config}); err == nil {
+		t.Fatal("a failed mirror must surface: the binding would keep a stale policy")
 	}
 }

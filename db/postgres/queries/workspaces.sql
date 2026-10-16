@@ -1,7 +1,7 @@
 -- workspaces: computers a team knows about (managed per bot, or a user's own
 -- machine paired through Remote Runtime). bot_workspace_bindings: which bots
 -- may use which workspace, one primary per bot. Remote-mount compatibility
--- queries that join user_runtimes live in user_runtimes.sql.
+-- queries that join user_computers live in user_computers.sql.
 
 -- name: CreateWorkspace :one
 -- A user workspace reuses its runtime id; managed workspaces take a new one.
@@ -170,6 +170,28 @@ JOIN bot_workspace_bindings binding
   ON binding.team_id = w.team_id
  AND binding.workspace_id = w.id
 WHERE w.team_id = public.memoh_current_team_id()
+  AND binding.bot_id = sqlc.arg(bot_id)
+  AND w.kind = 'managed'
+ORDER BY binding.created_at ASC, binding.id ASC
+LIMIT 1;
+
+-- name: GetBotWorkspaceBindingByWorkspace :one
+-- The bot's binding to one workspace: how a stored workspace id maps back to
+-- the client-facing target address.
+SELECT * FROM bot_workspace_bindings
+WHERE team_id = public.memoh_current_team_id()
+  AND bot_id = sqlc.arg(bot_id)
+  AND workspace_id = sqlc.arg(workspace_id);
+
+-- name: GetBotManagedWorkspaceBinding :one
+-- The binding behind the bot's managed computer (its first managed binding):
+-- the native target's tool approval policy lives on it.
+SELECT binding.*
+FROM bot_workspace_bindings binding
+JOIN workspaces w
+  ON w.team_id = binding.team_id
+ AND w.id = binding.workspace_id
+WHERE binding.team_id = public.memoh_current_team_id()
   AND binding.bot_id = sqlc.arg(bot_id)
   AND w.kind = 'managed'
 ORDER BY binding.created_at ASC, binding.id ASC

@@ -62,9 +62,16 @@ func renderWorkspaceTransition(previous, current *WorkspaceTarget) string {
 	)
 }
 
+// sameWorkspaceTarget compares two snapshots by the workspace behind them
+// when both know it (a remote mount removed and re-added keeps its
+// workspace but changes its binding id), by address otherwise.
 func sameWorkspaceTarget(left, right *WorkspaceTarget) bool {
 	if left == nil || right == nil {
 		return left == right
+	}
+	leftWorkspace, rightWorkspace := strings.TrimSpace(left.WorkspaceID), strings.TrimSpace(right.WorkspaceID)
+	if leftWorkspace != "" && rightWorkspace != "" {
+		return leftWorkspace == rightWorkspace
 	}
 	return strings.TrimSpace(left.TargetID) == strings.TrimSpace(right.TargetID) &&
 		strings.TrimSpace(left.Kind) == strings.TrimSpace(right.Kind)
@@ -79,9 +86,10 @@ func workspaceTargetFromMetadata(metadata map[string]any) *WorkspaceTarget {
 		return nil
 	}
 	target := &WorkspaceTarget{
-		TargetID: strings.TrimSpace(readAnyString(raw["target_id"])),
-		Kind:     strings.TrimSpace(readAnyString(raw["kind"])),
-		Name:     strings.TrimSpace(readAnyString(raw["name"])),
+		TargetID:    strings.TrimSpace(readAnyString(raw["target_id"])),
+		Kind:        strings.TrimSpace(readAnyString(raw["kind"])),
+		Name:        strings.TrimSpace(readAnyString(raw["name"])),
+		WorkspaceID: strings.TrimSpace(readAnyString(raw["workspace_id"])),
 	}
 	if target.TargetID == "" {
 		return nil

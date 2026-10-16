@@ -31,7 +31,7 @@ INSERT INTO tool_approval_requests (
   turn_id,
   route_id,
   channel_identity_id,
-  workspace_target_id,
+  workspace_id,
   tool_call_id,
   tool_name,
   operation,
@@ -51,7 +51,7 @@ INSERT INTO tool_approval_requests (
   runtime_scope.turn_id,
   sqlc.narg(route_id),
   sqlc.narg(channel_identity_id),
-  sqlc.arg(workspace_target_id),
+  sqlc.narg(workspace_id)::uuid,
   sqlc.arg(tool_call_id),
   sqlc.arg(tool_name),
   sqlc.arg(operation),
@@ -77,7 +77,7 @@ WHERE tool_approval_requests.status = 'pending'
   AND tool_approval_requests.operation = EXCLUDED.operation
   AND tool_approval_requests.tool_input = EXCLUDED.tool_input
   AND tool_approval_requests.options = EXCLUDED.options
-  AND tool_approval_requests.workspace_target_id = EXCLUDED.workspace_target_id
+  AND tool_approval_requests.workspace_id IS NOT DISTINCT FROM EXCLUDED.workspace_id
 RETURNING *;
 
 -- name: GetToolApprovalRequest :one

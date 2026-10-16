@@ -69,7 +69,7 @@ DROP TABLE IF EXISTS bot_members CASCADE;
 DROP TABLE IF EXISTS bot_remote_runtime_bindings CASCADE;
 DROP TABLE IF EXISTS bot_dependency_installations CASCADE;
 DROP TABLE IF EXISTS bot_skill_package_installations CASCADE;
-DROP TABLE IF EXISTS user_runtimes CASCADE;
+DROP TABLE IF EXISTS user_computers CASCADE;
 DROP TABLE IF EXISTS connectors CASCADE;
 DROP TABLE IF EXISTS bots CASCADE;
 DROP TABLE IF EXISTS browser_contexts CASCADE;

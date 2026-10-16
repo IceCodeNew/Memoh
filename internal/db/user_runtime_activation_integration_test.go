@@ -13,7 +13,6 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	memohdb "github.com/felinics/memoh/internal/db"
-	dbsqlc "github.com/felinics/memoh/internal/db/postgres/sqlc"
 	postgresstore "github.com/felinics/memoh/internal/db/postgres/store"
 	dbstore "github.com/felinics/memoh/internal/db/store"
 	"github.com/felinics/memoh/internal/team"
@@ -39,11 +38,30 @@ func TestUserRuntimeCredentialLifecyclePostgresPath(t *testing.T) {
 		t.Fatalf("insert membership: %v", err)
 	}
 
-	store := postgresstore.NewWithQueries(dbsqlc.New(conn))
+	// Since 0169 the credential row references the user workspace it shares
+	// its id with (checked at commit), so the store needs a transaction and
+	// the workspace hook the runtime service attaches in production.
+	teamCfg := pool.Config()
+	teamCfg.ConnConfig.RuntimeParams["memoh.team_id"] = team.DefaultTeamID
+	teamPool, err := pgxpool.NewWithConfig(ctx, teamCfg)
+	if err != nil {
+		t.Fatalf("create team pool: %v", err)
+	}
+	defer teamPool.Close()
+	store, err := postgresstore.New(teamPool)
+	if err != nil {
+		t.Fatalf("create store: %v", err)
+	}
+	attachWorkspace := func(ctx context.Context, q dbstore.Queries, created dbstore.UserRuntimeRecord) error {
+		_, err := postgresstore.CreateWorkspaceWith(ctx, q, dbstore.CreateWorkspaceInput{
+			ID: created.ID, OwnerUserID: created.UserID, Kind: dbstore.WorkspaceKindUser, Name: created.Name,
+		})
+		return err
+	}
 	expiredKey := "mrk_" + strings.Repeat("1", 64)
 	expired, err := store.CreateUserRuntime(ctx, dbstore.CreateUserRuntimeInput{
 		UserID: userID, Name: "Abandoned", APIToken: expiredKey,
-	}, nil)
+	}, attachWorkspace)
 	if err != nil {
 		t.Fatalf("create pending Runtime: %v", err)
 	}
@@ -53,7 +71,7 @@ func TestUserRuntimeCredentialLifecyclePostgresPath(t *testing.T) {
 	if _, err := store.GetUserRuntimeByAPIToken(ctx, expiredKey); err != nil {
 		t.Fatalf("authenticate fresh pending Runtime: %v", err)
 	}
-	if _, err := conn.Exec(ctx, "UPDATE user_runtimes SET pending_expires_at = now() - INTERVAL '1 second' WHERE id = $1", expired.ID); err != nil {
+	if _, err := conn.Exec(ctx, "UPDATE user_computers SET pending_expires_at = now() - INTERVAL '1 second' WHERE id = $1", expired.ID); err != nil {
 		t.Fatalf("expire pending Runtime: %v", err)
 	}
 	if _, err := store.GetUserRuntimeByAPIToken(ctx, expiredKey); !errors.Is(err, memohdb.ErrNotFound) {
@@ -63,7 +81,7 @@ func TestUserRuntimeCredentialLifecyclePostgresPath(t *testing.T) {
 		t.Fatalf("clean expired pending Runtimes: %v", err)
 	}
 	var revoked bool
-	if err := conn.QueryRow(ctx, "SELECT revoked_at IS NOT NULL FROM user_runtimes WHERE id = $1", expired.ID).Scan(&revoked); err != nil {
+	if err := conn.QueryRow(ctx, "SELECT revoked_at IS NOT NULL FROM user_computers WHERE id = $1", expired.ID).Scan(&revoked); err != nil {
 		t.Fatalf("read expired Runtime: %v", err)
 	}
 	if !revoked {
@@ -73,7 +91,7 @@ func TestUserRuntimeCredentialLifecyclePostgresPath(t *testing.T) {
 	activeKey := "mrk_" + strings.Repeat("2", 64)
 	pending, err := store.CreateUserRuntime(ctx, dbstore.CreateUserRuntimeInput{
 		UserID: userID, Name: "Connected", APIToken: activeKey,
-	}, nil)
+	}, attachWorkspace)
 	if err != nil {
 		t.Fatalf("create second pending Runtime: %v", err)
 	}

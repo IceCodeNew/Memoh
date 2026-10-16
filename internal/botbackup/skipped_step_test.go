@@ -371,7 +371,7 @@ func TestRestoreWorkdirArchiveFlagWarningOmitsCause(t *testing.T) {
 	t.Parallel()
 
 	logger, logs := captureLogger()
-	svc := &Service{logger: logger, workdirs: archiveFailingWorkdirStore{&fakeWorkdirStore{}}}
+	svc := &Service{logger: logger, workdirs: archiveFailingWorkdirStore{&fakeWorkdirStore{}}, queries: failingQueries{}}
 	state := newWorkdirImportState(t, []backupWorkdir{{ID: "src-archived", Name: "old", Path: "/data/site", Archived: true}})
 	state.botID = skippedStepBotID
 

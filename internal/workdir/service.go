@@ -57,17 +57,18 @@ func (s *Service) Create(ctx context.Context, botID, userID string, req CreateRe
 	if err := s.requireDirectory(ctx, resolved, normalized); err != nil {
 		return Workdir{}, err
 	}
-	input := dbstore.CreateBotWorkdirInput{
+	// The target address is the request's; the workspace behind it is what
+	// gets stored.
+	if strings.TrimSpace(resolved.WorkspaceID) == "" {
+		return Workdir{}, ErrWorkspaceUnresolved
+	}
+	record, err := s.store.CreateWorkdir(ctx, dbstore.CreateBotWorkdirInput{
 		BotID:           botID,
 		Name:            name,
-		TargetKind:      resolved.Kind,
+		WorkspaceID:     strings.TrimSpace(resolved.WorkspaceID),
 		Path:            normalized,
 		CreatedByUserID: strings.TrimSpace(userID),
-	}
-	if resolved.Kind == TargetKindRemote {
-		input.RemoteBindingID = resolved.TargetID
-	}
-	record, err := s.store.CreateWorkdir(ctx, input)
+	})
 	if err != nil {
 		if db.IsUniqueViolation(err) {
 			return Workdir{}, ErrDuplicatePath
@@ -312,17 +313,25 @@ func isASCIILetter(c byte) bool {
 	return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z')
 }
 
-func toWorkdir(record dbstore.BotWorkdirRecord) Workdir {
-	targetID := workspace.WorkspaceTargetNative
-	if record.TargetKind == TargetKindRemote {
-		targetID = record.RemoteBindingID
+// targetAddress derives the client-facing address of a stored workdir: a
+// managed workspace is the bot's native target, a user workspace is reached
+// through the bot's binding to it.
+func targetAddress(record dbstore.BotWorkdirRecord) (kind, targetID string) {
+	if record.WorkspaceKind == dbstore.WorkspaceKindUser {
+		return TargetKindRemote, record.BindingID
 	}
+	return TargetKindNative, workspace.WorkspaceTargetNative
+}
+
+func toWorkdir(record dbstore.BotWorkdirRecord) Workdir {
+	kind, targetID := targetAddress(record)
 	return Workdir{
 		ID:                record.ID,
 		BotID:             record.BotID,
 		Name:              record.Name,
-		TargetKind:        record.TargetKind,
+		TargetKind:        kind,
 		WorkspaceTargetID: targetID,
+		WorkspaceID:       record.WorkspaceID,
 		Path:              record.Path,
 		CreatedByUserID:   record.CreatedByUserID,
 		Archived:          !record.ArchivedAt.IsZero(),

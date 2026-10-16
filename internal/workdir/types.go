@@ -1,9 +1,14 @@
 // Package workdir manages named per-bot working directories. A workdir is a
-// (workspace target, absolute directory path) pair: the target says which
-// machine the directory lives on (the native container workspace or a
-// user-owned remote runtime), the path says where. Sessions bind to a
+// (workspace, absolute directory path) pair: the workspace says which
+// machine the directory lives on (the bot's managed computer or a user's own
+// computer the bot is bound to), the path says where. Sessions bind to a
 // workdir immutably at creation time and derive their working directory
 // from it for their whole life.
+//
+// Only the workspace id is stored. The client-facing target address
+// (target_kind "native" / workspace_target_id "native" for the managed
+// computer, "remote" / the binding id for a user's computer) is derived at
+// the service boundary from the workspace's kind and the bot's binding.
 //
 // The UI calls these Folders; the domain, API, and database call them
 // workdirs. The name Project is deliberately avoided here — it belongs to
@@ -24,6 +29,10 @@ const (
 	TargetKindRemote = workspace.WorkspaceTargetRemote
 )
 
+// ErrWorkspaceUnresolved: the resolved target names no workspace, so there
+// is nothing to pin the workdir to.
+var ErrWorkspaceUnresolved = errors.New("workspace target does not name a workspace")
+
 var (
 	ErrWorkdirNotFound      = errors.New("workdir not found")
 	ErrWorkdirArchived      = errors.New("workdir is archived")
@@ -40,15 +49,17 @@ var (
 	ErrGitUnavailable       = errors.New("git working directory is unavailable")
 )
 
-// Workdir is the API shape of a workdir. WorkspaceTargetID is the derived
-// target address: the native sentinel for native workdirs, the remote
-// binding UUID otherwise.
+// Workdir is the API shape of a workdir. TargetKind and WorkspaceTargetID
+// are the derived target address: "native" / the native sentinel for a
+// workdir on the bot's managed computer, "remote" / the binding UUID for one
+// on a user's computer. WorkspaceID is the stored key and stays internal.
 type Workdir struct {
 	ID                string    `json:"id"`
 	BotID             string    `json:"bot_id"`
 	Name              string    `json:"name"`
 	TargetKind        string    `json:"target_kind"`
 	WorkspaceTargetID string    `json:"workspace_target_id"`
+	WorkspaceID       string    `json:"-"`
 	Path              string    `json:"path"`
 	CreatedByUserID   string    `json:"created_by_user_id,omitempty"`
 	Archived          bool      `json:"archived,omitempty"`
@@ -95,12 +106,14 @@ type DirectoriesResponse struct {
 
 // Resolved is the per-session resolution of a workdir binding: which target
 // the session is pinned to and the working directory tools and runtimes use.
-// It reads only stored state — target liveness stays with the turn path.
+// TargetID is the client-facing address, WorkspaceID the workspace behind
+// it. It reads only stored state — target liveness stays with the turn path.
 type Resolved struct {
-	WorkdirID string
-	TargetID  string
-	Kind      string
-	WorkDir   string
+	WorkdirID   string
+	TargetID    string
+	Kind        string
+	WorkspaceID string
+	WorkDir     string
 }
 
 // GitBranchResponse contains a branch only when the directory has an attached Git HEAD.

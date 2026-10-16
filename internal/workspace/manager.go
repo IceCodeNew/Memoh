@@ -385,18 +385,23 @@ func (m *Manager) ResolveWorkspaceTarget(ctx context.Context, botID, targetID st
 		if err != nil {
 			return ResolvedWorkspaceTarget{}, err
 		}
+		workspaceID, err := m.nativeWorkspaceID(ctx, botID)
+		if err != nil {
+			return ResolvedWorkspaceTarget{}, err
+		}
 		approval, err := m.nativeToolApprovalConfig(ctx, botID)
 		if err != nil {
 			return ResolvedWorkspaceTarget{}, err
 		}
 		return ResolvedWorkspaceTarget{
-			TargetID: WorkspaceTargetNative,
-			Kind:     WorkspaceTargetNative,
-			Name:     "Server Workspace",
-			Primary:  primary,
-			Client:   client,
-			Info:     info,
-			Approval: approval,
+			TargetID:    WorkspaceTargetNative,
+			Kind:        WorkspaceTargetNative,
+			WorkspaceID: workspaceID,
+			Name:        "Server Workspace",
+			Primary:     primary,
+			Client:      client,
+			Info:        info,
+			Approval:    approval,
 		}, nil
 	}
 	if _, ok := canonicalWorkspaceUUID(targetID); !ok || m.remote == nil {
@@ -509,7 +514,30 @@ func (m *Manager) nativeWorkspaceInfo(ctx context.Context, botID string) (bridge
 	return withToolsEndpoint(info), nil
 }
 
+// nativeWorkspaceID is the workspace behind the bot's native target: its
+// managed computer. A bot without one has no workspace to record.
+func (m *Manager) nativeWorkspaceID(ctx context.Context, botID string) (string, error) {
+	workspaceID, err := m.managedWorkspaceID(ctx, botID)
+	if errors.Is(err, db.ErrNoManagedWorkspaceBinding) {
+		return "", nil
+	}
+	return workspaceID, err
+}
+
+// nativeToolApprovalConfig is the native target's policy. It lives on the
+// bot's managed workspace binding; bots.tool_approval_config is written
+// alongside for one more version and is what a bot without a managed
+// computer (or a manager without bindings) still reads.
 func (m *Manager) nativeToolApprovalConfig(ctx context.Context, botID string) (settings.ToolApprovalConfig, error) {
+	if m.bindings != nil {
+		binding, err := m.bindings.ManagedBinding(ctx, botID)
+		switch {
+		case err == nil:
+			return parseToolApprovalConfig(binding.ToolApproval, settings.DefaultToolApprovalConfig), nil
+		case !errors.Is(err, db.ErrNoManagedWorkspaceBinding):
+			return settings.ToolApprovalConfig{}, err
+		}
+	}
 	config := settings.DefaultToolApprovalConfig()
 	if m.queries == nil {
 		return config, nil
@@ -530,14 +558,85 @@ func (m *Manager) nativeToolApprovalConfig(ctx context.Context, botID string) (s
 	return settings.NormalizeToolApprovalConfig(config), nil
 }
 
+// WorkspaceIDForTarget maps a client-facing target id to the workspace it
+// names, from stored state only (no runtime is dialed): "native" is the
+// bot's managed computer, a mount id is the user workspace it binds, and an
+// empty id is the bot's primary target. ErrWorkspaceTargetNotFound when the
+// id names nothing of the bot's. A manager without bindings predates
+// workspace records and reports an empty id.
+func (m *Manager) WorkspaceIDForTarget(ctx context.Context, botID, targetID string) (string, error) {
+	if m.bindings == nil {
+		return "", nil
+	}
+	targetID = strings.TrimSpace(targetID)
+	switch targetID {
+	case "":
+		binding, err := m.bindings.Primary(ctx, botID)
+		if errors.Is(err, ErrNoPrimaryWorkspace) {
+			return m.nativeWorkspaceID(ctx, botID)
+		}
+		if err != nil {
+			return "", err
+		}
+		return binding.WorkspaceID, nil
+	case WorkspaceTargetNative:
+		return m.nativeWorkspaceID(ctx, botID)
+	}
+	bindingID, ok := canonicalWorkspaceUUID(targetID)
+	if !ok {
+		return "", ErrWorkspaceTargetNotFound
+	}
+	binding, err := m.bindings.Get(ctx, botID, bindingID)
+	if errors.Is(err, ErrBindingNotFound) {
+		return "", ErrWorkspaceTargetNotFound
+	}
+	if err != nil {
+		return "", err
+	}
+	return binding.WorkspaceID, nil
+}
+
+// TargetForWorkspace maps a stored workspace id back to the client-facing
+// target address and kind: a managed workspace is the native target, a user
+// workspace is addressed by the bot's binding to it. ErrWorkspaceTargetNotFound
+// when the workspace is gone or the bot is not bound to it.
+func (m *Manager) TargetForWorkspace(ctx context.Context, botID, workspaceID string) (targetID, kind string, err error) {
+	if m.bindings == nil {
+		return "", "", ErrWorkspaceTargetNotFound
+	}
+	record, err := m.bindings.Workspace(ctx, workspaceID)
+	if errors.Is(err, ErrWorkspaceNotFound) {
+		return "", "", ErrWorkspaceTargetNotFound
+	}
+	if err != nil {
+		return "", "", err
+	}
+	if record.Kind == WorkspaceKindManaged {
+		return WorkspaceTargetNative, WorkspaceTargetNative, nil
+	}
+	binding, err := m.bindings.BindingByWorkspace(ctx, botID, workspaceID)
+	if errors.Is(err, ErrBindingNotFound) {
+		return "", "", ErrWorkspaceTargetNotFound
+	}
+	if err != nil {
+		return "", "", err
+	}
+	return binding.ID, WorkspaceTargetRemote, nil
+}
+
 func (m *Manager) ListWorkspaceTargets(ctx context.Context, botID string) ([]WorkspaceTarget, error) {
 	approval, err := m.nativeToolApprovalConfig(ctx, botID)
+	if err != nil {
+		return nil, err
+	}
+	workspaceID, err := m.nativeWorkspaceID(ctx, botID)
 	if err != nil {
 		return nil, err
 	}
 	native := WorkspaceTarget{
 		TargetID:           WorkspaceTargetNative,
 		Kind:               WorkspaceTargetNative,
+		WorkspaceID:        workspaceID,
 		Name:               "Server Workspace",
 		Primary:            true,
 		Status:             WorkspaceTargetStatusOffline,

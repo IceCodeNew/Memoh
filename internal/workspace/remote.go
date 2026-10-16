@@ -47,10 +47,13 @@ type WorkspaceTargetToolApproval struct {
 
 // WorkspaceTarget is the aggregate shape consumed by clients. Callers address
 // mounts by TargetID; RuntimeID identifies the backing remote Runtime and is
-// empty for the Native target.
+// empty for the Native target. WorkspaceID is the workspace behind the
+// target (the managed computer, or the user workspace a mount binds); it is
+// the persisted key and stays out of the payload.
 type WorkspaceTarget struct {
 	TargetID           string                      `json:"target_id"`
 	Kind               string                      `json:"kind"`
+	WorkspaceID        string                      `json:"-"`
 	RuntimeID          string                      `json:"runtime_id,omitempty"`
 	Name               string                      `json:"name"`
 	Primary            bool                        `json:"primary"`
@@ -76,14 +79,19 @@ type UpdateWorkspaceTargetToolApprovalRequest struct {
 	ToolApprovalConfig *settings.ToolApprovalConfig `json:"tool_approval_config,omitempty"`
 }
 
+// ResolvedWorkspaceTarget is a live target: the client-facing address
+// (TargetID / Kind), the workspace it stands for (WorkspaceID, the key that
+// workdirs, approvals and session snapshots are stored under) and the bridge
+// client to reach it.
 type ResolvedWorkspaceTarget struct {
-	TargetID string
-	Kind     string
-	Name     string
-	Primary  bool
-	Client   *bridge.Client
-	Info     bridge.WorkspaceInfo
-	Approval settings.ToolApprovalConfig
+	TargetID    string
+	Kind        string
+	WorkspaceID string
+	Name        string
+	Primary     bool
+	Client      *bridge.Client
+	Info        bridge.WorkspaceInfo
+	Approval    settings.ToolApprovalConfig
 }
 
 // RemoteWorkspaceService owns persistent remote mounts. Live runtime
@@ -278,11 +286,12 @@ func (s *RemoteWorkspaceService) resolveRecord(record dbstore.BotRemoteRuntimeBi
 		return ResolvedWorkspaceTarget{}, err
 	}
 	return ResolvedWorkspaceTarget{
-		TargetID: record.ID,
-		Kind:     WorkspaceTargetRemote,
-		Name:     record.RuntimeName,
-		Primary:  record.IsPrimary,
-		Client:   client,
+		TargetID:    record.ID,
+		Kind:        WorkspaceTargetRemote,
+		WorkspaceID: record.RuntimeID,
+		Name:        record.RuntimeName,
+		Primary:     record.IsPrimary,
+		Client:      client,
 		Info: bridge.WorkspaceInfo{
 			Backend:        bridge.WorkspaceBackendRemote,
 			OS:             connection.Info.OS,
@@ -390,6 +399,7 @@ func (s *RemoteWorkspaceService) target(record dbstore.BotRemoteRuntimeBindingRe
 	target := WorkspaceTarget{
 		TargetID:           record.ID,
 		Kind:               WorkspaceTargetRemote,
+		WorkspaceID:        record.RuntimeID,
 		RuntimeID:          record.RuntimeID,
 		Name:               record.RuntimeName,
 		Primary:            record.IsPrimary,
@@ -440,12 +450,18 @@ func DefaultRemoteToolApprovalConfig() settings.ToolApprovalConfig {
 }
 
 func toolApprovalConfig(raw dbstore.JSON) settings.ToolApprovalConfig {
+	return parseToolApprovalConfig(raw, DefaultRemoteToolApprovalConfig)
+}
+
+// parseToolApprovalConfig reads a stored policy, falling back to the given
+// default when the column is empty or unreadable.
+func parseToolApprovalConfig(raw dbstore.JSON, fallback func() settings.ToolApprovalConfig) settings.ToolApprovalConfig {
 	if len(raw) == 0 {
-		return DefaultRemoteToolApprovalConfig()
+		return fallback()
 	}
 	var config settings.ToolApprovalConfig
 	if err := json.Unmarshal(raw, &config); err != nil {
-		return DefaultRemoteToolApprovalConfig()
+		return fallback()
 	}
 	return settings.NormalizeToolApprovalConfig(config)
 }

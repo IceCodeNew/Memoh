@@ -47,7 +47,7 @@ func (s *WorkspaceService) CreateManaged(ctx context.Context, ownerUserID, name 
 	return s.create(ctx, "", ownerUserID, WorkspaceKindManaged, name)
 }
 
-// CreateUser records a paired computer. runtimeID is the user_runtimes id,
+// CreateUser records a paired computer. runtimeID is the user_computers id,
 // which the workspace shares so remote mounts keep addressing it.
 func (s *WorkspaceService) CreateUser(ctx context.Context, runtimeID, ownerUserID, name string) (dbstore.WorkspaceRecord, error) {
 	runtimeID, ok := canonicalWorkspaceUUID(runtimeID)
@@ -236,6 +236,89 @@ func (s *BindingService) SetPrimary(ctx context.Context, botID, bindingID string
 	if errors.Is(err, db.ErrNotFound) {
 		return ErrBindingNotFound
 	}
+	return err
+}
+
+// Get returns one of the bot's bindings or ErrBindingNotFound.
+func (s *BindingService) Get(ctx context.Context, botID, bindingID string) (dbstore.BotWorkspaceBindingRecord, error) {
+	if err := s.ready(); err != nil {
+		return dbstore.BotWorkspaceBindingRecord{}, err
+	}
+	botID, botOK := canonicalWorkspaceUUID(botID)
+	bindingID, bindingOK := canonicalWorkspaceUUID(bindingID)
+	if !botOK || !bindingOK {
+		return dbstore.BotWorkspaceBindingRecord{}, ErrBindingNotFound
+	}
+	record, err := s.bindings.GetBotWorkspaceBinding(ctx, botID, bindingID)
+	if errors.Is(err, db.ErrNotFound) {
+		return dbstore.BotWorkspaceBindingRecord{}, ErrBindingNotFound
+	}
+	return record, err
+}
+
+// BindingByWorkspace returns the bot's binding to the workspace or
+// ErrBindingNotFound: it is how a stored workspace id maps back to the
+// client-facing target address.
+func (s *BindingService) BindingByWorkspace(ctx context.Context, botID, workspaceID string) (dbstore.BotWorkspaceBindingRecord, error) {
+	if err := s.ready(); err != nil {
+		return dbstore.BotWorkspaceBindingRecord{}, err
+	}
+	botID, botOK := canonicalWorkspaceUUID(botID)
+	workspaceID, workspaceOK := canonicalWorkspaceUUID(workspaceID)
+	if !botOK || !workspaceOK {
+		return dbstore.BotWorkspaceBindingRecord{}, ErrBindingNotFound
+	}
+	record, err := s.bindings.GetBotWorkspaceBindingByWorkspace(ctx, botID, workspaceID)
+	if errors.Is(err, db.ErrNotFound) {
+		return dbstore.BotWorkspaceBindingRecord{}, ErrBindingNotFound
+	}
+	return record, err
+}
+
+// Workspace returns a workspace record or ErrWorkspaceNotFound.
+func (s *BindingService) Workspace(ctx context.Context, workspaceID string) (dbstore.WorkspaceRecord, error) {
+	if err := s.ready(); err != nil {
+		return dbstore.WorkspaceRecord{}, err
+	}
+	workspaceID, ok := canonicalWorkspaceUUID(workspaceID)
+	if !ok {
+		return dbstore.WorkspaceRecord{}, ErrWorkspaceNotFound
+	}
+	record, err := s.workspaces.GetWorkspace(ctx, workspaceID)
+	if errors.Is(err, db.ErrNotFound) {
+		return dbstore.WorkspaceRecord{}, ErrWorkspaceNotFound
+	}
+	return record, err
+}
+
+// ManagedBinding returns the binding behind the bot's managed computer (its
+// first managed binding), which carries the native target's tool approval
+// policy. db.ErrNoManagedWorkspaceBinding when the bot has none.
+func (s *BindingService) ManagedBinding(ctx context.Context, botID string) (dbstore.BotWorkspaceBindingRecord, error) {
+	if err := s.ready(); err != nil {
+		return dbstore.BotWorkspaceBindingRecord{}, err
+	}
+	botID, ok := canonicalWorkspaceUUID(botID)
+	if !ok {
+		return dbstore.BotWorkspaceBindingRecord{}, db.ErrNoManagedWorkspaceBinding
+	}
+	record, err := s.bindings.GetBotManagedWorkspaceBinding(ctx, botID)
+	if errors.Is(err, db.ErrNotFound) {
+		return dbstore.BotWorkspaceBindingRecord{}, db.ErrNoManagedWorkspaceBinding
+	}
+	return record, err
+}
+
+// UpdateManagedToolApproval stores the native target's tool approval policy
+// on the bot's managed binding. It is the settings.ManagedWorkspaceApprovalWriter
+// port: the Bot settings and the native workspace-target endpoint both write
+// the policy here and to bots.tool_approval_config.
+func (s *BindingService) UpdateManagedToolApproval(ctx context.Context, botID string, config settings.ToolApprovalConfig) error {
+	binding, err := s.ManagedBinding(ctx, botID)
+	if err != nil {
+		return err
+	}
+	_, err = s.UpdateToolApproval(ctx, botID, binding.ID, config)
 	return err
 }
 

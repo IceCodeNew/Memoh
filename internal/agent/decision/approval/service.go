@@ -24,10 +24,11 @@ import (
 type Service struct {
 	queries dbstore.Queries
 
-	policies PolicyProvider
-	hooks    *hooks.Service
-	logger   *slog.Logger
-	targets  WorkspaceTargetPolicyResolver
+	policies   PolicyProvider
+	hooks      *hooks.Service
+	logger     *slog.Logger
+	targets    WorkspaceTargetPolicyResolver
+	workspaces decision.WorkspaceTargetMapper
 
 	waiter *decision.Waiter[Request]
 }
@@ -53,6 +54,14 @@ func (s *Service) SetHookService(h *hooks.Service) {
 func (s *Service) SetWorkspaceTargetPolicyResolver(resolver WorkspaceTargetPolicyResolver) {
 	if s != nil {
 		s.targets = resolver
+	}
+}
+
+// SetWorkspaceTargetMapper wires the translation between request target ids
+// and the workspace ids tool_approval_requests stores.
+func (s *Service) SetWorkspaceTargetMapper(mapper decision.WorkspaceTargetMapper) {
+	if s != nil {
+		s.workspaces = mapper
 	}
 }
 
@@ -169,6 +178,12 @@ func (s *Service) CreatePending(ctx context.Context, input CreatePendingInput) (
 	if input.ExecutionLocation != nil && strings.TrimSpace(input.ExecutionLocation.TargetID) != "" {
 		workspaceTargetID = strings.TrimSpace(input.ExecutionLocation.TargetID)
 	}
+	// The row stores the workspace behind the target; the address is derived
+	// again on read.
+	workspaceID, err := decision.WorkspaceIDForTarget(ctx, s.workspaces, input.BotID, workspaceTargetID)
+	if err != nil {
+		return Request{}, err
+	}
 	if err := s.runApprovalHook(ctx, hooks.EventBeforeApprovalCreate, input, Request{}, true); err != nil {
 		return Request{}, err
 	}
@@ -177,7 +192,7 @@ func (s *Service) CreatePending(ctx context.Context, input CreatePendingInput) (
 		SessionID:                    sessionID,
 		RouteID:                      optionalUUID(input.RouteID),
 		ChannelIdentityID:            channelIdentityID,
-		WorkspaceTargetID:            workspaceTargetID,
+		WorkspaceID:                  optionalUUID(workspaceID),
 		ToolCallID:                   strings.TrimSpace(input.ToolCallID),
 		ToolName:                     strings.TrimSpace(input.ToolName),
 		Operation:                    operation,
@@ -202,7 +217,7 @@ func (s *Service) CreatePending(ctx context.Context, input CreatePendingInput) (
 		}
 		return Request{}, err
 	}
-	req := requestFromRow(row)
+	req := s.requestFromRow(ctx, row)
 	req.ExecutionLocation = cloneExecutionLocation(input.ExecutionLocation)
 	if req.Status != StatusPending {
 		return Request{}, ErrAlreadyDecided
@@ -231,7 +246,7 @@ func (s *Service) ResolveTarget(ctx context.Context, input ResolveInput) (Reques
 			if err != nil {
 				return Request{}, mapLookupErr(err)
 			}
-			req := requestFromRow(row)
+			req := s.requestFromRow(ctx, row)
 			if req.BotID != uuid.UUID(botID.Bytes).String() || req.Status != StatusPending {
 				return Request{}, ErrNotFound
 			}
@@ -250,14 +265,14 @@ func (s *Service) ResolveTarget(ctx context.Context, input ResolveInput) (Reques
 				SessionID: sessionID,
 				ShortID:   int32(shortID), //nolint:gosec // user-facing approval numbers are small positive integers.
 			})
-			return requestFromRowOrErr(row, err)
+			return s.requestFromRowOrErr(ctx, row, err)
 		}
 		if parsed, err := db.ParseUUID(explicit); err == nil {
 			row, err := s.queries.GetToolApprovalRequest(ctx, parsed)
 			if err != nil {
 				return Request{}, mapLookupErr(err)
 			}
-			req := requestFromRow(row)
+			req := s.requestFromRow(ctx, row)
 			if req.BotID != uuid.UUID(botID.Bytes).String() || req.SessionID != uuid.UUID(sessionID.Bytes).String() || req.Status != StatusPending {
 				return Request{}, ErrNotFound
 			}
@@ -272,7 +287,7 @@ func (s *Service) ResolveTarget(ctx context.Context, input ResolveInput) (Reques
 			PromptExternalMessageID: replyID,
 		})
 		if err == nil {
-			return requestFromRow(row), nil
+			return s.requestFromRow(ctx, row), nil
 		}
 		if !errors.Is(err, pgx.ErrNoRows) {
 			return Request{}, err
@@ -282,7 +297,7 @@ func (s *Service) ResolveTarget(ctx context.Context, input ResolveInput) (Reques
 		BotID:     botID,
 		SessionID: sessionID,
 	})
-	return requestFromRowOrErr(row, err)
+	return s.requestFromRowOrErr(ctx, row, err)
 }
 
 func (s *Service) Approve(ctx context.Context, approvalID, actorID, reason string) (Request, error) {
@@ -423,7 +438,7 @@ func (s *Service) CancelPendingForSession(ctx context.Context, botID, sessionID,
 	}
 	requests := make([]Request, 0, len(rows))
 	for _, row := range rows {
-		req := requestFromRow(row)
+		req := s.requestFromRow(ctx, row)
 		requests = append(requests, req)
 		s.notifyResolved(req)
 	}
@@ -453,7 +468,7 @@ func validateToolApprovalFence(ctx context.Context, queries dbstore.Queries, id 
 	if err != nil {
 		return err
 	}
-	request := requestFromRow(row)
+	request := requestRow(row)
 	return runtimefence.ValidateScope(ctx, request.BotID, request.SessionID)
 }
 
@@ -466,7 +481,7 @@ func (s *Service) Get(ctx context.Context, approvalID string) (Request, error) {
 		return Request{}, err
 	}
 	row, err := s.queries.GetToolApprovalRequest(ctx, id)
-	return requestFromRowOrErr(row, err)
+	return s.requestFromRowOrErr(ctx, row, err)
 }
 
 func (s *Service) WaitForDecision(ctx context.Context, approvalID string) (Request, error) {
@@ -581,7 +596,7 @@ func (s *Service) CanRespond(req Request) bool {
 // result. If the update matched no pending row, a terminal row with the same
 // ID means another responder or waiter won the race.
 func (s *Service) resolveAndNotify(ctx context.Context, approvalID string, row sqlc.ToolApprovalRequest, err error) (Request, error) {
-	req, err := requestFromRowOrErr(row, err)
+	req, err := s.requestFromRowOrErr(ctx, row, err)
 	if err != nil {
 		if errors.Is(err, ErrNotFound) {
 			if id, parseErr := db.ParseUUID(approvalID); parseErr == nil {
@@ -631,7 +646,7 @@ func (s *Service) UpdatePromptMessage(ctx context.Context, approvalID, promptMes
 		})
 		return updateErr
 	})
-	return requestFromRowOrErr(row, err)
+	return s.requestFromRowOrErr(ctx, row, err)
 }
 
 func (s *Service) ListPendingBySession(ctx context.Context, botID, sessionID string) ([]Request, error) {
@@ -665,7 +680,7 @@ func (s *Service) ListBySessionToolCalls(ctx context.Context, botID, sessionID s
 	}
 	result := make([]Request, 0, len(rows))
 	for _, row := range rows {
-		result = append(result, requestFromRow(row))
+		result = append(result, s.requestFromRow(ctx, row))
 	}
 	return result, nil
 }
@@ -696,7 +711,7 @@ func (s *Service) listBySession(ctx context.Context, botID, sessionID string, pe
 	}
 	result := make([]Request, 0, len(rows))
 	for _, row := range rows {
-		result = append(result, requestFromRow(row))
+		result = append(result, s.requestFromRow(ctx, row))
 	}
 	return result, nil
 }
@@ -721,11 +736,24 @@ func normalizeToolCallIDs(ids []string) []string {
 	return result
 }
 
-func requestFromRowOrErr(row sqlc.ToolApprovalRequest, err error) (Request, error) {
+func (s *Service) requestFromRowOrErr(ctx context.Context, row sqlc.ToolApprovalRequest, err error) (Request, error) {
 	if err != nil {
 		return Request{}, mapLookupErr(err)
 	}
-	return requestFromRow(row), nil
+	return s.requestFromRow(ctx, row), nil
+}
+
+// requestFromRow is requestRow plus the client-facing target address of the
+// stored workspace.
+func (s *Service) requestFromRow(ctx context.Context, row sqlc.ToolApprovalRequest) Request {
+	req := requestRow(row)
+	var mapper decision.WorkspaceTargetMapper
+	var logger *slog.Logger
+	if s != nil {
+		mapper, logger = s.workspaces, s.logger
+	}
+	req.WorkspaceTargetID = decision.TargetAddress(ctx, mapper, logger, req.BotID, req.WorkspaceID)
+	return req
 }
 
 func mapLookupErr(err error) error {
@@ -764,7 +792,8 @@ func (s *Service) optionalChannelIdentityUUID(ctx context.Context, value string)
 	return id, nil
 }
 
-func requestFromRow(row sqlc.ToolApprovalRequest) Request {
+// requestRow maps a row without resolving its workspace to a target address.
+func requestRow(row sqlc.ToolApprovalRequest) Request {
 	var input map[string]any
 	_ = json.Unmarshal(row.ToolInput, &input)
 	var options []PermissionOption
@@ -773,7 +802,7 @@ func requestFromRow(row sqlc.ToolApprovalRequest) Request {
 		ID:                      uuid.UUID(row.ID.Bytes).String(),
 		BotID:                   uuid.UUID(row.BotID.Bytes).String(),
 		SessionID:               uuid.UUID(row.SessionID.Bytes).String(),
-		WorkspaceTargetID:       strings.TrimSpace(row.WorkspaceTargetID),
+		WorkspaceID:             uuidText(row.WorkspaceID),
 		ToolCallID:              strings.TrimSpace(row.ToolCallID),
 		ToolName:                strings.TrimSpace(row.ToolName),
 		Operation:               strings.TrimSpace(row.Operation),
@@ -807,4 +836,11 @@ func requestFromRow(row sqlc.ToolApprovalRequest) Request {
 		req.DecidedAt = &decided
 	}
 	return req
+}
+
+func uuidText(id pgtype.UUID) string {
+	if !id.Valid {
+		return ""
+	}
+	return uuid.UUID(id.Bytes).String()
 }

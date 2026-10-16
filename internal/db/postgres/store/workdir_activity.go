@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 
 	"github.com/felinics/memoh/internal/db"
@@ -52,6 +53,14 @@ func activeWorkdirs(ctx context.Context, q *dbsqlc.Queries, botID pgtype.UUID) (
 	if err != nil {
 		return nil, err
 	}
+	// Unbound threads run on the bot's managed computer; a bot without one
+	// leaves the workspace id empty, which matches no bound target.
+	managedWorkspaceID := ""
+	if id, err := q.GetBotManagedWorkspaceID(ctx, botID); err == nil {
+		managedWorkspaceID = id.String()
+	} else if !errors.Is(err, pgx.ErrNoRows) {
+		return nil, err
+	}
 	result := make([]dbstore.BotWorkdirRecord, 0, len(runs))
 	for _, run := range runs {
 		sess, err := q.GetSessionByID(ctx, run.SessionID)
@@ -79,7 +88,9 @@ func activeWorkdirs(ctx context.Context, q *dbsqlc.Queries, botID pgtype.UUID) (
 		if meta.ProjectPath == "" {
 			meta.ProjectPath = "/data"
 		}
-		result = append(result, dbstore.BotWorkdirRecord{TargetKind: "native", Path: meta.ProjectPath})
+		result = append(result, dbstore.BotWorkdirRecord{
+			WorkspaceID: managedWorkspaceID, WorkspaceKind: dbstore.WorkspaceKindManaged, Path: meta.ProjectPath,
+		})
 	}
 	return result, nil
 }

@@ -961,12 +961,13 @@ func (s *Service) restoreSettings(ctx context.Context, botID string, cfg setting
 	return err
 }
 
-// restoreWorkdirs recreates the backup's native-workspace workdirs and
-// fills state.workdirMap for the session remap in restoreHistory. Directory
-// existence is deliberately not validated here: the workspace may not be
-// running yet (or the files section may not be part of this import), and a
-// workdir pointing at a missing directory fails visibly on the first agent
-// turn, which the user can fix by recreating the directory.
+// restoreWorkdirs recreates the backup's workdirs on the target bot's managed
+// computer and fills state.workdirMap for the session remap in
+// restoreHistory. Directory existence is deliberately not validated here: the
+// workspace may not be running yet (or the files section may not be part of
+// this import), and a workdir pointing at a missing directory fails visibly
+// on the first agent turn, which the user can fix by recreating the
+// directory.
 func (s *Service) restoreWorkdirs(ctx context.Context, botID, actorUserID string, state *importState) error {
 	if s.workdirs == nil {
 		return errors.New("workdir store not configured")
@@ -978,13 +979,19 @@ func (s *Service) restoreWorkdirs(ctx context.Context, botID, actorUserID string
 	if len(workdirs) == 0 {
 		return nil
 	}
+	// The backup's entries are all native: they land on the target bot's
+	// managed computer, reached through its bindings.
+	workspaceID, err := s.managedWorkspaceID(ctx, botID)
+	if err != nil {
+		return err
+	}
 	existing, err := s.workdirs.ListWorkdirs(ctx, botID, true)
 	if err != nil {
 		return fmt.Errorf("list existing workdirs: %w", err)
 	}
 	nativeByPath := map[string]dbstore.BotWorkdirRecord{}
 	for _, record := range existing {
-		if record.RemoteBindingID == "" && record.ArchivedAt.IsZero() {
+		if record.WorkspaceKind == dbstore.WorkspaceKindManaged && record.ArchivedAt.IsZero() {
 			nativeByPath[record.Path] = record
 		}
 	}
@@ -1004,7 +1011,7 @@ func (s *Service) restoreWorkdirs(ctx context.Context, botID, actorUserID string
 		created, err := s.workdirs.CreateWorkdir(ctx, dbstore.CreateBotWorkdirInput{
 			BotID:           botID,
 			Name:            item.Name,
-			TargetKind:      "native",
+			WorkspaceID:     workspaceID,
 			Path:            item.Path,
 			CreatedByUserID: strings.TrimSpace(actorUserID),
 		})
@@ -1037,6 +1044,26 @@ func (s *Service) restoreWorkdirs(ctx context.Context, botID, actorUserID string
 		state.counts[SectionWorkspace] += restored
 	}
 	return nil
+}
+
+// managedWorkspaceID is the target bot's managed computer, reached through
+// its bindings; a bot without one cannot take workspace-bound rows.
+func (s *Service) managedWorkspaceID(ctx context.Context, botID string) (string, error) {
+	if s.queries == nil {
+		return "", errors.New("queries not configured")
+	}
+	pgBotID, err := db.ParseUUID(botID)
+	if err != nil {
+		return "", err
+	}
+	workspaceID, err := s.queries.GetBotManagedWorkspaceID(ctx, pgBotID)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return "", errors.New("bot has no managed workspace")
+		}
+		return "", err
+	}
+	return workspaceID.String(), nil
 }
 
 func (s *Service) restoreWorkspaceResourceLimits(ctx context.Context, botID string, state *importState) error {

@@ -294,10 +294,14 @@ func provideSettingsService(
 	modelsService *models.Service,
 	botAgentsService *botagents.Service,
 	memoryProviderService *memprovider.Service,
+	bindings *workspace.BindingService,
 ) *settings.Service {
 	service := settings.NewService(log, queries, aclService, networkService)
 	service.SetReasoningOptionsResolver(modelsService)
 	service.SetBotAgents(botAgentsService)
+	// The native tool approval policy is read from the managed workspace
+	// binding; Bot settings writes mirror onto it.
+	service.SetManagedWorkspaceApproval(bindings)
 	service.SetBuiltinMemoryResolver(memoryProviderService)
 	return service
 }
@@ -877,6 +881,10 @@ func provideAgentService(log *slog.Logger, a *native.Agent, modelsService *model
 	if toolApproval != nil {
 		toolApproval.SetHookService(hookService)
 		toolApproval.SetWorkspaceTargetPolicyResolver(workspaceTargetPolicyResolver{manager: workspaceManager})
+		toolApproval.SetWorkspaceTargetMapper(workspaceManager)
+	}
+	if userInput != nil {
+		userInput.SetWorkspaceTargetMapper(workspaceManager)
 	}
 	service.SetToolApprovalService(toolApproval)
 	service.SetUserInputService(userInput)

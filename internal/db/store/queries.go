@@ -89,6 +89,8 @@ type Queries interface {
 	ListBotWorkspaceBindingsByBot(ctx context.Context, botID pgtype.UUID) ([]dbsqlc.BotWorkspaceBinding, error)
 	ListBotWorkspaceBindingsByWorkspace(ctx context.Context, workspaceID pgtype.UUID) ([]dbsqlc.BotWorkspaceBinding, error)
 	GetPrimaryBotWorkspaceBinding(ctx context.Context, botID pgtype.UUID) (dbsqlc.BotWorkspaceBinding, error)
+	GetBotWorkspaceBindingByWorkspace(ctx context.Context, arg dbsqlc.GetBotWorkspaceBindingByWorkspaceParams) (dbsqlc.BotWorkspaceBinding, error)
+	GetBotManagedWorkspaceBinding(ctx context.Context, botID pgtype.UUID) (dbsqlc.BotWorkspaceBinding, error)
 	ClearBotWorkspaceBindingPrimary(ctx context.Context, botID pgtype.UUID) error
 	SetBotWorkspaceBindingPrimary(ctx context.Context, arg dbsqlc.SetBotWorkspaceBindingPrimaryParams) (int64, error)
 	SetBotManagedWorkspaceBindingPrimary(ctx context.Context, botID pgtype.UUID) (int64, error)

@@ -22,15 +22,17 @@ func TestRemoteMountDefaultMigrationDoesNotRewriteExistingRows(t *testing.T) {
 }
 
 func TestUserRuntimeActivationLifecycleMigrationContract(t *testing.T) {
+	// The credential table is user_computers since 0169; the canonical schema
+	// carries the lifecycle columns under the new name.
 	baseline := readEmbeddedMigration(t, "postgres/migrations/0001_init.up.sql")
-	userRuntimes := migrationTableSQL(baseline, "user_runtimes")
+	userComputers := migrationTableSQL(baseline, "user_computers")
 	for _, contract := range []string{
 		"activated_at TIMESTAMPTZ",
 		"pending_expires_at TIMESTAMPTZ DEFAULT (now() + INTERVAL '15 minutes')",
-		"CONSTRAINT user_runtimes_activation_state_check",
+		"CONSTRAINT user_computers_activation_state_check",
 	} {
-		if !strings.Contains(userRuntimes, contract) {
-			t.Fatalf("canonical user_runtimes schema missing %q", contract)
+		if !strings.Contains(userComputers, contract) {
+			t.Fatalf("canonical user_computers schema missing %q", contract)
 		}
 	}
 

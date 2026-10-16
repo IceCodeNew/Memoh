@@ -30,11 +30,12 @@ func (s *fakeWorkdirStore) CreateWorkdir(_ context.Context, input dbstore.Create
 	}
 	s.nextID++
 	record := dbstore.BotWorkdirRecord{
-		ID:         fmt.Sprintf("00000000-0000-0000-0000-%012d", s.nextID),
-		BotID:      input.BotID,
-		Name:       input.Name,
-		TargetKind: input.TargetKind,
-		Path:       input.Path,
+		ID:            fmt.Sprintf("00000000-0000-0000-0000-%012d", s.nextID),
+		BotID:         input.BotID,
+		Name:          input.Name,
+		WorkspaceID:   input.WorkspaceID,
+		WorkspaceKind: dbstore.WorkspaceKindManaged,
+		Path:          input.Path,
 	}
 	s.records = append(s.records, record)
 	return record, nil
@@ -102,17 +103,23 @@ func TestRestoreWorkdirsKeepsArchivedRestoresOutOfLivePathMap(t *testing.T) {
 	t.Parallel()
 
 	store := &fakeWorkdirStore{}
-	svc := &Service{workdirs: store}
+	svc := &Service{workdirs: store, queries: failingQueries{}}
 	state := newWorkdirImportState(t, []backupWorkdir{
 		{ID: "src-archived", Name: "old", Path: "/data/site", Archived: true},
 		{ID: "src-live", Name: "current", Path: "/data/site"},
 	})
 
-	if err := svc.restoreWorkdirs(context.Background(), "bot-1", "user-1", state); err != nil {
+	if err := svc.restoreWorkdirs(context.Background(), workdirImportBotID, "user-1", state); err != nil {
 		t.Fatalf("restoreWorkdirs() error = %v", err)
 	}
 	if len(store.records) != 2 {
 		t.Fatalf("created %d workdirs, want the archived one and a fresh live one: %+v", len(store.records), store.records)
+	}
+	// Restored workdirs land on the target bot's managed computer.
+	for _, record := range store.records {
+		if record.WorkspaceID != "b1000000-0000-0000-0000-000000000000" {
+			t.Fatalf("restored workdir workspace = %q, want the bot's managed workspace", record.WorkspaceID)
+		}
 	}
 	archivedID := state.workdirMap["src-archived"]
 	liveID := state.workdirMap["src-live"]
@@ -122,7 +129,7 @@ func TestRestoreWorkdirsKeepsArchivedRestoresOutOfLivePathMap(t *testing.T) {
 	if archivedID == liveID {
 		t.Fatal("the live workdir was folded into the archived one — its sessions would resolve to an archived workdir")
 	}
-	live, err := svc.workdirs.GetWorkdir(context.Background(), "bot-1", uuidText(liveID))
+	live, err := svc.workdirs.GetWorkdir(context.Background(), workdirImportBotID, uuidText(liveID))
 	if err != nil {
 		t.Fatalf("GetWorkdir() error = %v", err)
 	}
@@ -134,7 +141,12 @@ func TestRestoreWorkdirsKeepsArchivedRestoresOutOfLivePathMap(t *testing.T) {
 	}
 }
 
-const existingWorkdirID = "11111111-1111-1111-1111-111111111111"
+const (
+	existingWorkdirID = "11111111-1111-1111-1111-111111111111"
+	// workdirImportBotID is the target bot; restoreWorkdirs resolves its
+	// managed computer by id.
+	workdirImportBotID = "22222222-2222-4222-8222-222222222222"
+)
 
 // Merge mode still reuses an existing LIVE workdir for the same directory
 // rather than tripping the unique constraint.
@@ -142,14 +154,14 @@ func TestRestoreWorkdirsReusesExistingLiveWorkdirForSamePath(t *testing.T) {
 	t.Parallel()
 
 	store := &fakeWorkdirStore{records: []dbstore.BotWorkdirRecord{
-		{ID: existingWorkdirID, BotID: "bot-1", Name: "existing", Path: "/data/site"},
+		{ID: existingWorkdirID, BotID: workdirImportBotID, Name: "existing", WorkspaceKind: dbstore.WorkspaceKindManaged, Path: "/data/site"},
 	}}
-	svc := &Service{workdirs: store}
+	svc := &Service{workdirs: store, queries: failingQueries{}}
 	state := newWorkdirImportState(t, []backupWorkdir{
 		{ID: "src-live", Name: "current", Path: "/data/site"},
 	})
 
-	if err := svc.restoreWorkdirs(context.Background(), "bot-1", "user-1", state); err != nil {
+	if err := svc.restoreWorkdirs(context.Background(), workdirImportBotID, "user-1", state); err != nil {
 		t.Fatalf("restoreWorkdirs() error = %v", err)
 	}
 	if len(store.records) != 1 {

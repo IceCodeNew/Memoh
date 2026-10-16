@@ -92,12 +92,15 @@ type CancelInput struct {
 }
 
 type Request struct {
-	ID                      string               `json:"id"`
-	BotID                   string               `json:"bot_id"`
-	SessionID               string               `json:"session_id"`
-	RouteID                 string               `json:"route_id,omitempty"`
-	ChannelIdentityID       string               `json:"channel_identity_id,omitempty"`
+	ID                string `json:"id"`
+	BotID             string `json:"bot_id"`
+	SessionID         string `json:"session_id"`
+	RouteID           string `json:"route_id,omitempty"`
+	ChannelIdentityID string `json:"channel_identity_id,omitempty"`
+	// WorkspaceTargetID is the client-facing address of the workspace the
+	// request was raised on; WorkspaceID is the stored key behind it.
 	WorkspaceTargetID       string               `json:"workspace_target_id,omitempty"`
+	WorkspaceID             string               `json:"-"`
 	ToolCallID              string               `json:"tool_call_id"`
 	ToolName                string               `json:"tool_name"`
 	ShortID                 int                  `json:"short_id"`

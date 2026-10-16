@@ -225,12 +225,13 @@ func TestCreateValidatesDirectoryOnTarget(t *testing.T) {
 	svc := &statTestContainerService{dirs: map[string]bool{"/data/site": true}}
 	client := newStatTestClient(t, svc)
 	store := &fakeWorkdirStore{create: dbstore.BotWorkdirRecord{
-		ID: "p1", BotID: "b1", Name: "Site", TargetKind: TargetKindNative, Path: "/data/site",
+		ID: "p1", BotID: "b1", Name: "Site", WorkspaceID: "ws-managed", WorkspaceKind: dbstore.WorkspaceKindManaged, Path: "/data/site",
 	}}
 	resolver := &fakeTargetResolver{target: workspace.ResolvedWorkspaceTarget{
-		TargetID: workspace.WorkspaceTargetNative,
-		Kind:     TargetKindNative,
-		Client:   client,
+		TargetID:    workspace.WorkspaceTargetNative,
+		Kind:        TargetKindNative,
+		WorkspaceID: "ws-managed",
+		Client:      client,
 	}}
 	service := &Service{store: store, targets: resolver}
 
@@ -245,7 +246,8 @@ func TestCreateValidatesDirectoryOnTarget(t *testing.T) {
 		t.Fatalf("store.created = %d, want 1", len(store.created))
 	}
 	input := store.created[0]
-	if input.Path != "/data/site" || input.Name != "Site" || input.TargetKind != TargetKindNative || input.RemoteBindingID != "" {
+	// Only the workspace behind the target is stored.
+	if input.Path != "/data/site" || input.Name != "Site" || input.WorkspaceID != "ws-managed" {
 		t.Fatalf("store input = %+v", input)
 	}
 	if len(svc.seen) != 1 || svc.seen[0] != "/data/site" {
@@ -291,15 +293,16 @@ func TestCreateRemoteStoresBindingID(t *testing.T) {
 	svc := &statTestContainerService{dirs: map[string]bool{"/Users/alice/code": true}}
 	client := newStatTestClient(t, svc)
 	store := &fakeWorkdirStore{create: dbstore.BotWorkdirRecord{
-		ID: "p2", BotID: "b1", TargetKind: TargetKindRemote, RemoteBindingID: "bind-1", Path: "/Users/alice/code",
+		ID: "p2", BotID: "b1", WorkspaceID: "ws-user", WorkspaceKind: dbstore.WorkspaceKindUser, BindingID: "bind-1", Path: "/Users/alice/code",
 	}}
 	service := &Service{
 		store: store,
 		targets: &fakeTargetResolver{target: workspace.ResolvedWorkspaceTarget{
-			TargetID: "bind-1",
-			Kind:     TargetKindRemote,
-			Client:   client,
-			Info:     bridge.WorkspaceInfo{Backend: bridge.WorkspaceBackendRemote, OS: "darwin"},
+			TargetID:    "bind-1",
+			Kind:        TargetKindRemote,
+			WorkspaceID: "ws-user",
+			Client:      client,
+			Info:        bridge.WorkspaceInfo{Backend: bridge.WorkspaceBackendRemote, OS: "darwin"},
 		}},
 	}
 	created, err := service.Create(context.Background(), "b1", "u1", CreateRequest{
@@ -308,11 +311,49 @@ func TestCreateRemoteStoresBindingID(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Create error = %v", err)
 	}
-	if store.created[0].RemoteBindingID != "bind-1" || store.created[0].TargetKind != TargetKindRemote {
+	if store.created[0].WorkspaceID != "ws-user" {
 		t.Fatalf("store input = %+v", store.created[0])
 	}
-	if created.WorkspaceTargetID != "bind-1" {
-		t.Fatalf("created.WorkspaceTargetID = %q", created.WorkspaceTargetID)
+	if created.WorkspaceTargetID != "bind-1" || created.TargetKind != TargetKindRemote {
+		t.Fatalf("created = %+v, want the binding id as remote target", created)
+	}
+}
+
+// A target that names no workspace cannot be pinned: the error surfaces at
+// creation instead of leaving a workdir nothing resolves.
+func TestCreateRequiresResolvedWorkspace(t *testing.T) {
+	client := newStatTestClient(t, &statTestContainerService{dirs: map[string]bool{"/data/site": true}})
+	store := &fakeWorkdirStore{}
+	service := &Service{
+		store: store,
+		targets: &fakeTargetResolver{target: workspace.ResolvedWorkspaceTarget{
+			TargetID: workspace.WorkspaceTargetNative, Kind: TargetKindNative, Client: client,
+		}},
+	}
+	_, err := service.Create(context.Background(), "b1", "u1", CreateRequest{Name: "Site", Path: "/data/site"})
+	if !errors.Is(err, ErrWorkspaceUnresolved) {
+		t.Fatalf("error = %v, want ErrWorkspaceUnresolved", err)
+	}
+	if len(store.created) != 0 {
+		t.Fatalf("store.created = %+v, want nothing stored", store.created)
+	}
+}
+
+// The client-facing address is derived from the stored workspace: a managed
+// workspace is the native target, a user workspace is reached through the
+// bot's binding to it.
+func TestToWorkdirDerivesTargetAddress(t *testing.T) {
+	managed := toWorkdir(dbstore.BotWorkdirRecord{
+		ID: "p1", WorkspaceID: "ws-managed", WorkspaceKind: dbstore.WorkspaceKindManaged, BindingID: "bind-managed", Path: "/data/site",
+	})
+	if managed.TargetKind != TargetKindNative || managed.WorkspaceTargetID != workspace.WorkspaceTargetNative || managed.WorkspaceID != "ws-managed" {
+		t.Fatalf("managed workdir = %+v", managed)
+	}
+	remote := toWorkdir(dbstore.BotWorkdirRecord{
+		ID: "p2", WorkspaceID: "ws-user", WorkspaceKind: dbstore.WorkspaceKindUser, BindingID: "bind-1", Path: "/Users/alice/code",
+	})
+	if remote.TargetKind != TargetKindRemote || remote.WorkspaceTargetID != "bind-1" || remote.WorkspaceID != "ws-user" {
+		t.Fatalf("remote workdir = %+v", remote)
 	}
 }
 
@@ -324,7 +365,7 @@ func TestCreateMapsUniqueViolationToDuplicatePath(t *testing.T) {
 	service := &Service{
 		store: store,
 		targets: &fakeTargetResolver{target: workspace.ResolvedWorkspaceTarget{
-			TargetID: workspace.WorkspaceTargetNative, Kind: TargetKindNative, Client: client,
+			TargetID: workspace.WorkspaceTargetNative, Kind: TargetKindNative, WorkspaceID: "ws-managed", Client: client,
 		}},
 	}
 	_, err := service.Create(context.Background(), "b1", "u1", CreateRequest{Name: "Site", Path: "/data/site"})
@@ -342,7 +383,7 @@ func TestCreateRequiresName(t *testing.T) {
 
 func TestRequireActiveRefusesArchived(t *testing.T) {
 	service := &Service{store: &fakeWorkdirStore{get: dbstore.BotWorkdirRecord{
-		ID: "p1", TargetKind: TargetKindNative, ArchivedAt: time.Now(),
+		ID: "p1", WorkspaceID: "ws-managed", WorkspaceKind: dbstore.WorkspaceKindManaged, ArchivedAt: time.Now(),
 	}}}
 	if _, err := service.RequireActive(context.Background(), "b1", "p1"); !errors.Is(err, ErrWorkdirArchived) {
 		t.Fatalf("error = %v, want ErrWorkdirArchived", err)

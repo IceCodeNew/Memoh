@@ -150,7 +150,8 @@ func readGitBranches(ctx context.Context, client *bridge.Client, directory strin
 func gitDirectoryBusy(ctx context.Context, target workspace.ResolvedWorkspaceTarget, root string, active []dbstore.BotWorkdirRecord) (bool, error) {
 	seen := map[string]bool{}
 	for _, directory := range active {
-		if directory.TargetKind != target.Kind || (target.Kind == TargetKindRemote && directory.RemoteBindingID != target.TargetID) {
+		// Only directories on the same computer can share a repository.
+		if directory.WorkspaceID == "" || directory.WorkspaceID != target.WorkspaceID {
 			continue
 		}
 		if seen[directory.Path] {

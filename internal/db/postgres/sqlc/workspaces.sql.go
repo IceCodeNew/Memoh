@@ -48,7 +48,7 @@ type CreateWorkspaceParams struct {
 // workspaces: computers a team knows about (managed per bot, or a user's own
 // machine paired through Remote Runtime). bot_workspace_bindings: which bots
 // may use which workspace, one primary per bot. Remote-mount compatibility
-// queries that join user_runtimes live in user_runtimes.sql.
+// queries that join user_computers live in user_computers.sql.
 // A user workspace reuses its runtime id; managed workspaces take a new one.
 func (q *Queries) CreateWorkspace(ctx context.Context, arg CreateWorkspaceParams) (Workspace, error) {
 	row := q.db.QueryRow(ctx, createWorkspace,
@@ -145,6 +145,37 @@ func (q *Queries) DeleteWorkspaceIfUnbound(ctx context.Context, id pgtype.UUID) 
 	return result.RowsAffected(), nil
 }
 
+const getBotManagedWorkspaceBinding = `-- name: GetBotManagedWorkspaceBinding :one
+SELECT binding.id, binding.team_id, binding.bot_id, binding.workspace_id, binding.is_primary, binding.tool_approval_config, binding.created_at, binding.updated_at
+FROM bot_workspace_bindings binding
+JOIN workspaces w
+  ON w.team_id = binding.team_id
+ AND w.id = binding.workspace_id
+WHERE binding.team_id = public.memoh_current_team_id()
+  AND binding.bot_id = $1
+  AND w.kind = 'managed'
+ORDER BY binding.created_at ASC, binding.id ASC
+LIMIT 1
+`
+
+// The binding behind the bot's managed computer (its first managed binding):
+// the native target's tool approval policy lives on it.
+func (q *Queries) GetBotManagedWorkspaceBinding(ctx context.Context, botID pgtype.UUID) (BotWorkspaceBinding, error) {
+	row := q.db.QueryRow(ctx, getBotManagedWorkspaceBinding, botID)
+	var i BotWorkspaceBinding
+	err := row.Scan(
+		&i.ID,
+		&i.TeamID,
+		&i.BotID,
+		&i.WorkspaceID,
+		&i.IsPrimary,
+		&i.ToolApprovalConfig,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
 const getBotManagedWorkspaceID = `-- name: GetBotManagedWorkspaceID :one
 SELECT w.id
 FROM workspaces w
@@ -180,6 +211,36 @@ type GetBotWorkspaceBindingParams struct {
 
 func (q *Queries) GetBotWorkspaceBinding(ctx context.Context, arg GetBotWorkspaceBindingParams) (BotWorkspaceBinding, error) {
 	row := q.db.QueryRow(ctx, getBotWorkspaceBinding, arg.BotID, arg.BindingID)
+	var i BotWorkspaceBinding
+	err := row.Scan(
+		&i.ID,
+		&i.TeamID,
+		&i.BotID,
+		&i.WorkspaceID,
+		&i.IsPrimary,
+		&i.ToolApprovalConfig,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const getBotWorkspaceBindingByWorkspace = `-- name: GetBotWorkspaceBindingByWorkspace :one
+SELECT id, team_id, bot_id, workspace_id, is_primary, tool_approval_config, created_at, updated_at FROM bot_workspace_bindings
+WHERE team_id = public.memoh_current_team_id()
+  AND bot_id = $1
+  AND workspace_id = $2
+`
+
+type GetBotWorkspaceBindingByWorkspaceParams struct {
+	BotID       pgtype.UUID `json:"bot_id"`
+	WorkspaceID pgtype.UUID `json:"workspace_id"`
+}
+
+// The bot's binding to one workspace: how a stored workspace id maps back to
+// the client-facing target address.
+func (q *Queries) GetBotWorkspaceBindingByWorkspace(ctx context.Context, arg GetBotWorkspaceBindingByWorkspaceParams) (BotWorkspaceBinding, error) {
+	row := q.db.QueryRow(ctx, getBotWorkspaceBindingByWorkspace, arg.BotID, arg.WorkspaceID)
 	var i BotWorkspaceBinding
 	err := row.Scan(
 		&i.ID,

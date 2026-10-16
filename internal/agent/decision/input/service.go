@@ -29,9 +29,18 @@ const (
 type Service struct {
 	queries dbstore.Queries
 
-	logger *slog.Logger
+	logger     *slog.Logger
+	workspaces decision.WorkspaceTargetMapper
 
 	waiter *decision.Waiter[Request]
+}
+
+// SetWorkspaceTargetMapper wires the translation between request target ids
+// and the workspace ids user_input_requests stores.
+func (s *Service) SetWorkspaceTargetMapper(mapper decision.WorkspaceTargetMapper) {
+	if s != nil {
+		s.workspaces = mapper
+	}
 }
 
 func NewService(log *slog.Logger, queries dbstore.Queries) *Service {
@@ -84,7 +93,7 @@ func (s *Service) notifyResolved(req Request) {
 // an existing non-pending request means the transition lost a race to another
 // decision (or to expiry), not that the request is unknown.
 func (s *Service) resolveAndNotify(ctx context.Context, requestID string, row sqlc.UserInputRequest, err error) (Request, error) {
-	resolved, err := requestFromRowOrErr(row, err)
+	resolved, err := s.requestFromRowOrErr(ctx, row, err)
 	if err != nil {
 		if errors.Is(err, ErrNotFound) {
 			if id, parseErr := db.ParseUUID(requestID); parseErr == nil {
@@ -149,12 +158,16 @@ func (s *Service) CreatePending(ctx context.Context, input CreatePendingInput) (
 	if err != nil {
 		return Request{}, err
 	}
+	workspaceID, err := decision.WorkspaceIDForTarget(ctx, s.workspaces, input.BotID, input.WorkspaceTargetID)
+	if err != nil {
+		return Request{}, err
+	}
 	params := sqlc.CreateUserInputRequestParams{
 		BotID:                        botID,
 		SessionID:                    sessionID,
 		RouteID:                      optionalUUID(input.RouteID),
 		ChannelIdentityID:            channelIdentityID,
-		WorkspaceTargetID:            strings.TrimSpace(input.WorkspaceTargetID),
+		WorkspaceID:                  optionalUUID(workspaceID),
 		ToolCallID:                   toolCallID,
 		ToolName:                     toolName,
 		RuntimeFencingToken:          runtimeFencingToken(ctx),
@@ -185,7 +198,7 @@ func (s *Service) CreatePending(ctx context.Context, input CreatePendingInput) (
 		}
 		return Request{}, mapLookupErr(err)
 	}
-	return requestFromRow(row), nil
+	return s.requestFromRow(ctx, row), nil
 }
 
 func (s *Service) ResolveTarget(ctx context.Context, input ResolveInput) (Request, error) {
@@ -206,7 +219,7 @@ func (s *Service) ResolveTarget(ctx context.Context, input ResolveInput) (Reques
 			if err != nil {
 				return Request{}, mapLookupErr(err)
 			}
-			req := requestFromRespondableRow(row)
+			req := s.requestFromRespondableRow(ctx, row)
 			if req.BotID != uuid.UUID(botID.Bytes).String() {
 				return Request{}, ErrNotFound
 			}
@@ -225,7 +238,7 @@ func (s *Service) ResolveTarget(ctx context.Context, input ResolveInput) (Reques
 				SessionID: sessionID,
 				ShortID:   int32(shortID), //nolint:gosec // user-facing request numbers are small positive integers.
 			})
-			return requestFromRowOrErr(row, err)
+			return s.requestFromRowOrErr(ctx, row, err)
 		}
 		if parsed, err := db.ParseUUID(explicit); err == nil {
 			row, err := s.queries.GetRespondableUserInputRequest(ctx, sqlc.GetRespondableUserInputRequestParams{
@@ -235,7 +248,7 @@ func (s *Service) ResolveTarget(ctx context.Context, input ResolveInput) (Reques
 			if err != nil {
 				return Request{}, mapLookupErr(err)
 			}
-			req := requestFromRespondableRow(row)
+			req := s.requestFromRespondableRow(ctx, row)
 			if req.BotID != uuid.UUID(botID.Bytes).String() || req.SessionID != uuid.UUID(sessionID.Bytes).String() {
 				return Request{}, ErrNotFound
 			}
@@ -250,7 +263,7 @@ func (s *Service) ResolveTarget(ctx context.Context, input ResolveInput) (Reques
 			PromptExternalMessageID: replyID,
 		})
 		if err == nil {
-			return requestFromRow(row), nil
+			return s.requestFromRow(ctx, row), nil
 		}
 		if !errors.Is(err, pgx.ErrNoRows) {
 			return Request{}, err
@@ -260,7 +273,7 @@ func (s *Service) ResolveTarget(ctx context.Context, input ResolveInput) (Reques
 		BotID:     botID,
 		SessionID: sessionID,
 	})
-	return requestFromRowOrErr(row, err)
+	return s.requestFromRowOrErr(ctx, row, err)
 }
 
 func (s *Service) Get(ctx context.Context, requestID string) (Request, error) {
@@ -272,7 +285,7 @@ func (s *Service) Get(ctx context.Context, requestID string) (Request, error) {
 		return Request{}, err
 	}
 	row, err := s.queries.GetUserInputRequest(ctx, id)
-	return requestFromRowOrErr(row, err)
+	return s.requestFromRowOrErr(ctx, row, err)
 }
 
 // WaitForResponse blocks until the request leaves pending. Resolution inside
@@ -342,7 +355,7 @@ func (s *Service) Submit(ctx context.Context, input SubmitInput) (Request, error
 		}
 		return Request{}, err
 	}
-	req := requestFromRespondableRow(respondableRow)
+	req := s.requestFromRespondableRow(ctx, respondableRow)
 	if err := runtimefence.ValidateScope(ctx, req.BotID, req.SessionID); err != nil {
 		return Request{}, err
 	}
@@ -458,7 +471,7 @@ func (s *Service) CancelPendingForSession(ctx context.Context, botID, sessionID,
 	}
 	requests := make([]Request, 0, len(rows))
 	for _, row := range rows {
-		req := requestFromRow(row)
+		req := s.requestFromRow(ctx, row)
 		requests = append(requests, req)
 		s.notifyResolved(req)
 	}
@@ -499,7 +512,7 @@ func (s *Service) CancelPendingForRun(ctx context.Context, botID, sessionID, run
 	}
 	requests := make([]Request, 0, len(rows))
 	for _, row := range rows {
-		req := requestFromRow(row)
+		req := s.requestFromRow(ctx, row)
 		requests = append(requests, req)
 		s.notifyResolved(req)
 	}
@@ -556,7 +569,7 @@ func (s *Service) UpdatePromptMessage(ctx context.Context, requestID, promptMess
 		})
 		return updateErr
 	})
-	return requestFromRowOrErr(row, err)
+	return s.requestFromRowOrErr(ctx, row, err)
 }
 
 func (s *Service) UpdateAssistantMessage(ctx context.Context, requestID, messageID string) (Request, error) {
@@ -576,7 +589,7 @@ func (s *Service) UpdateAssistantMessage(ctx context.Context, requestID, message
 		})
 		return updateErr
 	})
-	return requestFromRowOrErr(row, err)
+	return s.requestFromRowOrErr(ctx, row, err)
 }
 
 func (s *Service) UpdateToolResultMessage(ctx context.Context, requestID, messageID string) (Request, error) {
@@ -596,7 +609,7 @@ func (s *Service) UpdateToolResultMessage(ctx context.Context, requestID, messag
 		})
 		return updateErr
 	})
-	return requestFromRowOrErr(row, err)
+	return s.requestFromRowOrErr(ctx, row, err)
 }
 
 func (s *Service) ListPendingBySession(ctx context.Context, botID, sessionID string) ([]Request, error) {
@@ -626,7 +639,7 @@ func validateUserInputFence(ctx context.Context, queries dbstore.Queries, id pgt
 	if err != nil {
 		return err
 	}
-	request := requestFromRow(row)
+	request := requestRow(row)
 	return runtimefence.ValidateScope(ctx, request.BotID, request.SessionID)
 }
 
@@ -657,7 +670,7 @@ func (s *Service) ListBySessionToolCalls(ctx context.Context, botID, sessionID s
 	}
 	result := make([]Request, 0, len(rows))
 	for _, row := range rows {
-		result = append(result, requestFromRow(row))
+		result = append(result, s.requestFromRow(ctx, row))
 	}
 	return result, nil
 }
@@ -688,7 +701,7 @@ func (s *Service) listBySession(ctx context.Context, botID, sessionID string, pe
 	}
 	result := make([]Request, 0, len(rows))
 	for _, row := range rows {
-		result = append(result, requestFromRow(row))
+		result = append(result, s.requestFromRow(ctx, row))
 	}
 	return result, nil
 }
@@ -903,17 +916,30 @@ func cleanIDs(values []string) []string {
 	return out
 }
 
-func requestFromRowOrErr(row sqlc.UserInputRequest, err error) (Request, error) {
+func (s *Service) requestFromRowOrErr(ctx context.Context, row sqlc.UserInputRequest, err error) (Request, error) {
 	if err != nil {
 		return Request{}, mapLookupErr(err)
 	}
-	return requestFromRow(row), nil
+	return s.requestFromRow(ctx, row), nil
 }
 
-func requestFromRespondableRow(row sqlc.UserInputRequest) Request {
-	request := requestFromRow(row)
+func (s *Service) requestFromRespondableRow(ctx context.Context, row sqlc.UserInputRequest) Request {
+	request := s.requestFromRow(ctx, row)
 	request.Status = strings.TrimSpace(row.Status)
 	return request
+}
+
+// requestFromRow is requestRow plus the client-facing target address of the
+// stored workspace.
+func (s *Service) requestFromRow(ctx context.Context, row sqlc.UserInputRequest) Request {
+	req := requestRow(row)
+	var mapper decision.WorkspaceTargetMapper
+	var logger *slog.Logger
+	if s != nil {
+		mapper, logger = s.workspaces, s.logger
+	}
+	req.WorkspaceTargetID = decision.TargetAddress(ctx, mapper, logger, req.BotID, req.WorkspaceID)
+	return req
 }
 
 func mapLookupErr(err error) error {
@@ -923,12 +949,13 @@ func mapLookupErr(err error) error {
 	return err
 }
 
-func requestFromRow(row sqlc.UserInputRequest) Request {
+// requestRow maps a row without resolving its workspace to a target address.
+func requestRow(row sqlc.UserInputRequest) Request {
 	req := Request{
 		ID:                      uuid.UUID(row.ID.Bytes).String(),
 		BotID:                   uuid.UUID(row.BotID.Bytes).String(),
 		SessionID:               uuid.UUID(row.SessionID.Bytes).String(),
-		WorkspaceTargetID:       strings.TrimSpace(row.WorkspaceTargetID),
+		WorkspaceID:             uuidText(row.WorkspaceID),
 		ToolCallID:              strings.TrimSpace(row.ToolCallID),
 		ToolName:                strings.TrimSpace(row.ToolName),
 		ShortID:                 int(row.ShortID),
@@ -1048,4 +1075,11 @@ func enableConversationalAnswers(payload *UIPayload, metadata map[string]any) {
 			payload.Questions[i].AllowCustom = true
 		}
 	}
+}
+
+func uuidText(id pgtype.UUID) string {
+	if !id.Valid {
+		return ""
+	}
+	return uuid.UUID(id.Bytes).String()
 }

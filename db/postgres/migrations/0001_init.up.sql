@@ -284,10 +284,13 @@ CREATE TABLE IF NOT EXISTS bots (
 CREATE INDEX IF NOT EXISTS idx_bots_owner_user_id ON bots(owner_user_id);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_bots_name ON bots(name);
 
--- user_runtimes: API tokens for Remote Runtime WebSocket clients. A new token
--- has a short pending window; a ready connection activates it for reconnects.
+-- user_computers: a user's own computer paired through Remote Runtime — the
+-- API token its WebSocket client authenticates with. The row shares its id
+-- with the user workspace it is the credential of (workspaces, declared at
+-- the end of this file, where the reference is added). A new token has a
+-- short pending window; a ready connection activates it for reconnects.
 -- Activated tokens stay readable so their owner can copy the command again.
-CREATE TABLE IF NOT EXISTS user_runtimes (
+CREATE TABLE IF NOT EXISTS user_computers (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   name TEXT NOT NULL CHECK (btrim(name) <> ''),
@@ -297,16 +300,16 @@ CREATE TABLE IF NOT EXISTS user_runtimes (
   pending_expires_at TIMESTAMPTZ DEFAULT (now() + INTERVAL '15 minutes'),
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-  CONSTRAINT user_runtimes_activation_state_check CHECK (
+  CONSTRAINT user_computers_activation_state_check CHECK (
     (activated_at IS NULL AND pending_expires_at IS NOT NULL)
     OR (activated_at IS NOT NULL AND pending_expires_at IS NULL)
   )
 );
 
-CREATE UNIQUE INDEX IF NOT EXISTS idx_user_runtimes_active_user_name
-  ON user_runtimes(user_id, lower(name))
+CREATE UNIQUE INDEX IF NOT EXISTS idx_user_computers_active_user_name
+  ON user_computers(user_id, lower(name))
   WHERE revoked_at IS NULL;
-CREATE INDEX IF NOT EXISTS idx_user_runtimes_user_id ON user_runtimes(user_id);
+CREATE INDEX IF NOT EXISTS idx_user_computers_user_id ON user_computers(user_id);
 
 -- Bot placement on a user-owned Remote Runtime is recorded in
 -- bot_workspace_bindings (declared at the end of this file, next to
@@ -706,7 +709,10 @@ CREATE TABLE IF NOT EXISTS tool_approval_requests (
   session_id UUID NOT NULL REFERENCES bot_sessions(id) ON DELETE CASCADE,
   route_id UUID REFERENCES bot_channel_routes(id) ON DELETE SET NULL,
   channel_identity_id UUID REFERENCES channel_identities(id) ON DELETE SET NULL,
-  workspace_target_id TEXT NOT NULL DEFAULT '',
+  -- The workspace the request was raised on (NULL when the target of a
+  -- historical request no longer resolves); the client-facing target id is
+  -- derived from it. The column keeps the slot 0169 converted in place.
+  workspace_id UUID,
   tool_call_id TEXT NOT NULL,
   tool_name TEXT NOT NULL,
   operation TEXT NOT NULL,
@@ -752,7 +758,10 @@ CREATE TABLE IF NOT EXISTS user_input_requests (
   session_id UUID NOT NULL REFERENCES bot_sessions(id) ON DELETE CASCADE,
   route_id UUID REFERENCES bot_channel_routes(id) ON DELETE SET NULL,
   channel_identity_id UUID REFERENCES channel_identities(id) ON DELETE SET NULL,
-  workspace_target_id TEXT NOT NULL DEFAULT '',
+  -- The workspace the request was raised on (NULL when the target of a
+  -- historical request no longer resolves); the client-facing target id is
+  -- derived from it. The column keeps the slot 0169 converted in place.
+  workspace_id UUID,
   tool_call_id TEXT NOT NULL,
   tool_name TEXT NOT NULL DEFAULT 'ask_user',
   short_id INTEGER NOT NULL,
@@ -1209,7 +1218,7 @@ ALTER TABLE IF EXISTS public.user_channel_bindings ADD COLUMN IF NOT EXISTS team
 ALTER TABLE IF EXISTS public.user_channel_identity_bindings ADD COLUMN IF NOT EXISTS team_id uuid;
 ALTER TABLE IF EXISTS public.user_input_requests ADD COLUMN IF NOT EXISTS team_id uuid;
 ALTER TABLE IF EXISTS public.user_provider_oauth_tokens ADD COLUMN IF NOT EXISTS team_id uuid;
-ALTER TABLE IF EXISTS public.user_runtimes ADD COLUMN IF NOT EXISTS team_id uuid;
+ALTER TABLE IF EXISTS public.user_computers ADD COLUMN IF NOT EXISTS team_id uuid;
 -- A canonical 0001 already has global users plus team_members. Legacy
 -- databases do not, so only the legacy path needs the transitional users
 -- team_id column that 0115 later moves into team_members.
@@ -1262,7 +1271,7 @@ ALTER TABLE IF EXISTS public.user_channel_bindings ALTER COLUMN team_id SET DEFA
 ALTER TABLE IF EXISTS public.user_channel_identity_bindings ALTER COLUMN team_id SET DEFAULT public.memoh_current_team_id();
 ALTER TABLE IF EXISTS public.user_input_requests ALTER COLUMN team_id SET DEFAULT public.memoh_current_team_id();
 ALTER TABLE IF EXISTS public.user_provider_oauth_tokens ALTER COLUMN team_id SET DEFAULT public.memoh_current_team_id();
-ALTER TABLE IF EXISTS public.user_runtimes ALTER COLUMN team_id SET DEFAULT public.memoh_current_team_id();
+ALTER TABLE IF EXISTS public.user_computers ALTER COLUMN team_id SET DEFAULT public.memoh_current_team_id();
 DO $users_legacy_team_default$
 BEGIN
     IF EXISTS (
@@ -1782,8 +1791,8 @@ ALTER TABLE public.user_channel_identity_bindings NO FORCE ROW LEVEL SECURITY;
 ALTER TABLE public.user_channel_identity_bindings DISABLE ROW LEVEL SECURITY;
 ALTER TABLE public.user_provider_oauth_tokens NO FORCE ROW LEVEL SECURITY;
 ALTER TABLE public.user_provider_oauth_tokens DISABLE ROW LEVEL SECURITY;
-ALTER TABLE public.user_runtimes NO FORCE ROW LEVEL SECURITY;
-ALTER TABLE public.user_runtimes DISABLE ROW LEVEL SECURITY;
+ALTER TABLE public.user_computers NO FORCE ROW LEVEL SECURITY;
+ALTER TABLE public.user_computers DISABLE ROW LEVEL SECURITY;
 
 -- Team-owned references now target membership rather than requiring the user
 -- principal itself to belong to exactly one team.
@@ -1808,8 +1817,8 @@ ALTER TABLE public.user_channel_identity_bindings
     DROP CONSTRAINT IF EXISTS user_channel_identity_bindings_user_id_fkey;
 ALTER TABLE public.user_provider_oauth_tokens
     DROP CONSTRAINT IF EXISTS user_provider_oauth_tokens_user_id_fkey;
-ALTER TABLE public.user_runtimes
-    DROP CONSTRAINT IF EXISTS user_runtimes_user_id_fkey;
+ALTER TABLE public.user_computers
+    DROP CONSTRAINT IF EXISTS user_computers_user_id_fkey;
 
 ALTER TABLE public.bot_acl_rules
     ADD CONSTRAINT bot_acl_rules_created_by_user_id_fkey
@@ -1864,8 +1873,8 @@ ALTER TABLE public.user_provider_oauth_tokens
     FOREIGN KEY (team_id, user_id)
     REFERENCES public.team_members(team_id, user_id)
     ON DELETE CASCADE;
-ALTER TABLE public.user_runtimes
-    ADD CONSTRAINT user_runtimes_user_id_fkey
+ALTER TABLE public.user_computers
+    ADD CONSTRAINT user_computers_user_id_fkey
     FOREIGN KEY (team_id, user_id)
     REFERENCES public.team_members(team_id, user_id)
     ON DELETE CASCADE;
@@ -1890,8 +1899,8 @@ ALTER TABLE public.user_channel_identity_bindings ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.user_channel_identity_bindings FORCE ROW LEVEL SECURITY;
 ALTER TABLE public.user_provider_oauth_tokens ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.user_provider_oauth_tokens FORCE ROW LEVEL SECURITY;
-ALTER TABLE public.user_runtimes ENABLE ROW LEVEL SECURITY;
-ALTER TABLE public.user_runtimes FORCE ROW LEVEL SECURITY;
+ALTER TABLE public.user_computers ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.user_computers FORCE ROW LEVEL SECURITY;
 
 ALTER TABLE public.users
     DROP CONSTRAINT IF EXISTS users_team_id_fkey,
@@ -2424,15 +2433,18 @@ CREATE POLICY bot_app_connector_refs_team_delete ON public.bot_app_connector_ref
 -- ---------------------------------------------------------------------------
 -- Bot workdirs
 -- ---------------------------------------------------------------------------
--- Named per-bot working directories. A workdir pins a workspace target
--- (the native container workspace, or a remote runtime binding) together
--- with an absolute directory path. bot_sessions.workdir_id binds a session
--- to a workdir immutably at creation time.
+-- Named per-bot working directories. A workdir pins a workspace (the bot's
+-- managed computer, or a user's computer the bot is bound to) together with
+-- an absolute directory path. bot_sessions.workdir_id binds a session to a
+-- workdir immutably at creation time. The client-facing target address
+-- ("native" or the binding id) is derived from the workspace's kind and the
+-- bot's binding; only the workspace id is stored.
 --
 -- This section stays at the end of the file on purpose: bot_sessions gains
 -- workdir_id via ALTER (after the team block added team_id) so fresh
 -- installs and the incremental 0129 upgrade path produce the same physical
--- column order, which sqlc's positional SELECT * scans rely on.
+-- column order, which sqlc's positional SELECT * scans rely on. workspace_id
+-- sits where 0169 converted target_kind in place, for the same reason.
 
 CREATE TABLE IF NOT EXISTS public.bot_workdirs (
     id                 UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -2440,15 +2452,18 @@ CREATE TABLE IF NOT EXISTS public.bot_workdirs (
                                    REFERENCES public.teams(id) ON DELETE RESTRICT,
     bot_id             UUID        NOT NULL,
     name               TEXT        NOT NULL,
-    target_kind        TEXT        NOT NULL,
-    -- Non-null exactly when target_kind = 'remote'. Unbinding the remote
-    -- runtime cascades here, which is what removes its workdirs.
-    remote_binding_id  UUID,
+    workspace_id       UUID        NOT NULL,
     path               TEXT        NOT NULL,
     created_by_user_id UUID,
     archived_at        TIMESTAMPTZ,
     created_at         TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at         TIMESTAMPTZ NOT NULL DEFAULT now(),
+    -- Legacy slot, always NULL here: 0129's CREATE INDEX IF NOT EXISTS
+    -- resolves this column during parse analysis before the name check and
+    -- 0167 keys it, so a fresh install must still have it when those run.
+    -- 0169 drops it; trailing, it leaves the visible column order equal to
+    -- the upgrade path's.
+    remote_binding_id  UUID,
     CONSTRAINT bot_workdirs_team_key UNIQUE (team_id, id),
     -- Creator reference follows the platform convention: composite key into
     -- team_members with a column-list SET NULL, so clearing the reference can
@@ -2456,26 +2471,20 @@ CREATE TABLE IF NOT EXISTS public.bot_workdirs (
     CONSTRAINT bot_workdirs_created_by_user_id_fkey
         FOREIGN KEY (team_id, created_by_user_id)
         REFERENCES public.team_members(team_id, user_id) ON DELETE SET NULL (created_by_user_id),
-    CONSTRAINT bot_workdirs_target_kind_check CHECK (target_kind IN ('native', 'remote')),
-    CONSTRAINT bot_workdirs_binding_check
-        CHECK ((target_kind = 'remote') = (remote_binding_id IS NOT NULL)),
     CONSTRAINT bot_workdirs_bot_id_fkey
         FOREIGN KEY (team_id, bot_id)
         REFERENCES public.bots(team_id, id) ON DELETE CASCADE
-    -- bot_workdirs_remote_binding_fkey (team_id, remote_binding_id) ->
+    -- bot_workdirs_binding_fkey (team_id, bot_id, workspace_id) ->
     -- bot_workspace_bindings is added at the end of the file, after that
     -- table exists.
 );
 
--- One live workdir per directory per target. Native rows carry a NULL
--- remote_binding_id and NULLs never collide in a unique index, so a zero
--- UUID sentinel folds them into the same uniqueness scope.
+-- One live workdir per directory per workspace. The index keeps its 0129
+-- name so the legacy CREATE INDEX IF NOT EXISTS in that migration is a no-op
+-- on a fresh install.
 CREATE UNIQUE INDEX IF NOT EXISTS bot_workdirs_target_path_unique
-    ON public.bot_workdirs (
-        team_id, bot_id,
-        COALESCE(remote_binding_id, '00000000-0000-0000-0000-000000000000'::uuid),
-        path
-    ) WHERE archived_at IS NULL;
+    ON public.bot_workdirs (team_id, bot_id, workspace_id, path)
+    WHERE archived_at IS NULL;
 
 CREATE INDEX IF NOT EXISTS idx_bot_workdirs_bot
     ON public.bot_workdirs (team_id, bot_id, created_at DESC)
@@ -2940,7 +2949,7 @@ CREATE POLICY bot_memory_usage_team_delete ON public.bot_memory_usage
 -- owning one container: kind 'managed' is the workspace the server provisions
 -- for a bot (its managed_computers row is the provisioning slot and instance
 -- record, see the end of this file), kind 'user' is
--- a machine paired through Remote Runtime and shares the user_runtimes id.
+-- a machine paired through Remote Runtime and shares the user_computers id.
 -- These two tables stay at the end of the file so fresh installs and the 0167
 -- upgrade produce the same constraint set (0112 re-derives team helper keys
 -- from md5('<table>:<table>_pkey'), which is why the helper names below look
@@ -3048,13 +3057,29 @@ CREATE POLICY bot_workspace_bindings_team_update ON public.bot_workspace_binding
 CREATE POLICY bot_workspace_bindings_team_delete ON public.bot_workspace_bindings
     FOR DELETE USING (team_id = public.memoh_current_team_id());
 
--- Remote workdirs hang off their binding row; unbinding cascades to them.
+-- A workdir hangs off the bot's binding to its workspace ((team_id, bot_id,
+-- workspace_id) is the binding's natural key); unbinding cascades to it.
 ALTER TABLE public.bot_workdirs
-    DROP CONSTRAINT IF EXISTS bot_workdirs_remote_binding_fkey;
+    DROP CONSTRAINT IF EXISTS bot_workdirs_binding_fkey;
 ALTER TABLE public.bot_workdirs
-    ADD CONSTRAINT bot_workdirs_remote_binding_fkey
-    FOREIGN KEY (team_id, remote_binding_id)
-    REFERENCES public.bot_workspace_bindings(team_id, id) ON DELETE CASCADE
+    ADD CONSTRAINT bot_workdirs_binding_fkey
+    FOREIGN KEY (team_id, bot_id, workspace_id)
+    REFERENCES public.bot_workspace_bindings(team_id, bot_id, workspace_id) ON DELETE CASCADE
+    NOT VALID;
+
+-- A paired computer's credential record is keyed by its user workspace and
+-- goes with it. The check waits for the end of the transaction: pairing
+-- inserts the credential first and creates its workspace through the same
+-- transaction's attach hook. workspaces is under FORCE ROW LEVEL SECURITY;
+-- NOT VALID skips the policy-scoped validation scan. New rows are still
+-- checked.
+ALTER TABLE public.user_computers
+    DROP CONSTRAINT IF EXISTS user_computers_workspace_fkey;
+ALTER TABLE public.user_computers
+    ADD CONSTRAINT user_computers_workspace_fkey
+    FOREIGN KEY (team_id, id)
+    REFERENCES public.workspaces(team_id, id) ON DELETE CASCADE
+    DEFERRABLE INITIALLY DEFERRED
     NOT VALID;
 
 -- Managed computers: the server-provisioned workspace of a bot, keyed by the

@@ -117,11 +117,13 @@ func seedRemoteRuntimeTarget(t *testing.T, pool *pgxpool.Pool) string {
 func seedUserWorkspaceMount(t *testing.T, pool *pgxpool.Pool, runtimeID, targetID, name, token string) {
 	t.Helper()
 	ctx := context.Background()
-	if _, err := pool.Exec(ctx, `INSERT INTO user_runtimes (id, user_id, name, api_token) VALUES ($1, $2, $3, $4)`, runtimeID, appUserID, name, token); err != nil {
-		t.Fatalf("seed Remote Runtime: %v", err)
-	}
+	// The computer record is keyed by its user workspace, so the workspace
+	// row comes first.
 	if _, err := pool.Exec(ctx, `INSERT INTO workspaces (id, owner_user_id, kind, name) VALUES ($1, $2, 'user', $3)`, runtimeID, appUserID, name); err != nil {
 		t.Fatalf("seed user workspace: %v", err)
+	}
+	if _, err := pool.Exec(ctx, `INSERT INTO user_computers (id, user_id, name, api_token) VALUES ($1, $2, $3, $4)`, runtimeID, appUserID, name, token); err != nil {
+		t.Fatalf("seed Remote Runtime: %v", err)
 	}
 	if _, err := pool.Exec(ctx, `INSERT INTO bot_workspace_bindings (id, bot_id, workspace_id) VALUES ($1, $2, $3)`, targetID, appBotOneID, runtimeID); err != nil {
 		t.Fatalf("seed target: %v", err)

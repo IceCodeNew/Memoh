@@ -1066,6 +1066,7 @@ func (s *Service) buildBaseRunConfig(ctx context.Context, p baseRunConfigParams)
 			cfg.Identity.WorkspaceTargetID = strings.TrimSpace(target.TargetID)
 			cfg.Identity.WorkspaceTargetKind = strings.TrimSpace(target.Kind)
 			cfg.Identity.WorkspaceTargetName = strings.TrimSpace(target.Name)
+			cfg.Identity.WorkspaceID = strings.TrimSpace(target.WorkspaceID)
 		} else if workspace.WorkspaceTargetFromContext(ctx) != "" {
 			return native.RunConfig{}, models.GetResponse{}, sqlc.Provider{}, targetErr
 		}

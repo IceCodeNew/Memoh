@@ -3,9 +3,11 @@ package workspace
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"strconv"
 	"testing"
 
+	"github.com/felinics/memoh/internal/config"
 	"github.com/felinics/memoh/internal/db"
 	postgresstore "github.com/felinics/memoh/internal/db/postgres/store"
 	dbstore "github.com/felinics/memoh/internal/db/store"
@@ -148,6 +150,29 @@ func (s *fakeWorkspaceStore) GetBotWorkspaceBinding(_ context.Context, botID, bi
 	for _, binding := range s.bindings {
 		if binding.BotID == botID && binding.ID == bindingID {
 			return binding, nil
+		}
+	}
+	return dbstore.BotWorkspaceBindingRecord{}, db.ErrNotFound
+}
+
+func (s *fakeWorkspaceStore) GetBotWorkspaceBindingByWorkspace(_ context.Context, botID, workspaceID string) (dbstore.BotWorkspaceBindingRecord, error) {
+	for _, binding := range s.bindings {
+		if binding.BotID == botID && binding.WorkspaceID == workspaceID {
+			return binding, nil
+		}
+	}
+	return dbstore.BotWorkspaceBindingRecord{}, db.ErrNotFound
+}
+
+func (s *fakeWorkspaceStore) GetBotManagedWorkspaceBinding(_ context.Context, botID string) (dbstore.BotWorkspaceBindingRecord, error) {
+	for _, binding := range s.bindings {
+		if binding.BotID != botID {
+			continue
+		}
+		for _, record := range s.workspaces {
+			if record.ID == binding.WorkspaceID && record.Kind == WorkspaceKindManaged {
+				return binding, nil
+			}
 		}
 	}
 	return dbstore.BotWorkspaceBindingRecord{}, db.ErrNotFound
@@ -509,4 +534,100 @@ func TestBindingServiceEnsureManagedCreatesAndBinds(t *testing.T) {
 	if _, err := svc.EnsureManaged(ctx, otherBot, wsTestOwnerID, ""); err != nil {
 		t.Fatalf("EnsureManaged() with an existing computer must not validate the name: %v", err)
 	}
+}
+
+// Stored state is keyed by workspace id; the client keeps addressing targets
+// as "native" or a mount id. The manager translates both ways from stored
+// state alone, and the native target's approval policy comes from the
+// managed binding.
+func TestManagerMapsTargetsAndWorkspaces(t *testing.T) {
+	ctx := context.Background()
+	store := &fakeWorkspaceStore{}
+	bindings := NewBindingService(store, store)
+	manager := NewManager(slog.Default(), nil, nil, config.WorkspaceConfig{}, "", nil)
+	manager.SetBindingService(bindings)
+
+	// Nothing bound yet: native has no workspace, nothing maps back.
+	if got, err := manager.WorkspaceIDForTarget(ctx, wsTestBotID, WorkspaceTargetNative); err != nil || got != "" {
+		t.Fatalf("WorkspaceIDForTarget(native) without managed computer = %q, %v; want empty", got, err)
+	}
+	if _, _, err := manager.TargetForWorkspace(ctx, wsTestBotID, wsTestUnknownUUID); !errors.Is(err, ErrWorkspaceTargetNotFound) {
+		t.Fatalf("TargetForWorkspace(unknown) = %v, want ErrWorkspaceTargetNotFound", err)
+	}
+	approval, err := manager.nativeToolApprovalConfig(ctx, wsTestBotID)
+	if err != nil || approval.Exec.Mode != DefaultToolApprovalExecMode(t) {
+		t.Fatalf("native approval without managed binding = %+v, %v; want the settings default", approval, err)
+	}
+
+	managed, err := store.CreateWorkspace(ctx, dbstore.CreateWorkspaceInput{ID: wsTestManagedID, OwnerUserID: wsTestOwnerID, Kind: WorkspaceKindManaged, Name: "bot"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	managedBinding, err := bindings.Bind(ctx, wsTestBotID, managed.ID, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	user, err := store.CreateWorkspace(ctx, dbstore.CreateWorkspaceInput{ID: wsTestRuntimeID, OwnerUserID: wsTestOwnerID, Kind: WorkspaceKindUser, Name: "Office Mac"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	mount, err := bindings.Bind(ctx, wsTestBotID, user.ID, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for name, tc := range map[string]struct {
+		target string
+		want   string
+	}{
+		"native is the managed computer": {WorkspaceTargetNative, wsTestManagedID},
+		"empty is the primary":           {"", wsTestManagedID},
+		"mount id is its workspace":      {mount.ID, wsTestRuntimeID},
+	} {
+		got, err := manager.WorkspaceIDForTarget(ctx, wsTestBotID, tc.target)
+		if err != nil || got != tc.want {
+			t.Fatalf("%s: WorkspaceIDForTarget(%q) = %q, %v; want %s", name, tc.target, got, err, tc.want)
+		}
+	}
+	if _, err := manager.WorkspaceIDForTarget(ctx, wsTestBotID, wsTestUnknownUUID); !errors.Is(err, ErrWorkspaceTargetNotFound) {
+		t.Fatalf("WorkspaceIDForTarget(unknown mount) = %v, want ErrWorkspaceTargetNotFound", err)
+	}
+	if _, err := manager.WorkspaceIDForTarget(ctx, wsTestBotID, "not-a-target"); !errors.Is(err, ErrWorkspaceTargetNotFound) {
+		t.Fatalf("WorkspaceIDForTarget(garbage) = %v, want ErrWorkspaceTargetNotFound", err)
+	}
+
+	if targetID, kind, err := manager.TargetForWorkspace(ctx, wsTestBotID, wsTestManagedID); err != nil || targetID != WorkspaceTargetNative || kind != WorkspaceTargetNative {
+		t.Fatalf("TargetForWorkspace(managed) = %q, %q, %v; want native", targetID, kind, err)
+	}
+	if targetID, kind, err := manager.TargetForWorkspace(ctx, wsTestBotID, wsTestRuntimeID); err != nil || targetID != mount.ID || kind != WorkspaceTargetRemote {
+		t.Fatalf("TargetForWorkspace(user) = %q, %q, %v; want the mount id", targetID, kind, err)
+	}
+	// Another bot is not bound to the user workspace: no address for it.
+	if _, _, err := manager.TargetForWorkspace(ctx, remoteTestBotID2, wsTestRuntimeID); !errors.Is(err, ErrWorkspaceTargetNotFound) {
+		t.Fatalf("TargetForWorkspace(unbound bot) = %v, want ErrWorkspaceTargetNotFound", err)
+	}
+
+	// The native approval policy is the managed binding's.
+	deny := settings.DefaultToolApprovalConfig()
+	deny.Exec.Mode = settings.ToolApprovalDeny
+	if err := bindings.UpdateManagedToolApproval(ctx, wsTestBotID, deny); err != nil {
+		t.Fatalf("UpdateManagedToolApproval: %v", err)
+	}
+	approval, err = manager.nativeToolApprovalConfig(ctx, wsTestBotID)
+	if err != nil || approval.Exec.Mode != settings.ToolApprovalDeny {
+		t.Fatalf("native approval = %+v, %v; want the binding's deny exec policy", approval, err)
+	}
+	if b, err := bindings.ManagedBinding(ctx, wsTestBotID); err != nil || b.ID != managedBinding.ID {
+		t.Fatalf("ManagedBinding() = %+v, %v; want %s", b, err, managedBinding.ID)
+	}
+	if err := bindings.UpdateManagedToolApproval(ctx, remoteTestBotID2, deny); !errors.Is(err, db.ErrNoManagedWorkspaceBinding) {
+		t.Fatalf("UpdateManagedToolApproval(no managed computer) = %v, want ErrNoManagedWorkspaceBinding", err)
+	}
+}
+
+// DefaultToolApprovalExecMode is the settings default the native target falls
+// back to while a bot has no managed binding.
+func DefaultToolApprovalExecMode(t *testing.T) settings.ToolApprovalMode {
+	t.Helper()
+	return settings.NormalizeToolApprovalConfig(settings.DefaultToolApprovalConfig()).Exec.Mode
 }

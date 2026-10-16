@@ -236,6 +236,30 @@ func (s *Store) UpdateBotWorkspaceBindingToolApproval(ctx context.Context, botID
 	return BotWorkspaceBindingRecord(row), nil
 }
 
+func (s *Store) GetBotWorkspaceBindingByWorkspace(ctx context.Context, botID, workspaceID string) (dbstore.BotWorkspaceBindingRecord, error) {
+	botUUID, workspaceUUID, err := parseRemoteMountIDs(botID, workspaceID)
+	if err != nil {
+		return dbstore.BotWorkspaceBindingRecord{}, err
+	}
+	row, err := s.queries.GetBotWorkspaceBindingByWorkspace(ctx, dbsqlc.GetBotWorkspaceBindingByWorkspaceParams{BotID: botUUID, WorkspaceID: workspaceUUID})
+	if err != nil {
+		return dbstore.BotWorkspaceBindingRecord{}, mapQueryErr(err)
+	}
+	return BotWorkspaceBindingRecord(row), nil
+}
+
+func (s *Store) GetBotManagedWorkspaceBinding(ctx context.Context, botID string) (dbstore.BotWorkspaceBindingRecord, error) {
+	id, err := db.ParseUUID(botID)
+	if err != nil {
+		return dbstore.BotWorkspaceBindingRecord{}, err
+	}
+	row, err := s.queries.GetBotManagedWorkspaceBinding(ctx, id)
+	if err != nil {
+		return dbstore.BotWorkspaceBindingRecord{}, mapQueryErr(err)
+	}
+	return BotWorkspaceBindingRecord(row), nil
+}
+
 func (s *Store) DeleteBotWorkspaceBinding(ctx context.Context, botID, bindingID string) error {
 	botUUID, bindingUUID, err := parseRemoteMountIDs(botID, bindingID)
 	if err != nil {

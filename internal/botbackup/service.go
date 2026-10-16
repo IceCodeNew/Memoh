@@ -371,9 +371,9 @@ func (s *Service) collect(ctx context.Context, botID string, opts ExportOptions)
 	return data, manifest, nil
 }
 
-// collectWorkdirs exports the bot's native-workspace workdirs. Remote
-// workdirs are counted and skipped: they pin a specific person's computer,
-// which a backup restored elsewhere cannot reach.
+// collectWorkdirs exports the workdirs on the bot's managed computer. Workdirs
+// on a user's computer are counted and skipped: they pin a specific person's
+// machine, which a backup restored elsewhere cannot reach.
 func (s *Service) collectWorkdirs(ctx context.Context, botID string) ([]backupWorkdir, int, error) {
 	if s.workdirs == nil {
 		return nil, 0, nil
@@ -385,7 +385,7 @@ func (s *Service) collectWorkdirs(ctx context.Context, botID string) ([]backupWo
 	workdirs := make([]backupWorkdir, 0, len(records))
 	skippedRemote := 0
 	for _, record := range records {
-		if record.RemoteBindingID != "" {
+		if record.WorkspaceKind != dbstore.WorkspaceKindManaged {
 			skippedRemote++
 			continue
 		}

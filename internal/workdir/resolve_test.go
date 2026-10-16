@@ -13,13 +13,15 @@ import (
 
 func TestResolveForSessionNative(t *testing.T) {
 	service := &Service{store: &fakeWorkdirStore{get: dbstore.BotWorkdirRecord{
-		ID: "p1", BotID: "b1", TargetKind: TargetKindNative, Path: "/data/site",
+		ID: "p1", BotID: "b1", WorkspaceID: "ws-managed", WorkspaceKind: dbstore.WorkspaceKindManaged, BindingID: "bind-managed", Path: "/data/site",
 	}}}
 	resolved, err := service.ResolveForSession(context.Background(), "b1", "p1")
 	if err != nil {
 		t.Fatalf("ResolveForSession error = %v", err)
 	}
-	want := Resolved{WorkdirID: "p1", TargetID: workspace.WorkspaceTargetNative, Kind: TargetKindNative, WorkDir: "/data/site"}
+	// A managed workspace is addressed as the native target, never by its
+	// binding id.
+	want := Resolved{WorkdirID: "p1", TargetID: workspace.WorkspaceTargetNative, Kind: TargetKindNative, WorkspaceID: "ws-managed", WorkDir: "/data/site"}
 	if resolved != want {
 		t.Fatalf("resolved = %+v, want %+v", resolved, want)
 	}
@@ -27,13 +29,13 @@ func TestResolveForSessionNative(t *testing.T) {
 
 func TestResolveForSessionRemote(t *testing.T) {
 	service := &Service{store: &fakeWorkdirStore{get: dbstore.BotWorkdirRecord{
-		ID: "p2", BotID: "b1", TargetKind: TargetKindRemote, RemoteBindingID: "bind-1", Path: `C:\Users\alice\code`,
+		ID: "p2", BotID: "b1", WorkspaceID: "ws-user", WorkspaceKind: dbstore.WorkspaceKindUser, BindingID: "bind-1", Path: `C:\Users\alice\code`,
 	}}}
 	resolved, err := service.ResolveForSession(context.Background(), "b1", "p2")
 	if err != nil {
 		t.Fatalf("ResolveForSession error = %v", err)
 	}
-	if resolved.TargetID != "bind-1" || resolved.Kind != TargetKindRemote || resolved.WorkDir != `C:\Users\alice\code` {
+	if resolved.TargetID != "bind-1" || resolved.Kind != TargetKindRemote || resolved.WorkspaceID != "ws-user" || resolved.WorkDir != `C:\Users\alice\code` {
 		t.Fatalf("resolved = %+v", resolved)
 	}
 }
@@ -42,7 +44,7 @@ func TestResolveForSessionArchivedStillResolves(t *testing.T) {
 	// A session's working directory never changes underneath it: archiving
 	// the workdir must not break resolution for already-bound sessions.
 	service := &Service{store: &fakeWorkdirStore{get: dbstore.BotWorkdirRecord{
-		ID: "p1", TargetKind: TargetKindNative, Path: "/data/site", ArchivedAt: time.Now(),
+		ID: "p1", WorkspaceID: "ws-managed", WorkspaceKind: dbstore.WorkspaceKindManaged, Path: "/data/site", ArchivedAt: time.Now(),
 	}}}
 	resolved, err := service.ResolveForSession(context.Background(), "b1", "p1")
 	if err != nil {

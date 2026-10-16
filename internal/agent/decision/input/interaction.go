@@ -136,7 +136,7 @@ func (s *Service) persistInteraction(ctx context.Context, req Request, state Tex
 		InteractionRevision: int32(req.InteractionRevision), //nolint:gosec // revisions cannot approach int32 during one request.
 	})
 	if err == nil {
-		return requestFromRow(row), true, nil
+		return s.requestFromRow(ctx, row), true, nil
 	}
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Request{}, false, nil
@@ -347,7 +347,7 @@ func (s *Service) resolveInteractionTarget(ctx context.Context, input ResolveInp
 					return Request{}, ErrNotFound
 				}
 			}
-			req := requestFromRow(row)
+			req := s.requestFromRow(ctx, row)
 			if req.Status != StatusPending {
 				return Request{}, ErrNotFound
 			}
