@@ -265,12 +265,33 @@ func (s *Source) authHandler(
 	handler := s.service.client.MCPAuthHandler(connectsdk.MCPSessionConfig{
 		Connections: connections,
 		TTL:         time.Hour,
+		// Connect-It issues the session even when some connections could
+		// not list their tools; record those so the gap is reported per
+		// connection instead of looking like the connector has no tools.
+		OnSessionCreated: func(session connectsdk.MCPSession) {
+			s.service.RecordToolDiscoverySession(botID, discoveryFailuresFrom(session.FailedConnections))
+		},
 	})
 	s.auths[botID] = cachedSessionAuth{
 		fingerprint: fingerprint,
 		handler:     handler,
 	}
 	return handler
+}
+
+func discoveryFailuresFrom(failed []connectsdk.FailedConnection) []ToolDiscoveryFailure {
+	if len(failed) == 0 {
+		return nil
+	}
+	out := make([]ToolDiscoveryFailure, 0, len(failed))
+	for _, failure := range failed {
+		out = append(out, ToolDiscoveryFailure{
+			Alias:        strings.TrimSpace(failure.Alias),
+			ConnectionID: strings.TrimSpace(failure.ConnectionID),
+			Error:        discoveryErrorText(errors.New(failure.Error)),
+		})
+	}
+	return out
 }
 
 func connectionFingerprint(connections map[string]string) string {

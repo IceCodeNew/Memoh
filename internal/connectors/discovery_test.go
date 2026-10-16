@@ -2,14 +2,17 @@ package connectors
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
 
 	connectsdk "github.com/felinics/connect-it/sdk/go"
 
+	"github.com/felinics/memoh/internal/config"
 	mcpgw "github.com/felinics/memoh/internal/mcp"
 )
 
@@ -125,5 +128,56 @@ func TestSourceReportsBackoffCauseInsteadOfEmptyList(t *testing.T) {
 	source.mu.Unlock()
 	if _, backingOff := source.inFailureBackoff("bot-2"); backingOff {
 		t.Fatal("an expired window must not back off")
+	}
+}
+
+func TestSourceRecordsConnectionsExcludedFromIssuedSession(t *testing.T) {
+	t.Parallel()
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/mcp-sessions" {
+			http.NotFound(w, r)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusCreated)
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"token":      "session-1",
+			"expires_at": time.Now().Add(time.Hour).UTC().Format(time.RFC3339),
+			"failed_connections": []map[string]any{{
+				"alias":         "cloudflare",
+				"connection_id": "conn-cf",
+				"error":         "  mcpclient: initialize: Unauthorized ",
+			}},
+		})
+	}))
+	t.Cleanup(upstream.Close)
+	svc, err := NewService(nil, config.Config{ConnectIt: config.ConnectItConfig{
+		BaseURL: upstream.URL, APIToken: "cit_test",
+	}}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	source := NewSource(nil, svc)
+
+	handler := source.authHandler("bot-1", map[string]string{"cloudflare": "conn-cf", "resend": "conn-rs"})
+	if _, err := handler.TokenSource(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	status, ok := svc.ToolDiscoveryStatus("bot-1")
+	if !ok || len(status.FailedConnections) != 1 ||
+		status.FailedConnections[0] != (ToolDiscoveryFailure{Alias: "cloudflare", ConnectionID: "conn-cf", Error: "mcpclient: initialize: Unauthorized"}) {
+		t.Fatalf("status=%+v ok=%v", status, ok)
+	}
+	items := []Connector{
+		{Alias: "cloudflare", Enabled: true, Status: "active"},
+		{Alias: "resend", Enabled: true, Status: "active"},
+	}
+	svc.annotateToolDiscovery("bot-1", items)
+	if items[0].ToolDiscoveryError == "" || items[1].ToolDiscoveryError != "" {
+		t.Fatalf("items=%+v", items)
+	}
+	if lines := source.ToolDiagnostics(context.Background(), mcpgw.ToolSessionContext{BotID: "bot-1"}); len(lines) != 1 ||
+		!strings.Contains(lines[0], `"cloudflare"`) {
+		t.Fatalf("diagnostics=%q", lines)
 	}
 }
