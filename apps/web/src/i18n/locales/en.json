@@ -3774,6 +3774,7 @@
       "edit": "Edit Task",
       "delete": "Delete",
       "deleteConfirm": "Delete task \"{name}\"? This cannot be undone.",
+      "deleteConfirmRunSessions": "Delete task \"{name}\"? This cannot be undone. The sessions its runs created will no longer show in Schedule or Recents; you can only find them with search.",
       "deleteSuccess": "Task deleted",
       "deleteFailed": "Delete failed",
       "saveSuccess": "Task saved",

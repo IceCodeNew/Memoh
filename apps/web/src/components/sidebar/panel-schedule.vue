@@ -103,7 +103,7 @@
     <ConfirmDeleteDialog
       :open="!!deleteTarget"
       :title="t('bots.schedule.deleteTitle')"
-      :description="t('bots.schedule.deleteConfirm', { name: deleteTarget?.name ?? '' })"
+      :description="t(scheduleDeleteConfirmKey(deleteTarget), { name: deleteTarget?.name ?? '' })"
       :cancel-label="t('common.cancel')"
       :confirm-label="t('bots.schedule.delete')"
       :loading="isDeleting"
@@ -129,6 +129,7 @@ import { useChatStore } from '@/store/chat-list'
 import { useWorkspaceTabsStore } from '@/store/workspace-tabs'
 import { resolveApiErrorMessage } from '@/utils/api-error'
 import { describeCron, nextRuns } from '@/utils/cron-pattern'
+import { scheduleDeleteConfirmKey } from '@/utils/schedule-delete'
 import ScheduleItem from './schedule-item.vue'
 import ScheduleRunSessions from './schedule-run-sessions.vue'
 import SidebarPanelHeader from './panel-header.vue'

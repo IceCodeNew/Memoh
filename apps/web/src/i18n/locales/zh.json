@@ -3774,6 +3774,7 @@
       "edit": "编辑任务",
       "delete": "删除",
       "deleteConfirm": "确定删除任务 \"{name}\"？此操作不可撤销。",
+      "deleteConfirmRunSessions": "确定删除任务 \"{name}\"？此操作不可撤销。删除后，这个任务每次运行创建的会话不会再出现在日程和最近中，只能通过搜索找到。",
       "deleteSuccess": "任务已删除",
       "deleteFailed": "删除失败",
       "saveSuccess": "任务已保存",
