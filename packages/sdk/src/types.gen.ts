@@ -4064,6 +4064,7 @@ export type ServerProblem = {
 };
 
 export type SessionSession = {
+    attention_at?: string;
     /**
      * AttentionKind and Unread describe the requesting user's unread state.
      * They are filled by the attention service for list responses only.
