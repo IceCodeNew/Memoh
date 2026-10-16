@@ -8352,6 +8352,12 @@
                         "in": "query"
                     },
                     {
+                        "type": "boolean",
+                        "description": "Leave out sessions schedule runs created, except one a schedule still runs in. The sidebar lists them under their schedule.",
+                        "name": "hide_schedule_runs",
+                        "in": "query"
+                    },
+                    {
                         "type": "integer",
                         "description": "Page size (1..200). Defaults to 50.",
                         "name": "limit",
