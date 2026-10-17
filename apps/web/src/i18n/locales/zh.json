@@ -106,12 +106,12 @@
   },
   "computerConnect": {
     "title": "连接电脑",
-    "replaceAction": "替换本机已有绑定",
-    "replaceDescription": "开启后，运行下方命令会覆盖这台电脑保存的绑定，后台服务将改用当前连接。",
+    "replaceAction": "覆盖这台电脑已保存的连接",
+    "replaceDescription": "终端提示已有其他连接时开启，再重新复制命令运行。",
     "restore": "恢复连接",
     "existingDescription": "在「{name}」上运行命令，沿用原凭证恢复后台连接。电脑记录和 Bot 权限会保留。",
     "commandLabel": "连接命令",
-    "commandDescription": "在要连接的电脑上安装 Node.js 20+，然后在终端（macOS/Linux）或命令提示符（Windows）中运行。命令会安装并连接后台服务，完成后可关闭终端。",
+    "commandDescription": "在要连接的电脑上安装 Node.js 20+，然后在终端运行下方命令。",
     "waiting": "等待电脑连接…",
     "finish": "完成"
   },
@@ -1502,6 +1502,11 @@
     "newSession": "新会话",
     "deleteSession": "删除会话",
     "deleteSessionConfirm": "确定要删除此会话吗？",
+    "selectSessions": "多选",
+    "selectedSessions": "已选择 {count} 个会话",
+    "deleteSessions": "删除会话",
+    "deleteSessionsConfirm": "确定要删除这 {count} 个会话吗？",
+    "deleteSessionsFailed": "{count} 个会话删除失败",
     "renameSession": "重命名会话",
     "renameSessionDescription": "为这段对话设置一个简短名称。",
     "renameSessionPlaceholder": "会话名称",
@@ -1825,6 +1830,37 @@
         "budgetLimited": "已达到 Token 预算",
         "complete": "目标已完成"
       }
+    }
+  },
+  "chatExamples": {
+    "noBot": "请先创建一个 Bot 再试试。",
+    "createBot": "创建 Bot",
+    "tryThese": "试试这些",
+    "needs": "需要{capability}",
+    "capability": {
+      "web_search": "网页搜索",
+      "memory": "长期记忆",
+      "email": "邮件",
+      "workspace": "工作区",
+      "browser": "浏览器",
+      "schedule": "定时任务",
+      "channel": "渠道"
+    },
+    "sidebarEntry": "看看 Memoh 能做什么",
+    "galleryTitle": "看看 Memoh 能做什么",
+    "galleryDescription": "选一个示例填进输入框，发送前可以修改。",
+    "refresh": "换一批",
+    "refreshFailed": "没能换一批，请稍后再试。",
+    "fillIn": "填入",
+    "dismiss": "隐藏推荐",
+    "replaceDraft": {
+      "title": "替换输入框里的内容？",
+      "description": "输入框里有还没发送的内容，替换成这条提示词后，原内容会被丢弃。",
+      "confirm": "替换"
+    },
+    "share": {
+      "prompt": "你用 Memoh 做过什么？带上 #Memoh，把你的使用案例分享到 X。",
+      "action": "分享到 X"
     }
   },
   "models": {
@@ -2691,6 +2727,7 @@
       "usageNone": "暂无用量",
       "runtimeTitle": "运行状态",
       "runtimeSampledAt": "更新于 {time}",
+      "runtimeCpuCores": "{count} 核",
       "runtimeStopped": "工作区未运行 — 启动后可查看实时资源占用",
       "runtimeNoMetrics": "暂时无法获取资源占用",
       "remindersTitle": "待处理",
@@ -3096,6 +3133,7 @@
       "statusRunning": "运行中",
       "statusStopped": "已停止",
       "statusExited": "已退出",
+      "statusPaused": "已暂停",
       "statusUnknown": "未知",
       "loadFailed": "加载工作区信息失败",
       "actionFailed": "工作区操作失败",
@@ -3144,7 +3182,6 @@
       "metricsUnavailable": "暂无可用指标。",
       "metricsStopped": "工作区未运行，仅显示存储使用情况。",
       "metricsPath": "统计范围",
-      "metricsUnlimited": "未配置限额",
       "currentSample": "当前采样",
       "sampledAt": "采样时间",
       "metricsLabels": {
@@ -3163,7 +3200,6 @@
         "storageHint": "为 VM 硬限制预留；容器运行后端当前仅将其记录为软限制。",
         "unlimited": "不限制",
         "unlimitedPlaceholder": "不限制",
-        "cpuCoresValue": "{value} 核",
         "cpuSummary": "CPU {value}",
         "memorySummary": "内存 {value}",
         "storageSummary": "存储 {value}",
@@ -3780,6 +3816,7 @@
       "edit": "编辑任务",
       "delete": "删除",
       "deleteConfirm": "确定删除任务 \"{name}\"？此操作不可撤销。",
+      "deleteConfirmRunSessions": "确定删除任务 \"{name}\"？此操作不可撤销。删除后，这个任务每次运行创建的会话不会再出现在日程和最近中，只能通过搜索找到。",
       "deleteSuccess": "任务已删除",
       "deleteFailed": "删除失败",
       "saveSuccess": "任务已保存",
@@ -3877,6 +3914,13 @@
         "oct": "十月",
         "nov": "十一月",
         "dec": "十二月"
+      },
+      "sessions": {
+        "pinned": "在同一个对话中运行",
+        "openPinned": "打开这个定时任务所在的对话",
+        "failed": "这次运行失败了",
+        "notStarted": "这次运行没能开始，没有对应的对话",
+        "empty": "还没有运行过"
       }
     },
     "history": {
@@ -4158,23 +4202,10 @@
       "title": "一切就绪",
       "subtitle": "进入 Memoh，开始你的第一段对话",
       "action": "打开 Memoh",
-      "cards": {
-        "im": {
-          "title": "IM 接入",
-          "desc": "把 Bot 部署到 Telegram 等渠道"
-        },
-        "voice": {
-          "title": "语音对话",
-          "desc": "语音合成与转写让 Bot 开口"
-        },
-        "search": {
-          "title": "网络搜索",
-          "desc": "接入搜索引擎，让 Bot 获取实时信息"
-        }
-      },
       "saveFailed": "保存失败，请重试",
       "navigationFailed": "无法打开 Bot，请重试。",
-      "noModelWarning": "尚未为 Bot 选择模型，Bot 将无法回复消息。你可以稍后在 Bot 设置中配置。"
+      "noModelWarning": "尚未为 Bot 选择模型，Bot 将无法回复消息。你可以稍后在 Bot 设置中配置。",
+      "examplesHint": "也可以从一个示例开始"
     }
   },
   "deviceCode": {
@@ -4215,7 +4246,8 @@
       "update": "更新",
       "remove": "卸载",
       "viewProgress": "查看进度",
-      "open": "在市场中查看"
+      "open": "在市场中查看",
+      "tryIt": "试用一下"
     },
     "section": {
       "skills": "{count} 个 Skill",
@@ -4311,6 +4343,9 @@
       "release": "应用发布",
       "confirm": "更新 {count} 项",
       "none": "没有可更新的项目。"
+    },
+    "tryIt": {
+      "prompt": "帮我测试 {name} App，演示一下它的功能怎么用，再简单介绍一下它都能做什么。"
     }
   },
   "runtime": {

@@ -200,6 +200,17 @@
         :turn-id="pendingForkTurnId"
       />
 
+      <!-- Asked before a usage example or App "Try it" replaces unsent text. -->
+      <ConfirmDeleteDialog
+        :open="replaceDraftConfirm.open.value"
+        :title="$t('chatExamples.replaceDraft.title')"
+        :description="$t('chatExamples.replaceDraft.description')"
+        :cancel-label="$t('common.cancel')"
+        :confirm-label="$t('chatExamples.replaceDraft.confirm')"
+        @update:open="replaceDraftConfirm.setOpen"
+        @confirm="replaceDraftConfirm.answer(true)"
+      />
+
       <!-- The composer is a single instance reused in both layouts: pinned to
            the bottom once a conversation exists, or lifted to the vertical
            centre (with a greeting above it) while the chat is still empty, so a
@@ -622,13 +633,28 @@
                   ref="textareaEl"
                   v-model="inputText"
                   rows="1"
-                  :placeholder="composerPlaceholder"
+                  :placeholder="composerPreviewShown ? '' : composerPlaceholder"
                   :disabled="!currentBotId || activeChatReadOnly || loadingMessages || firstSendAwaiting"
-                  class="order-none max-h-52 w-full basis-full field-sizing-content resize-none break-words bg-transparent pl-2 pr-1 pt-2 pb-1.5 text-base leading-[var(--chat-leading)] text-foreground outline-none placeholder:text-[var(--field-placeholder)] disabled:cursor-not-allowed"
-                  :class="isWelcome ? 'min-h-12' : 'min-h-10'"
+                  class="order-none max-h-52 w-full basis-full field-sizing-content resize-none break-words bg-transparent pl-2 pr-1 pt-2 pb-1.5 text-base leading-[var(--chat-leading)] outline-none placeholder:text-[var(--field-placeholder)] disabled:cursor-not-allowed"
+                  :class="[isWelcome ? 'min-h-12' : 'min-h-10', composerPreviewShown ? 'text-transparent' : 'text-foreground']"
                   @keydown="handleComposerKeydown"
                   @paste="handlePaste"
                 />
+                <!-- The suggestion preview: laid exactly over the textarea's
+                     text box (same padding, size and leading), so it wraps line
+                     for line like the text it becomes. Out of flow, so the
+                     composer never resizes while a row is hovered. -->
+                <div
+                  v-if="composerPreviewShown && composerPreviewBox"
+                  :key="composerPreview?.text"
+                  data-composer-preview
+                  :data-landing="composerPreview?.landing || undefined"
+                  aria-hidden="true"
+                  class="pointer-events-none absolute line-clamp-2 break-words pl-2 pr-1 pt-2 text-base leading-[var(--chat-leading)] max-md:line-clamp-1"
+                  :style="composerPreviewBox"
+                >
+                  {{ composerPreview?.text }}
+                </div>
 
                 <!-- max-md size bumps on the composer controls (the ＋ and voice
                      buttons, the model trigger, and the send ring below) grow the
@@ -1192,6 +1218,20 @@
                   </Button>
                 </div>
 
+                <!-- Brings back the hidden welcome suggestions. It lives on this
+                     row so it lines up with the other session controls, in
+                     the slot the context ring takes once a chat starts. -->
+                <Button
+                  v-if="isWelcome && welcomeDismissed && voiceInputState === 'idle'"
+                  type="button"
+                  variant="quiet"
+                  size="sm"
+                  class="ml-auto shrink-0 gap-1.5 px-1.5 font-normal max-md:h-11"
+                  @click="welcomeDismissed = false"
+                >
+                  <Lightbulb class="size-3.5 shrink-0" />
+                  <span class="text-label">{{ $t('chatExamples.tryThese') }}</span>
+                </Button>
                 <SessionInfoRing
                   v-if="showSessionInfoRing && voiceInputState === 'idle'"
                   class="ml-auto shrink-0"
@@ -1202,6 +1242,14 @@
               </div>
             </ComposerDock>
           </div>
+          <!-- Usage examples under the welcome composer; they yield first
+               when the pane is short (style.css welcome tiers). -->
+          <ChatExampleSuggestions
+            v-if="isWelcome && currentBotId"
+            v-model:preview="composerPreview"
+            :bot-id="currentBotId"
+            :composer-replaceable="composerReplaceable"
+          />
         </div>
       </div>
     </template>
@@ -1241,7 +1289,7 @@ import {
   Lightbulb,
   Target,
 } from 'lucide-vue-next'
-import { Button, Command, CommandGroup, CommandItem, CommandKeyBridge, CommandList, CommandSeparator, Dialog, DialogContent, DialogHeader, DialogTitle, DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger, PanePlaceholder, ScrollArea, Skeleton, Spinner, toast } from '@felinic/ui'
+import { Button, Command, CommandGroup, CommandItem, CommandKeyBridge, CommandList, CommandSeparator, ConfirmDeleteDialog, Dialog, DialogContent, DialogHeader, DialogTitle, DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger, PanePlaceholder, ScrollArea, Skeleton, Spinner, toast } from '@felinic/ui'
 import { useChatStore, type ExternalAgentSessionInput, type ChatMessage, type ChatWorkspaceTargetSnapshot, type SendMessageResult } from '@/store/chat-list'
 import { useWorkdirsStore } from '@/store/workdirs'
 import type { BotWorkdir } from '@/composables/api/useWorkdirs'
@@ -1288,6 +1336,11 @@ import { EFFORT_LABELS, REASONING_EFFORT_DISABLE, displayedEffort, reconcileStor
 import { useMediaGallery } from '../composables/useMediaGallery'
 import { ATTACHMENT_ANIM_MS, attachmentToFile, fileToAttachment, useComposerAttachments } from '../composables/useComposerAttachments'
 import { useComposerDrafts } from '../composables/useComposerDrafts'
+import ChatExampleSuggestions from './chat-example-suggestions.vue'
+import { useChatExamplesUi } from '@/components/chat-examples/use-chat-examples-ui'
+import { useComposerPrefillConsumer } from '../composables/useComposerPrefillConsumer'
+import { useComposerPreviewBox, type ComposerPreview } from '../composables/useComposerPreview'
+import { useAsyncConfirm } from '@/composables/useAsyncConfirm'
 import { useUnfocusedComposerInput } from '../composables/useUnfocusedComposerInput'
 import { useComposerKeyboardFocus } from '../composables/useComposerKeyboardFocus'
 import { useComposerPair } from '../composables/useComposerPair'
@@ -1376,6 +1429,7 @@ const {
 } = storeToRefs(chatStore)
 
 const isActive = computed(() => props.active !== false)
+const { welcomeDismissed } = useChatExamplesUi()
 const isVisible = computed(() => props.visible !== false)
 const paneTarget = computed(() => ({
   botId: currentBotId.value?.trim() ?? '',
@@ -3639,6 +3693,40 @@ const { inputDraftKey, saveInputDraft, clearAllDrafts } = useComposerDrafts({
   tabId: () => props.tabId,
   inputText,
 })
+// Registered after useComposerDrafts so its draft restore runs first and
+// cannot overwrite a prefilled prompt (usage examples, App "Try it").
+const replaceDraftConfirm = useAsyncConfirm()
+const { lastPrefilled } = useComposerPrefillConsumer({
+  botId: () => paneTarget.value.botId,
+  active: () => isActive.value,
+  writable: () => !activeChatReadOnly.value,
+  ready: () => !loadingChats.value,
+  currentText: () => inputText.value,
+  // Focus the composer first: the dialog returns focus to whatever held it
+  // when it opened, so this keeps the caret in the composer either way.
+  confirmReplace: () => {
+    focusTextarea()
+    return replaceDraftConfirm.ask()
+  },
+  apply: (text) => {
+    inputText.value = text
+    saveInputDraft(inputDraftKey.value, text)
+    void nextTick(focusTextarea)
+  },
+})
+
+// The welcome composer holds no text of the user's own: it is empty, or still
+// exactly what a prefill last wrote. Only then may a suggestion preview into it
+// and Enter pick one, since replacing it loses nothing. A first send in flight
+// keeps its text locked in the composer, so nothing may replace it then.
+const composerReplaceable = computed(() =>
+  isWelcome.value && voiceInputState.value === 'idle' && !firstSendAwaiting.value
+  && (inputText.value === '' || inputText.value === lastPrefilled.value))
+// A welcome suggestion previews its prompt in the composer while it is hovered
+// or focused (chat-example-suggestions.vue owns the value).
+const composerPreview = ref<ComposerPreview | null>(null)
+const composerPreviewShown = computed(() => !!composerPreview.value && composerReplaceable.value)
+const composerPreviewBox = useComposerPreviewBox(textareaEl, () => composerPreviewShown.value)
 
 // The dock owns ALL geometry/visibility orchestration (box-slot mutex,
 // backdrop-mask height) — the pane only needs two readings back from it: the
@@ -4137,13 +4225,9 @@ async function handleSend() {
   // A draft's first send keeps its input on screen, locked, until the server
   // confirms it (onBeforeTurnAppend); a failure then leaves it where it is.
   const holdsInput = !sentContext.target.sessionId
-  const clearSentInput = () => {
+  const clearSentInput = (onSentPane = true) => {
     saveInputDraft(sentDraftKey, '')
-    if (holdsInput && !matchesChatPaneSendContext(
-      sentContext,
-      paneTarget.value,
-      inputDraftKey.value || 'chat',
-    )) return
+    if (!onSentPane) return
     inputText.value = ''
     pendingFiles.value = []
     requestedSkills.value = []
@@ -4186,19 +4270,22 @@ async function handleSend() {
     onBeforeMessageSend: () => pairSend.begin(),
     onModelPreferenceSettled: () => pairSend.finish(false),
     onBeforeTurnAppend: (target) => {
+      // The confirmed target carries the session the send created; a draft
+      // pane that was promoted to it is still the pane that sent.
+      const onSentPane = matchesChatPaneSendContext(
+        { ...sentContext, target },
+        { ...paneTarget.value, sessionId: paneView.value.sessionId },
+        inputDraftKey.value || 'chat',
+      )
       if (holdsInput) {
-        clearSentInput()
+        clearSentInput(onSentPane)
         draftSendStarting.value = false
       }
       if (goalSend && goalDraftScope.value === sentGoalScope) goalDraftScope.value = ''
       if (preserveDirectDraftSelection) {
         void nextTick(() => { directDraftPromotionPending = false })
       }
-      if (!matchesChatPaneSendContext(
-        { ...sentContext, target },
-        { ...paneTarget.value, sessionId: paneView.value.sessionId },
-        inputDraftKey.value || 'chat',
-      )) return
+      if (!onSentPane) return
       rollbackPin = pinAfterSend()
     },
     onTurnAppendAborted: () => {

@@ -106,12 +106,12 @@
   },
   "computerConnect": {
     "title": "Connect computer",
-    "replaceAction": "Replace saved binding",
-    "replaceDescription": "When enabled, running the command below overwrites this computer's saved binding and switches the background service to the current connection.",
+    "replaceAction": "Replace saved connection",
+    "replaceDescription": "If the terminal reports another connection, turn on and copy again.",
     "restore": "Reconnect",
     "existingDescription": "Run the command on “{name}” to restore its background connection with its original credentials. Its computer record and Bot permissions are preserved.",
     "commandLabel": "Connection command",
-    "commandDescription": "Install Node.js 20+, then run this command in Terminal (macOS/Linux) or Command Prompt (Windows). It installs and connects the runtime in the background, so you can close the terminal afterward.",
+    "commandDescription": "Install Node.js 20+ on that computer and run this in a terminal.",
     "waiting": "Waiting for the computer to connect…",
     "finish": "Done"
   },
@@ -1490,6 +1490,11 @@
     "newSession": "New Session",
     "deleteSession": "Delete Session",
     "deleteSessionConfirm": "Are you sure you want to delete this session?",
+    "selectSessions": "Select",
+    "selectedSessions": "{count} selected",
+    "deleteSessions": "Delete Sessions",
+    "deleteSessionsConfirm": "Are you sure you want to delete {count} session? | Are you sure you want to delete {count} sessions?",
+    "deleteSessionsFailed": "{count} session couldn't be deleted | {count} sessions couldn't be deleted",
     "renameSession": "Rename Session",
     "renameSessionDescription": "Choose a short name for this conversation.",
     "renameSessionPlaceholder": "Session name",
@@ -1825,6 +1830,37 @@
         "budgetLimited": "Token budget reached",
         "complete": "Goal completed"
       }
+    }
+  },
+  "chatExamples": {
+    "noBot": "Create a bot first to try this.",
+    "createBot": "Create bot",
+    "tryThese": "Try one of these",
+    "needs": "Needs {capability}",
+    "capability": {
+      "web_search": "web search",
+      "memory": "memory",
+      "email": "email",
+      "workspace": "a workspace",
+      "browser": "the browser",
+      "schedule": "schedules",
+      "channel": "a channel"
+    },
+    "sidebarEntry": "See what Memoh can do",
+    "galleryTitle": "See what Memoh can do",
+    "galleryDescription": "Pick an example to put it in the chat box. You can edit it before sending.",
+    "refresh": "Refresh",
+    "refreshFailed": "Couldn't get new suggestions. Try again later.",
+    "fillIn": "Use",
+    "dismiss": "Hide suggestions",
+    "replaceDraft": {
+      "title": "Replace your unsent message?",
+      "description": "The chat box already has text you haven't sent. Replacing it with this prompt discards that text.",
+      "confirm": "Replace"
+    },
+    "share": {
+      "prompt": "What have you built with Memoh? Share your use case on X with #Memoh.",
+      "action": "Share on X"
     }
   },
   "models": {
@@ -2691,6 +2727,7 @@
       "usageNone": "No usage yet",
       "runtimeTitle": "Runtime",
       "runtimeSampledAt": "Updated {time}",
+      "runtimeCpuCores": "{count} vCPU",
       "runtimeStopped": "Workspace isn't running — start it to see live resource usage",
       "runtimeNoMetrics": "Resource usage isn't available right now",
       "remindersTitle": "Action needed",
@@ -3096,6 +3133,7 @@
       "statusRunning": "Running",
       "statusStopped": "Stopped",
       "statusExited": "Exited",
+      "statusPaused": "Paused",
       "statusUnknown": "Unknown",
       "loadFailed": "Failed to load workspace info",
       "actionFailed": "Workspace action failed",
@@ -3144,7 +3182,6 @@
       "metricsUnavailable": "No metrics available.",
       "metricsStopped": "Workspace isn't running; only storage usage is available.",
       "metricsPath": "Path",
-      "metricsUnlimited": "No limit",
       "currentSample": "Current",
       "sampledAt": "Sampled at",
       "metricsLabels": {
@@ -3163,7 +3200,6 @@
         "storageHint": "Reserved as a VM hard limit; container runtime backends currently track it as a soft limit.",
         "unlimited": "Unlimited",
         "unlimitedPlaceholder": "unlimited",
-        "cpuCoresValue": "{value} cores",
         "cpuSummary": "CPU {value}",
         "memorySummary": "Memory {value}",
         "storageSummary": "Storage {value}",
@@ -3780,6 +3816,7 @@
       "edit": "Edit Task",
       "delete": "Delete",
       "deleteConfirm": "Delete task \"{name}\"? This cannot be undone.",
+      "deleteConfirmRunSessions": "Delete task \"{name}\"? This cannot be undone. The sessions its runs created will no longer show in Schedule or Recents; you can only find them with search.",
       "deleteSuccess": "Task deleted",
       "deleteFailed": "Delete failed",
       "saveSuccess": "Task saved",
@@ -3877,6 +3914,13 @@
         "oct": "October",
         "nov": "November",
         "dec": "December"
+      },
+      "sessions": {
+        "pinned": "Runs in one conversation",
+        "openPinned": "Open the conversation this schedule runs in",
+        "failed": "This run failed",
+        "notStarted": "This run did not start, so it has no conversation",
+        "empty": "No runs yet"
       }
     },
     "history": {
@@ -4158,23 +4202,10 @@
       "title": "You're All Set",
       "subtitle": "Open Memoh and start your first conversation",
       "action": "Open Memoh",
-      "cards": {
-        "im": {
-          "title": "IM channels",
-          "desc": "Deploy your bot to Telegram and beyond"
-        },
-        "voice": {
-          "title": "Voice chat",
-          "desc": "TTS and STT give your bot a voice"
-        },
-        "search": {
-          "title": "Web search",
-          "desc": "Plug in search engines for real-time info"
-        }
-      },
       "saveFailed": "Failed to save, please try again",
       "navigationFailed": "Couldn't open your bot. Please try again.",
-      "noModelWarning": "No model is selected for this bot, so it cannot reply yet. You can configure one later in Bot Settings."
+      "noModelWarning": "No model is selected for this bot, so it cannot reply yet. You can configure one later in Bot Settings.",
+      "examplesHint": "Or start with one of these"
     }
   },
   "deviceCode": {
@@ -4215,7 +4246,8 @@
       "update": "Update",
       "remove": "Uninstall",
       "viewProgress": "View progress",
-      "open": "View in Supermarket"
+      "open": "View in Supermarket",
+      "tryIt": "Try it"
     },
     "section": {
       "skills": "{count} Skill | {count} Skills",
@@ -4311,6 +4343,9 @@
       "release": "App release",
       "confirm": "Update {count} item | Update {count} items",
       "none": "Nothing to update."
+    },
+    "tryIt": {
+      "prompt": "Help me test the {name} App: show me how to use its features, then briefly explain what it can do."
     }
   },
   "runtime": {
