@@ -1471,6 +1471,11 @@
     "newSession": "新しいセッション",
     "deleteSession": "セッションを削除",
     "deleteSessionConfirm": "このセッションを削除してもよろしいですか？",
+    "selectSessions": "選択",
+    "selectedSessions": "{count} 件選択中",
+    "deleteSessions": "セッションを削除",
+    "deleteSessionsConfirm": "{count} 件のセッションを削除してもよろしいですか？",
+    "deleteSessionsFailed": "{count} 件のセッションを削除できませんでした",
     "renameSession": "セッション名を変更",
     "renameSessionDescription": "この会話の短い名前を選択してください。",
     "renameSessionPlaceholder": "セッション名",
@@ -2683,6 +2688,7 @@
       "usageNone": "まだ使用されていません",
       "runtimeTitle": "ランタイム",
       "runtimeSampledAt": "{time}を更新しました",
+      "runtimeCpuCores": "{count} vCPU",
       "runtimeStopped": "Workspace は未実行 — 起動するとリソース使用量を表示",
       "runtimeNoMetrics": "現在、リソースの使用状況は利用できません",
       "remindersTitle": "必要なアクション",
@@ -3129,6 +3135,7 @@
       "statusRunning": "実行中",
       "statusStopped": "停止しました",
       "statusExited": "終了しました",
+      "statusPaused": "一時停止中",
       "statusUnknown": "未知",
       "loadFailed": "Workspace 情報を読み込めませんでした",
       "actionFailed": "Workspace の操作に失敗しました",
@@ -3177,7 +3184,6 @@
       "metricsUnavailable": "利用可能な指標はありません。",
       "metricsStopped": "Workspace は実行されていません。ストレージ使用量のみ表示しています。",
       "metricsPath": "パス",
-      "metricsUnlimited": "制限なし",
       "currentSample": "現在",
       "sampledAt": "サンプリングされた場所",
       "metricsLabels": {
@@ -3196,7 +3202,6 @@
         "storageHint": "VM のハード上限用に予約されています。コンテナランタイムでは現在、ソフト上限として記録されます。",
         "unlimited": "無制限",
         "unlimitedPlaceholder": "無制限",
-        "cpuCoresValue": "{value} コア",
         "cpuSummary": "CPU {value}",
         "memorySummary": "Memory{value}",
         "storageSummary": "ストレージ {value}",
@@ -3768,6 +3773,7 @@
       "edit": "タスクの編集",
       "delete": "削除",
       "deleteConfirm": "タスク「{name}」を削除しますか?これを元に戻すことはできません。",
+      "deleteConfirmRunSessions": "タスク「{name}」を削除しますか?これを元に戻すことはできません。削除後、このタスクの実行で作成された会話はスケジュールと最近に表示されなくなり、検索でのみ見つけられます。",
       "deleteSuccess": "タスクが削除されました",
       "deleteFailed": "削除に失敗しました",
       "saveSuccess": "タスクが保存されました",
@@ -3865,6 +3871,13 @@
         "oct": "10月",
         "nov": "11月",
         "dec": "12月"
+      },
+      "sessions": {
+        "pinned": "同じ会話で実行",
+        "openPinned": "このスケジュールが実行される会話を開く",
+        "failed": "この実行は失敗しました",
+        "notStarted": "この実行は開始できなかったため、会話がありません",
+        "empty": "まだ実行されていません"
       }
     },
     "history": {
