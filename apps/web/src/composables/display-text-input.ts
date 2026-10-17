@@ -43,6 +43,9 @@ export function createDisplayTextInput(options: {
   function end(value: string) {
     const commit = composing && options.active()
     composing = false
+    // Composition-owned keydowns must not affect a later ordinary key if the
+    // browser does not deliver their keyup after the IME closes.
+    localKeys.clear()
     lastCommit = value
     if (commit && value) options.text(value)
   }
