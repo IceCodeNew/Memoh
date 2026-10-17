@@ -1,4 +1,4 @@
-type KeyEvent = Pick<KeyboardEvent, 'key' | 'ctrlKey' | 'metaKey' | 'altKey' | 'shiftKey' | 'repeat' | 'preventDefault'>
+type KeyEvent = Pick<KeyboardEvent, 'key' | 'code' | 'ctrlKey' | 'metaKey' | 'altKey' | 'shiftKey' | 'repeat' | 'preventDefault'>
 type KeyInput = { type: 'key'; keysym: number; down: boolean }
 
 const SHIFT = 0xffe1
@@ -28,6 +28,10 @@ export function createDisplayKeyboard(options: {
   pasteShortcut: (shift: boolean) => void
 }) {
   const held = new Set<number>()
+  // `KeyboardEvent.key` changes with modifier state (for example `A` becomes
+  // `a` after Shift is released). Keep the keysym selected on keydown by the
+  // physical key so keyup always releases the same remote key.
+  const heldCodes = new Map<string, number>()
   const physical = new Set<number>()
   let needsReset = true
 
@@ -68,6 +72,9 @@ export function createDisplayKeyboard(options: {
 
   function releaseCharacters() {
     for (const key of [...held]) if (!modifiers.has(key)) setKey(key, false)
+    for (const [code, keysym] of heldCodes) {
+      if (!modifiers.has(keysym)) heldCodes.delete(code)
+    }
   }
 
   function command(event: KeyEvent, keysym: number) {
@@ -129,13 +136,15 @@ export function createDisplayKeyboard(options: {
     if (event.repeat) return
     if (event.ctrlKey && !event.altKey && ['c', 'x'].includes(key) && (!options.mac || event.shiftKey)) options.copy()
     setKey(keysym, true)
+    if (event.code) heldCodes.set(event.code, keysym)
   }
 
   function keyup(event: KeyEvent) {
     if (!options.active()) return
     syncModifiers(event)
     if (options.mac && event.key === 'Meta') releaseCharacters()
-    const keysym = keysymForKey(event.key)
+    const keysym = event.code ? heldCodes.get(event.code) ?? keysymForKey(event.key) : keysymForKey(event.key)
+    if (event.code) heldCodes.delete(event.code)
     if (keysym !== undefined) setKey(keysym, false)
   }
 
@@ -148,12 +157,14 @@ export function createDisplayKeyboard(options: {
 
   function reset() {
     held.clear()
+    heldCodes.clear()
     physical.clear()
     needsReset = true
   }
 
   function release() {
     for (const key of [...held].reverse()) setKey(key, false)
+    heldCodes.clear()
     physical.clear()
     needsReset = true
   }
