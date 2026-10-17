@@ -40,10 +40,18 @@ func NewExternalAgentLoginHandler(log *slog.Logger, runtimes external.Drivers, a
 
 // Register registers the sign-in routes.
 func (h *ExternalAgentLoginHandler) Register(e *echo.Echo) {
-	g := e.Group("/bots/:bot_id/agents/:id/login/device")
-	g.POST("/authorize", h.AuthorizeDevice)
-	g.POST("/poll", h.PollDevice)
-	g.POST("/cancel", h.CancelDevice)
+	for _, prefix := range []string{
+		"/bots/:bot_id/agents/:id/login/device",
+		// Desktop builds from before the generic path still sign Codex in
+		// here, with the same requests and answers. Left out of the API docs
+		// so the SDK does not grow it back; remove once those builds are gone.
+		"/bots/:bot_id/agents/:id/codex/login/device",
+	} {
+		g := e.Group(prefix)
+		g.POST("/authorize", h.AuthorizeDevice)
+		g.POST("/poll", h.PollDevice)
+		g.POST("/cancel", h.CancelDevice)
+	}
 }
 
 // requireLogin resolves the Agent the caller may manage and the sign-in flow
