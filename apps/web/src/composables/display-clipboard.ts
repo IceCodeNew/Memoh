@@ -19,10 +19,6 @@ export function encodeClipboardPaste(text: string, shift = false): string | null
   return encodeClipboardText(text, 'clipboard', shift)
 }
 
-export function encodeClipboardSync(text: string): string | null {
-  return encodeClipboardText(text, 'clipboard_sync')
-}
-
 function encodeClipboardText(text: string, type: string, shift = false): string | null {
   if (text.includes('\0') || new TextEncoder().encode(text).length > MAX_CLIPBOARD_BYTES) return null
   const message = JSON.stringify({ type, text, ...(shift ? { shift: true } : {}) })

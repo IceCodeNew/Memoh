@@ -4,18 +4,13 @@ import { toast } from '@felinic/ui'
 import type { BotDisplayConnection } from './useBotDisplayConnection'
 
 type ClipboardConnection = Pick<BotDisplayConnection,
-  'clipboardText' | 'clipboardRevision' | 'inputChannel' | 'inputReady' | 'pasteText' | 'syncClipboardText'>
+  'clipboardText' | 'clipboardRevision' | 'inputChannel' | 'inputReady' | 'pasteText'>
 
 export function useDisplayClipboard(connection: ClipboardConnection, isActive: () => boolean) {
   const { t } = useI18n()
-  let pending: { pointer: boolean; received: boolean; text: string | null; resolve: (text: Blob) => void; cancel: () => void } | null = null
-  let lastSharedText: string | null = null
-  let lastSharedChannel: RTCDataChannel | null = null
+  let pending: { pointer: boolean; received: boolean; resolve: (text: Blob) => void; cancel: () => void } | null = null
   let contextRevision = 0
   let clipboardRevision = 0
-  let syncInFlight: Promise<boolean> | null = null
-  let requestReadPermission = false
-  let remoteWriteRevision: number | null = null
   let pointerCopyEnabled = !navigator.permissions?.query
 
   // Detect Safari's unsupported clipboard permission before a later click.
@@ -63,7 +58,6 @@ export function useDisplayClipboard(connection: ClipboardConnection, isActive: (
     const request = {
       pointer,
       received: false,
-      text: null as string | null,
       resolve: (text: Blob) => { resolve(text) },
       cancel: () => { clearTimeout(timeout); reject(new Error('Copy gesture expired')) },
     }
@@ -74,8 +68,6 @@ export function useDisplayClipboard(connection: ClipboardConnection, isActive: (
       void navigator.clipboard.write([new ClipboardItem({ 'text/plain': data })]).then(() => {
         if (pending !== request) return
         clearTimeout(timeout)
-        lastSharedText = request.text
-        lastSharedChannel = connection.inputChannel.value
         pending = null
       }).catch(() => {
         if (pending !== request) return
@@ -99,13 +91,10 @@ export function useDisplayClipboard(connection: ClipboardConnection, isActive: (
   watch(connection.clipboardRevision, (revision) => {
     if (!revision || !isActive() || !connection.inputReady()) return
     clipboardRevision++
-    lastSharedText = null
-    lastSharedChannel = null
     const text = connection.clipboardText.value
     if (pending?.pointer && !document.hasFocus()) cancelCopy()
     if (pending && !pending.received) {
       pending.received = true
-      pending.text = text
       pending.resolve(new Blob([text], { type: 'text/plain' }))
       return
     }
@@ -116,7 +105,6 @@ export function useDisplayClipboard(connection: ClipboardConnection, isActive: (
     const channel = connection.inputChannel.value
     const context = contextRevision
     const revision = clipboardRevision
-    remoteWriteRevision = revision
     const current = () => isActive() && document.hasFocus() && connection.inputReady()
       && channel === connection.inputChannel.value && context === contextRevision && revision === clipboardRevision && !pending
     try {
@@ -127,13 +115,8 @@ export function useDisplayClipboard(connection: ClipboardConnection, isActive: (
       const permission = await navigator.permissions.query(descriptor)
       if (permission.state !== 'granted' || !current()) return
       await navigator.clipboard.writeText(text)
-      if (!current()) return
-      lastSharedText = text
-      lastSharedChannel = channel
     } catch {
       // Unsupported/background writes must not prompt or overwrite a newer copy.
-    } finally {
-      if (remoteWriteRevision === revision) remoteWriteRevision = null
     }
   }
 
@@ -145,67 +128,6 @@ export function useDisplayClipboard(connection: ClipboardConnection, isActive: (
       toast.error(t('chat.display.clipboard.pasteFailed'))
       return
     }
-    lastSharedText = text
-    lastSharedChannel = connection.inputChannel.value
-  }
-
-  // Only supported Permissions API implementations can request a persistent
-  // read grant. Safari throws at query(), so it never opens a Paste prompt.
-  function syncLocalClipboard(requestPermission = false): Promise<boolean> {
-    if (pending || remoteWriteRevision !== null || !isActive() || !connection.inputReady() || !document.hasFocus()) return Promise.resolve(true)
-    requestReadPermission ||= requestPermission && navigator.userActivation?.isActive === true
-    if (syncInFlight) return syncInFlight
-    const channel = connection.inputChannel.value
-    const revision = contextRevision
-    const clipboard = clipboardRevision
-    let expired = false
-    const sameContext = () => isActive() && document.hasFocus() && connection.inputReady()
-      && connection.inputChannel.value === channel && revision === contextRevision
-    const current = () => !expired && sameContext() && clipboard === clipboardRevision
-    // A queued copy/native paste supersedes this read, but must still be sent.
-    const superseded = () => !expired && sameContext() && clipboard !== clipboardRevision
-    const operation = (async () => {
-      try {
-        if (!navigator.permissions?.query) return true
-        const descriptor = { name: 'clipboard-read' as PermissionName, allowWithoutGesture: true }
-        // Safari does not implement this permission. Do not block its input.
-        let permission: PermissionStatus
-        try {
-          permission = await navigator.permissions.query(descriptor)
-        } catch {
-          return true
-        }
-        const canRequest = permission.state === 'prompt' && requestReadPermission && navigator.userActivation?.isActive === true
-        if (permission.state !== 'granted' && !canRequest) return true
-        if (!current()) return superseded()
-        const text = await navigator.clipboard.readText()
-        if (!current()) return superseded()
-        if (lastSharedChannel === channel && lastSharedText === text) return true
-        if (connection.syncClipboardText(text)) {
-          lastSharedText = text
-          lastSharedChannel = channel
-          return true
-        }
-        return false
-      } catch {
-        return superseded()
-      }
-    })()
-    let timeout!: ReturnType<typeof setTimeout>
-    const deadline = new Promise<boolean>((resolve) => {
-      // Bound the input barrier and discard OS reads that finish after it.
-      timeout = setTimeout(() => {
-        const replaced = superseded()
-        expired = true
-        resolve(replaced)
-      }, 1500)
-    })
-    syncInFlight = Promise.race([operation, deadline]).finally(() => {
-      clearTimeout(timeout)
-      syncInFlight = null
-      requestReadPermission = false
-    })
-    return syncInFlight
   }
 
   watch([isActive, connection.inputChannel], () => {
@@ -216,5 +138,5 @@ export function useDisplayClipboard(connection: ClipboardConnection, isActive: (
     contextRevision++
     cancelCopy()
   })
-  return { prepareRemoteCopy, preparePointerCopy, cancelPointerCopy, syncLocalClipboard, pasteText }
+  return { prepareRemoteCopy, preparePointerCopy, cancelPointerCopy, pasteText }
 }

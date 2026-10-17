@@ -1,9 +1,7 @@
 type Input = Record<string, unknown>
 
-// Keep a click (including its release and any subsequent input) behind the
-// clipboard read. Never replay an incomplete click after a failed read.
-export function createDisplayInput(send: (input: Input) => void, failed: () => void) {
-  let batch: { inputs: Input[] } | null = null
+// Release held input when the display loses focus, reconnects, or handles a paste.
+export function createDisplayInput(send: (input: Input) => void) {
   let suppressPointer = false
   let pointerMask = 0
   let pointer: Input | null = null
@@ -26,25 +24,8 @@ export function createDisplayInput(send: (input: Input) => void, failed: () => v
   }
 
   function cancel() {
-    batch = null
     suppressPointer = pointerMask !== 0
     release()
-  }
-
-  function waitForClipboard(sync: Promise<boolean>) {
-    if (batch) return
-    const current = { inputs: [] as Input[] }
-    batch = current
-    void sync.then((ok) => {
-      if (batch !== current) return
-      batch = null
-      if (ok) current.inputs.forEach(forward)
-      else {
-        suppressPointer = pointerMask !== 0
-        release()
-        failed()
-      }
-    })
   }
 
   function input(value: Input) {
@@ -53,21 +34,8 @@ export function createDisplayInput(send: (input: Input) => void, failed: () => v
       if (value.button_mask !== 0) return
       suppressPointer = false
     }
-    if (!batch) return forward(value)
-    const last = batch.inputs.at(-1)
-    // Mouse movement may be frequent during a slow permission prompt. Keep
-    // transitions, but coalesce movement with an unchanged button mask.
-    const previous = batch.inputs.at(-2)
-    if (last?.type === 'pointer' && previous?.type === 'pointer' && value.type === 'pointer'
-      && previous.button_mask === value.button_mask && last.button_mask === value.button_mask) {
-      batch.inputs[batch.inputs.length - 1] = value
-    } else if (batch.inputs.length < 256) {
-      batch.inputs.push(value)
-    } else {
-      cancel()
-      failed()
-    }
+    forward(value)
   }
 
-  return { input, waitForClipboard, cancel }
+  return { input, cancel }
 }

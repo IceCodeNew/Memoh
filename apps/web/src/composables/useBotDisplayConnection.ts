@@ -6,7 +6,7 @@ import {
 } from '@memohai/sdk'
 import i18n from '@/i18n'
 import { resolveApiErrorMessage } from '@/utils/api-error'
-import { decodeClipboardMessage, encodeClipboardPaste, encodeClipboardSync } from './display-clipboard'
+import { decodeClipboardMessage, encodeClipboardPaste } from './display-clipboard'
 import {
   postBotsByBotIdContainerDisplayPrepareStream,
   type DisplayPrepareStreamEvent,
@@ -359,10 +359,6 @@ export class BotDisplayConnection {
 
   pasteText(text: string, shift = false): boolean {
     return this.sendClipboard(encodeClipboardPaste(text, shift))
-  }
-
-  syncClipboardText(text: string): boolean {
-    return this.sendClipboard(encodeClipboardSync(text))
   }
 
   private sendClipboard(message: string | null): boolean {

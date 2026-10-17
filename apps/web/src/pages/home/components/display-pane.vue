@@ -23,7 +23,6 @@
       @mousemove="onPointerMove"
       @mouseup.prevent="onPointerUp"
       @mouseleave="onPointerLeave"
-      @mouseenter="syncLocalClipboard"
       @wheel.prevent="onWheel"
       @keydown="onKeyDown"
       @keyup.prevent="onKeyUp"
@@ -37,7 +36,6 @@
       autocomplete="off"
       autocapitalize="off"
       :spellcheck="false"
-      @focus="syncLocalClipboard"
       @keydown="onKeyDown"
       @keyup.prevent="onKeyUp"
       @paste.prevent="onPaste"
@@ -226,7 +224,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, reactive, ref, watch, type Component, useTemplateRef } from 'vue'
+import { computed, onBeforeUnmount, reactive, ref, watch, type Component, useTemplateRef } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { Button, Spinner, SurfaceCard, toast } from '@felinic/ui'
 import { Activity, Globe, Maximize, Monitor, Package, Wrench, X } from 'lucide-vue-next'
@@ -291,10 +289,9 @@ const documentVisibility = useDocumentVisibility()
 const viewing = computed(() => !!props.active && documentVisibility.value === 'visible')
 const connection = useBotDisplayConnection(props.botId, viewing)
 const clipboard = useDisplayClipboard(connection, () => viewing.value)
-const orderedInput = createDisplayInput(
-  payload => { if (viewing.value) connection.sendInput(payload) },
-  () => toast.error(t('chat.display.clipboard.syncFailed')),
-)
+const orderedInput = createDisplayInput(payload => {
+  if (viewing.value) connection.sendInput(payload)
+})
 watch([viewing, connection.inputChannel], () => orderedInput.cancel(), { flush: 'sync' })
 const keyboardRef = useTemplateRef('keyboardRef')
 const macKeyboard = detectPlatform() === 'mac'
@@ -309,6 +306,8 @@ watch(connection.clipboardError, (error) => {
   if (error && viewing.value) toast.error(resolveApiErrorMessage(error, t('errors.workspace.display_clipboard_failed')))
 })
 
+// Send local content only from an explicit browser paste. Reading on focus or
+// pointer input could disclose clipboard content unrelated to this workspace.
 function onPaste(event: ClipboardEvent) {
   if (!event.clipboardData?.types.includes('text/plain')) return
   const text = event.clipboardData?.getData('text/plain')
@@ -318,10 +317,6 @@ function onPaste(event: ClipboardEvent) {
     orderedInput.cancel()
     clipboard.pasteText(text, shift)
   }
-}
-
-function syncLocalClipboard() {
-  void clipboard.syncLocalClipboard()
 }
 
 interface PrepareStage {
@@ -748,7 +743,6 @@ function onPointerDown(event: MouseEvent) {
   // Start the promised clipboard write during the local click, before the
   // remote menu can handle it and return its Copy/Cut result.
   if (event.button === 0) clipboard.preparePointerCopy()
-  if (pointerMask === 0) orderedInput.waitForClipboard(clipboard.syncLocalClipboard(true))
   pointerMask |= buttonBit(event.button)
   sendPointer(event)
 }
@@ -979,7 +973,6 @@ async function connect() {
 // background pane never captures and a connected pane resumes on focus.
 watch([() => status.value, viewing], ([st, active]) => {
   if (st === 'connected' && active) {
-    syncLocalClipboard()
     bindStream()
     startSnapshotCapture()
     if (statsVisible.value) startStatsPolling()
@@ -997,14 +990,7 @@ watch([connection.stream, videoRef, viewing], () => {
   bindStream()
 }, { immediate: true, flush: 'post' })
 
-onMounted(() => {
-  window.addEventListener('focus', syncLocalClipboard)
-  navigator.clipboard?.addEventListener?.('clipboardchange', syncLocalClipboard)
-})
-
 onBeforeUnmount(() => {
-  window.removeEventListener('focus', syncLocalClipboard)
-  navigator.clipboard?.removeEventListener?.('clipboardchange', syncLocalClipboard)
   if (fullScreenIconTimer) {
     clearTimeout(fullScreenIconTimer)
     fullScreenIconTimer = null
