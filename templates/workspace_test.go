@@ -20,7 +20,6 @@ func TestWorkspaceFSContainsBootstrapFiles(t *testing.T) {
 		".memoh/skills/skill-creator/SKILL.md",
 		".memoh/skills/hooks-setup/SKILL.md",
 		".memoh/skills/memoh-help/SKILL.md",
-		".memoh/skills/memoh-help/references/quick-reference.md",
 	}
 	fsys := WorkspaceFS()
 	for _, name := range wantFiles {

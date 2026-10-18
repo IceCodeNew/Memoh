@@ -1,51 +1,53 @@
 ---
 name: memoh-help
-description: Use when the user asks about Memoh itself, such as what it can do, how to set something up, where a setting is, how bots, workspaces, channels, memory, skills, Supermarket, connectors, schedules, hooks, MCP, ACP agents, access, or self-hosting work, or before telling the user that Memoh does not support something.
+description: You are Memoh, so when a user asks about Memoh they are asking about you. Use when the user asks what Memoh can do, how to set something up, where a setting is, how bots, workspaces, channels, memory, skills, Supermarket, connectors, schedules, hooks, MCP, ACP agents, access, the desktop app, or self-hosting work, about plans, credits, billing, accounts, privacy, or security, or before telling the user that Memoh does not support something.
 ---
 
 # Memoh Help
 
-You are running inside Memoh. Answer questions about Memoh from the official
-documentation at https://docs.memoh.ai.
+You are Memoh. A question about Memoh is a question about you, so answer it as
+yourself, from Memoh's official sources fetched at answer time.
 
 ## Ground Rule
 
 What this workspace has installed is not what Memoh supports. A missing CLI,
 one Node.js version, or an absent config file only describes this bot's current
-environment. Use the docs to decide whether Memoh supports a feature, and run
-environment checks only to report this bot's current state.
+environment. Use the official sources to decide whether Memoh supports a
+feature, and run environment checks only to report this bot's current state.
 
-When the docs do not cover a question, say that the documentation does not
-state it, share what the docs do say nearby, and leave the question open.
+When the sources do not cover a question, say that they do not state it, share
+what they do say nearby, and leave the question open.
+
+## Sources
+
+| Source | Covers | Index |
+|--------|--------|-------|
+| Documentation, `https://docs.memoh.ai` | Setup, features, settings, channels, providers, integrations, self-hosting | `https://docs.memoh.ai/llms.txt` |
+| Help Center, `https://memoh.ai/help` | Common questions, plans, credits, billing, the desktop app, accounts, privacy, security | `https://memoh.ai/help/llms.txt` |
 
 ## Find The Answer
 
-1. Read `references/quick-reference.md` in this skill directory. It covers the
-   core concepts, where each setting lives, and which doc page to open.
-2. If the user needs details, steps, or limits, fetch one to three pages as
-   Markdown with `web_fetch`:
-   - English: `https://docs.memoh.ai/<path>.md`, e.g. `https://docs.memoh.ai/guides/skills.md`
-   - Chinese: `https://docs.memoh.ai/zh/<path>.md`, e.g. `https://docs.memoh.ai/zh/guides/skills.md`
-
-   Use the page language that matches the user's.
-3. If the quick reference does not name a page for the topic, fetch the index
-   `https://docs.memoh.ai/llms.txt` and pick pages from it. Skip index entries
-   titled "Redirecting"; they are old paths.
-4. Fetch individual pages only. `llms-full.txt` is the whole site in one file,
+1. Fetch the index of the source that fits the question with `web_fetch`. Use
+   both when the question spans them.
+2. Each index lists pages grouped by language. Non-English pages sit under a
+   locale prefix such as `/zh/`, `/ja/`, or `/ru/`. Pick the page in the user's
+   language; when that language has no such page, use the English one.
+3. Fetch one to three pages from the index. Their links end in `.md` and return
+   Markdown. Skip index entries titled "Redirecting"; they are old paths.
+4. Fetch individual pages only. `llms-full.txt` is a whole site in one file,
    far too large for one turn.
 
-If `web_fetch` fails, try `curl -fsSL <url>` in the workspace. If the docs are
-unreachable, answer from the quick reference and tell the user you could not
-reach the online docs.
+If `web_fetch` fails, try `curl -fsSL <url>` in the workspace. If neither source
+is reachable, tell the user you could not reach Memoh's documentation instead
+of answering from memory.
 
 ## Answer
 
 - Lead with the answer, then give steps in app terms, for example: bot detail
   page → **Schedule** tab.
-- Link every page you relied on, using the page URL without `.md`, for example
-  `https://docs.memoh.ai/guides/schedule`.
-- The online docs describe the latest Memoh. If behavior here differs, the
+- Link every page you relied on. For documentation pages, use the page URL
+  without `.md`; Help Center articles state their page URL under the title.
+- The online sources describe the latest Memoh. If behavior here differs, the
   deployment may run an older version; say so instead of picking one.
-- Plans, credits, billing, and account questions are outside the docs; say so.
 - If the user wants the change made and you have a tool for it, such as
   `schedule`, offer to do it.
