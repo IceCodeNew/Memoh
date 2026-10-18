@@ -1,6 +1,12 @@
 package storefs
 
-import "context"
+import (
+	"context"
+	"time"
+)
+
+// overviewNow is the clock stale overviews are aged with; tests replace it.
+var overviewNow = time.Now
 
 type conversationWriteKey struct{}
 
@@ -26,6 +32,10 @@ func IsConversationWrite(ctx context.Context) bool {
 // lag behind writes an earlier process deferred.
 type overviewState struct {
 	clean bool
+	// staleSince is when MEMORY.md started lagging: the first write it
+	// deferred, or, for a bot this process had not seen, when it first
+	// asked. Zero while clean.
+	staleSince time.Time
 	// generation counts deferred writes, so a refresh that read the memory
 	// files before a newer write landed does not mark the overview clean.
 	generation uint64
@@ -43,6 +53,9 @@ func (s *Service) deferOverview(ctx context.Context, botID string) bool {
 		s.overview = make(map[string]overviewState)
 	}
 	state := s.overview[botID]
+	if state.staleSince.IsZero() {
+		state.staleSince = overviewNow()
+	}
 	state.clean = false
 	state.generation++
 	s.overview[botID] = state
@@ -66,23 +79,34 @@ func (s *Service) markOverviewClean(botID string, generation uint64) {
 		return
 	}
 	state.clean = true
+	state.staleSince = time.Time{}
 	s.overview[botID] = state
 }
 
-// OverviewStale reports whether MEMORY.md may lag behind the bot's memory
-// files.
-func (s *Service) OverviewStale(botID string) bool {
+// OverviewStaleSince reports whether MEMORY.md may lag behind the bot's memory
+// files and, if so, since when.
+func (s *Service) OverviewStaleSince(botID string) (time.Time, bool) {
 	s.overviewMu.Lock()
 	defer s.overviewMu.Unlock()
 	state, known := s.overview[botID]
-	return !known || !state.clean
+	if known && state.clean {
+		return time.Time{}, false
+	}
+	if state.staleSince.IsZero() {
+		if s.overview == nil {
+			s.overview = make(map[string]overviewState)
+		}
+		state.staleSince = overviewNow()
+		s.overview[botID] = state
+	}
+	return state.staleSince, true
 }
 
 // RefreshOverview rewrites MEMORY.md from the memory files when it may be
 // stale. Rendering is deterministic, so a refresh that finds nothing new
 // writes the same bytes the file already holds.
 func (s *Service) RefreshOverview(ctx context.Context, botID string) error {
-	if !s.OverviewStale(botID) {
+	if _, stale := s.OverviewStaleSince(botID); !stale {
 		return nil
 	}
 	return s.writeOverview(context.WithValue(ctx, conversationWriteKey{}, false), botID)

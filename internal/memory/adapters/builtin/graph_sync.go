@@ -98,15 +98,18 @@ func (s *graphSync) syncMarkdownFromNodes(ctx context.Context, botID string, nod
 // overviewRefresher is the part of a memory store that can defer MEMORY.md
 // rewrites made during a conversation (storefs.Service).
 type overviewRefresher interface {
-	OverviewStale(botID string) bool
+	OverviewStaleSince(botID string) (time.Time, bool)
 	RefreshOverview(ctx context.Context, botID string) error
 }
 
-// overviewStale reports whether the store left MEMORY.md behind its memory
-// files for botID.
-func (s *graphSync) overviewStale(botID string) bool {
+// overviewStaleSince reports whether the store left MEMORY.md behind its
+// memory files for botID and, if so, since when.
+func (s *graphSync) overviewStaleSince(botID string) (time.Time, bool) {
 	refresher, ok := s.fs.(overviewRefresher)
-	return ok && refresher.OverviewStale(strings.TrimSpace(botID))
+	if !ok {
+		return time.Time{}, false
+	}
+	return refresher.OverviewStaleSince(strings.TrimSpace(botID))
 }
 
 // refreshOverview rewrites a stale MEMORY.md under the same per-bot lock the

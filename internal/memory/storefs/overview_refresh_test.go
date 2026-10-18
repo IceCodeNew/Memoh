@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/felinics/memoh/internal/workspace/bridge"
 )
@@ -23,6 +24,11 @@ func (w *recordingWorkspace) MCPClient(ctx context.Context, _ string) (*bridge.C
 	return nil, errWorkspaceUnavailable
 }
 
+func overviewStale(s *Service, botID string) bool {
+	_, stale := s.OverviewStaleSince(botID)
+	return stale
+}
+
 func TestConversationWriteDefersOverview(t *testing.T) {
 	t.Parallel()
 
@@ -35,7 +41,7 @@ func TestConversationWriteDefersOverview(t *testing.T) {
 	if workspace.calls != 0 {
 		t.Fatalf("workspace calls = %d, want the MEMORY.md rewrite deferred", workspace.calls)
 	}
-	if !s.OverviewStale("bot-1") {
+	if !overviewStale(s, "bot-1") {
 		t.Fatal("deferred rewrite did not mark the overview stale")
 	}
 }
@@ -56,7 +62,7 @@ func TestRefreshOverviewRewritesStaleOverviewWithoutConversationMark(t *testing.
 
 	workspace := &recordingWorkspace{}
 	s := New(nil, workspace)
-	if !s.OverviewStale("bot-1") {
+	if !overviewStale(s, "bot-1") {
 		t.Fatal("a bot this process never wrote must count as stale")
 	}
 
@@ -67,7 +73,7 @@ func TestRefreshOverviewRewritesStaleOverviewWithoutConversationMark(t *testing.
 	if len(workspace.ctxs) == 0 || IsConversationWrite(workspace.ctxs[0]) {
 		t.Fatal("refresh must write MEMORY.md, not defer it again")
 	}
-	if !s.OverviewStale("bot-1") {
+	if !overviewStale(s, "bot-1") {
 		t.Fatal("a failed refresh must leave the overview stale")
 	}
 }
@@ -84,12 +90,12 @@ func TestOverviewCleanIgnoresRefreshSupersededByNewerWrite(t *testing.T) {
 		t.Fatal("conversation write was not deferred")
 	}
 	s.markOverviewClean("bot-1", generation)
-	if !s.OverviewStale("bot-1") {
+	if !overviewStale(s, "bot-1") {
 		t.Fatal("a refresh that read the files before a newer write must not mark the overview clean")
 	}
 
 	s.markOverviewClean("bot-1", s.overviewGeneration("bot-1"))
-	if s.OverviewStale("bot-1") {
+	if overviewStale(s, "bot-1") {
 		t.Fatal("overview should be clean after a refresh that saw every write")
 	}
 	if err := s.RefreshOverview(context.Background(), "bot-1"); err != nil {
@@ -97,5 +103,52 @@ func TestOverviewCleanIgnoresRefreshSupersededByNewerWrite(t *testing.T) {
 	}
 	if workspace.calls != 0 {
 		t.Fatalf("workspace calls = %d, want none for a clean overview", workspace.calls)
+	}
+}
+
+func TestOverviewStaleSinceTracksFirstDeferredWrite(t *testing.T) {
+	start := time.Date(2026, 10, 19, 12, 0, 0, 0, time.UTC)
+	now := start
+	previous := overviewNow
+	overviewNow = func() time.Time { return now }
+	t.Cleanup(func() { overviewNow = previous })
+
+	workspace := &recordingWorkspace{}
+	s := New(nil, workspace)
+	conversation := WithConversationWrite(context.Background())
+
+	s.markOverviewClean("bot-1", s.overviewGeneration("bot-1"))
+	if since, stale := s.OverviewStaleSince("bot-1"); stale || !since.IsZero() {
+		t.Fatalf("clean overview = (%v, %v), want not stale", since, stale)
+	}
+	s.deferOverview(conversation, "bot-1")
+	now = start.Add(10 * time.Minute)
+	s.deferOverview(conversation, "bot-1")
+	if since, stale := s.OverviewStaleSince("bot-1"); !stale || !since.Equal(start) {
+		t.Fatalf("stale since = (%v, %v), want the first deferred write at %v", since, stale, start)
+	}
+
+	s.markOverviewClean("bot-1", s.overviewGeneration("bot-1"))
+	now = start.Add(20 * time.Minute)
+	s.deferOverview(conversation, "bot-1")
+	if since, _ := s.OverviewStaleSince("bot-1"); !since.Equal(now) {
+		t.Fatalf("stale since = %v after a refresh, want the next deferred write at %v", since, now)
+	}
+}
+
+func TestOverviewStaleSinceStartsWhenAnUnseenBotIsFirstAsked(t *testing.T) {
+	start := time.Date(2026, 10, 19, 12, 0, 0, 0, time.UTC)
+	now := start
+	previous := overviewNow
+	overviewNow = func() time.Time { return now }
+	t.Cleanup(func() { overviewNow = previous })
+
+	s := New(nil, &recordingWorkspace{})
+	if since, stale := s.OverviewStaleSince("bot-1"); !stale || !since.Equal(start) {
+		t.Fatalf("unseen bot = (%v, %v), want stale since %v", since, stale, start)
+	}
+	now = start.Add(time.Hour)
+	if since, _ := s.OverviewStaleSince("bot-1"); !since.Equal(start) {
+		t.Fatalf("stale since = %v on a later ask, want it kept at %v", since, start)
 	}
 }

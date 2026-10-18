@@ -117,6 +117,7 @@ type Service struct {
 	modelsService           *models.Service
 	queries                 dbstore.Queries
 	memoryRegistry          *memprovider.Registry
+	memoryOverviewActivity  sessionActivity
 	messageService          messagepkg.Service
 	settingsService         *settings.Service
 	accountService          *accounts.Service

@@ -84,10 +84,13 @@ func (r *graphRuntime) MemoryVersion(_ context.Context, botID string) string {
 
 // ---- helpers ----
 
-// OverviewStale reports whether MEMORY.md lags behind memory written during a
-// conversation.
-func (r *graphRuntime) OverviewStale(botID string) bool {
-	return r != nil && r.syncer != nil && r.syncer.overviewStale(botID)
+// OverviewStaleSince reports whether MEMORY.md lags behind memory written
+// during a conversation and, if so, since when.
+func (r *graphRuntime) OverviewStaleSince(botID string) (time.Time, bool) {
+	if r == nil || r.syncer == nil {
+		return time.Time{}, false
+	}
+	return r.syncer.overviewStaleSince(botID)
 }
 
 // RefreshOverview rewrites a MEMORY.md that lags behind memory written during

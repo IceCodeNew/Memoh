@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/felinics/memoh/internal/errs"
 	"github.com/felinics/memoh/internal/mcp"
@@ -160,14 +161,18 @@ func (p *BuiltinProvider) MemoryVersion(ctx context.Context, botID string) strin
 	return versioned.MemoryVersion(ctx, botID)
 }
 
-// OverviewStale reports whether MEMORY.md lags behind memory written during a
-// conversation. It implements adapters.OverviewRefresher.
-func (p *BuiltinProvider) OverviewStale(botID string) bool {
+// OverviewStaleSince reports whether MEMORY.md lags behind memory written
+// during a conversation and, if so, since when. It implements
+// adapters.OverviewRefresher.
+func (p *BuiltinProvider) OverviewStaleSince(botID string) (time.Time, bool) {
 	if p == nil || p.service == nil {
-		return false
+		return time.Time{}, false
 	}
 	refresher, ok := p.service.(adapters.OverviewRefresher)
-	return ok && refresher.OverviewStale(botID)
+	if !ok {
+		return time.Time{}, false
+	}
+	return refresher.OverviewStaleSince(botID)
 }
 
 // RefreshOverview rewrites a MEMORY.md that lags behind memory written during
