@@ -1,34 +1,16 @@
 package storefs
 
-import (
-	"context"
-	"strings"
-
-	"github.com/felinics/memoh/internal/config"
-)
-
-// Option configures a Service.
-type Option func(*Service)
-
-// WithOverviewRefresh selects when conversation writes rewrite MEMORY.md
-// (config.MemoryOverviewRefreshImmediate or MemoryOverviewRefreshCacheCold).
-// With cache_cold, a conversation write leaves MEMORY.md as it is until
-// RefreshOverview runs: MEMORY.md sits in the system prompt ahead of the whole
-// history, so rewriting it while a session is warm makes every following token
-// of that session's next request miss the prompt cache. Unrecognized values
-// keep the immediate behavior.
-func WithOverviewRefresh(mode string) Option {
-	return func(s *Service) {
-		s.deferConversationOverview = strings.TrimSpace(mode) == config.MemoryOverviewRefreshCacheCold
-	}
-}
+import "context"
 
 type conversationWriteKey struct{}
 
 // WithConversationWrite marks ctx as carrying a memory write made while a
 // conversation runs: post-turn extraction or a memory tool the agent called.
-// Writes outside a conversation (management API, ingest, rebuild) leave ctx
-// unmarked and always rewrite MEMORY.md.
+// Such a write leaves MEMORY.md as it is until RefreshOverview runs: MEMORY.md
+// sits in the system prompt ahead of the whole history, so rewriting it while
+// a session is warm makes every following token of that session's next
+// request miss the prompt cache. Writes outside a conversation (management
+// API, ingest, rebuild) leave ctx unmarked and rewrite MEMORY.md at once.
 func WithConversationWrite(ctx context.Context) context.Context {
 	return context.WithValue(ctx, conversationWriteKey{}, true)
 }
@@ -52,7 +34,7 @@ type overviewState struct {
 // deferOverview reports whether the MEMORY.md rewrite for this write is
 // deferred, recording that the overview now lags behind the memory files.
 func (s *Service) deferOverview(ctx context.Context, botID string) bool {
-	if !s.deferConversationOverview || !IsConversationWrite(ctx) {
+	if !IsConversationWrite(ctx) {
 		return false
 	}
 	s.overviewMu.Lock()
@@ -88,12 +70,8 @@ func (s *Service) markOverviewClean(botID string, generation uint64) {
 }
 
 // OverviewStale reports whether MEMORY.md may lag behind the bot's memory
-// files. It is always false when conversation writes rewrite MEMORY.md
-// immediately.
+// files.
 func (s *Service) OverviewStale(botID string) bool {
-	if !s.deferConversationOverview {
-		return false
-	}
 	s.overviewMu.Lock()
 	defer s.overviewMu.Unlock()
 	state, known := s.overview[botID]

@@ -146,11 +146,11 @@ func (p *MemoryProvider) Tools(ctx context.Context, session SessionContext) ([]t
 
 // writeTools are the agent-authored memory writes. Their context is marked as
 // a conversation write, so MEMORY.md may lag behind them until the session's
-// prompt cache expires (agent.memory_overview_refresh). They live here rather than
-// behind the provider's own MCP descriptors because this is the layer that
-// holds the session identity and the hook gate; a write issued from inside the
-// memory adapter can reach neither. Both the native loop and the external
-// runtimes reach these through this provider, so one definition covers both.
+// prompt cache expires. They live here rather than behind the provider's own
+// MCP descriptors because this is the layer that holds the session identity
+// and the hook gate; a write issued from inside the memory adapter can reach
+// neither. Both the native loop and the external runtimes reach these through
+// this provider, so one definition covers both.
 func (p *MemoryProvider) writeTools(session SessionContext, provider memprovider.Provider) []toolexec.Tool {
 	return []toolexec.Tool{
 		{

@@ -33,10 +33,9 @@ const (
 // tools, which read the memory store rather than MEMORY.md.
 //
 // It runs before the system files are read and is a no-op unless the bot's
-// memory provider deferred an overview rewrite (agent.memory_overview_refresh
-// = "cache_cold"). A subagent session never refreshes: it is new by
-// construction while its parent session is warm, and the rewrite would break
-// the parent's next request instead.
+// memory provider deferred an overview rewrite. A subagent session never
+// refreshes: it is new by construction while its parent session is warm, and
+// the rewrite would break the parent's next request instead.
 func (s *Service) refreshMemoryOverviewIfCold(ctx context.Context, botID, sessionID, sessionType, promptCacheTTL string) {
 	botID = strings.TrimSpace(botID)
 	if s == nil || botID == "" || strings.EqualFold(strings.TrimSpace(sessionType), sessionmode.Subagent) {

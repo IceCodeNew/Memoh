@@ -383,13 +383,6 @@ type AgentConfig struct {
 	// Admission recovery can compact in shadow or active mode when enabled;
 	// off disables recovery. Pressure includes raw history and active summaries.
 	SyncCompaction string `toml:"sync_compaction"`
-	// MemoryOverviewRefresh selects when MEMORY.md is rewritten after memory
-	// written during a conversation: "immediate" (default) rewrites it on
-	// every write; "cache_cold" leaves it unchanged while the session's prompt
-	// cache is warm and rewrites it on the session's first turn after the
-	// cache expired (or in a new session). Writes from the management API,
-	// ingest and rebuild always rewrite it.
-	MemoryOverviewRefresh string `toml:"memory_overview_refresh"`
 }
 
 // EffectiveContextAbsoluteMaxTokens resolves the server-wide context
@@ -426,26 +419,6 @@ func (c AgentConfig) EffectiveSyncCompactionMode() (mode string, recognized bool
 		return value, true
 	default:
 		return SyncCompactionModeShadow, false
-	}
-}
-
-const (
-	MemoryOverviewRefreshImmediate = "immediate"
-	MemoryOverviewRefreshCacheCold = "cache_cold"
-)
-
-// EffectiveMemoryOverviewRefresh normalizes the MEMORY.md refresh mode. Empty
-// defaults to immediate. recognized is false when a non-empty value does not
-// match immediate/cache_cold.
-func (c AgentConfig) EffectiveMemoryOverviewRefresh() (mode string, recognized bool) {
-	value := strings.TrimSpace(strings.ToLower(c.MemoryOverviewRefresh))
-	switch value {
-	case "":
-		return MemoryOverviewRefreshImmediate, true
-	case MemoryOverviewRefreshImmediate, MemoryOverviewRefreshCacheCold:
-		return value, true
-	default:
-		return MemoryOverviewRefreshImmediate, false
 	}
 }
 

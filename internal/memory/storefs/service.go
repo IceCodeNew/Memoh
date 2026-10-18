@@ -45,11 +45,10 @@ type Service struct {
 	provider bridge.Provider
 	logger   *slog.Logger
 
-	// deferConversationOverview leaves MEMORY.md unchanged after a
-	// conversation write until RefreshOverview runs (OverviewRefreshCacheCold).
-	deferConversationOverview bool
-	overviewMu                sync.Mutex
-	overview                  map[string]overviewState
+	// overview tracks, per bot, whether MEMORY.md has caught up with the
+	// conversation writes it deferred (see RefreshOverview).
+	overviewMu sync.Mutex
+	overview   map[string]overviewState
 }
 
 type MemoryItem struct {
@@ -108,21 +107,11 @@ type conceptPersistWrite struct {
 	OldFilePath string
 }
 
-func New(log *slog.Logger, provider bridge.Provider, opts ...Option) *Service {
+func New(log *slog.Logger, provider bridge.Provider) *Service {
 	if log == nil {
 		log = slog.Default()
 	}
-	s := &Service{
-		provider: provider,
-		logger:   log.With(slog.String("component", "storefs")),
-		overview: make(map[string]overviewState),
-	}
-	for _, opt := range opts {
-		if opt != nil {
-			opt(s)
-		}
-	}
-	return s
+	return &Service{provider: provider, logger: log.With(slog.String("component", "storefs"))}
 }
 
 func (s *Service) client(ctx context.Context, botID string) (*bridge.Client, error) {
@@ -538,7 +527,7 @@ func (s *Service) CountMemoryFiles(ctx context.Context, botID string) (int, erro
 }
 
 // SyncOverview rewrites MEMORY.md from the memory files, unless ctx carries a
-// conversation write the Service defers (see WithOverviewRefresh).
+// conversation write, whose rewrite waits for RefreshOverview.
 func (s *Service) SyncOverview(ctx context.Context, botID string) error {
 	if s.provider == nil {
 		return ErrNotConfigured

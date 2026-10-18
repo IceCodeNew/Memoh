@@ -683,29 +683,6 @@ func TestAgentConfigEffectiveSyncCompactionMode(t *testing.T) {
 	}
 }
 
-func TestAgentConfigEffectiveMemoryOverviewRefresh(t *testing.T) {
-	cases := []struct {
-		name           string
-		value          string
-		wantMode       string
-		wantRecognized bool
-	}{
-		{"empty defaults to immediate", "", MemoryOverviewRefreshImmediate, true},
-		{"immediate", "immediate", MemoryOverviewRefreshImmediate, true},
-		{"cache_cold", "cache_cold", MemoryOverviewRefreshCacheCold, true},
-		{"case insensitive", " CACHE_COLD ", MemoryOverviewRefreshCacheCold, true},
-		{"unknown normalizes to immediate", "lazy", MemoryOverviewRefreshImmediate, false},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			gotMode, gotRecognized := (AgentConfig{MemoryOverviewRefresh: tc.value}).EffectiveMemoryOverviewRefresh()
-			if gotMode != tc.wantMode || gotRecognized != tc.wantRecognized {
-				t.Fatalf("EffectiveMemoryOverviewRefresh() = (%q, %v), want (%q, %v)", gotMode, gotRecognized, tc.wantMode, tc.wantRecognized)
-			}
-		})
-	}
-}
-
 func TestAgentConfigEffectiveContextAbsoluteMaxTokens(t *testing.T) {
 	if got := (AgentConfig{}).EffectiveContextAbsoluteMaxTokens(); got != contextfrag.DefaultAbsoluteCapTokens {
 		t.Fatalf("unset cap = %d, want default %d", got, contextfrag.DefaultAbsoluteCapTokens)

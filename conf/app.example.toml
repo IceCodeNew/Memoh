@@ -92,17 +92,6 @@ system_files_max_bytes = 32768
 # Budget admission recovery can compact in shadow or active mode when compaction
 # is enabled for the bot; off disables this recovery.
 # sync_compaction = "shadow"
-# When MEMORY.md is rewritten after memory written during a conversation
-# (post-turn extraction or the memory tools): immediate | cache_cold.
-# immediate (default) rewrites it on every write. MEMORY.md sits in the system
-# prompt ahead of the whole history, so a rewrite makes the session's next
-# request miss the prompt cache from that point on. cache_cold keeps MEMORY.md
-# unchanged while the session's prompt cache is warm and rewrites it on the
-# session's first turn, or its first turn after the provider's
-# prompt_cache_ttl (default 5m) elapsed since its last run. Memory written in
-# between still reaches the model through recall and the memory tools.
-# Management API writes, ingest and rebuild always rewrite it.
-# memory_overview_refresh = "immediate"
 
 [session_runtime]
 # Stores live run snapshots for WebSocket attach/reconnect. memory is best for

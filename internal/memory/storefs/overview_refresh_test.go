@@ -5,7 +5,6 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/felinics/memoh/internal/config"
 	"github.com/felinics/memoh/internal/workspace/bridge"
 )
 
@@ -24,11 +23,11 @@ func (w *recordingWorkspace) MCPClient(ctx context.Context, _ string) (*bridge.C
 	return nil, errWorkspaceUnavailable
 }
 
-func TestConversationWriteDefersOverviewInCacheColdMode(t *testing.T) {
+func TestConversationWriteDefersOverview(t *testing.T) {
 	t.Parallel()
 
 	workspace := &recordingWorkspace{}
-	s := New(nil, workspace, WithOverviewRefresh(config.MemoryOverviewRefreshCacheCold))
+	s := New(nil, workspace)
 
 	if err := s.SyncOverview(WithConversationWrite(context.Background()), "bot-1"); err != nil {
 		t.Fatalf("SyncOverview: %v", err)
@@ -41,25 +40,11 @@ func TestConversationWriteDefersOverviewInCacheColdMode(t *testing.T) {
 	}
 }
 
-func TestImmediateModeRewritesOverviewForConversationWrite(t *testing.T) {
+func TestUnmarkedWriteRewritesOverviewImmediately(t *testing.T) {
 	t.Parallel()
 
 	workspace := &recordingWorkspace{}
 	s := New(nil, workspace)
-
-	if err := s.SyncOverview(WithConversationWrite(context.Background()), "bot-1"); !errors.Is(err, errWorkspaceUnavailable) {
-		t.Fatalf("SyncOverview error = %v, want the rewrite attempted", err)
-	}
-	if s.OverviewStale("bot-1") {
-		t.Fatal("immediate mode never reports a stale overview")
-	}
-}
-
-func TestUnmarkedWriteRewritesOverviewInCacheColdMode(t *testing.T) {
-	t.Parallel()
-
-	workspace := &recordingWorkspace{}
-	s := New(nil, workspace, WithOverviewRefresh(config.MemoryOverviewRefreshCacheCold))
 
 	if err := s.SyncOverview(context.Background(), "bot-1"); !errors.Is(err, errWorkspaceUnavailable) {
 		t.Fatalf("SyncOverview error = %v, want a management write rewritten immediately", err)
@@ -70,7 +55,7 @@ func TestRefreshOverviewRewritesStaleOverviewWithoutConversationMark(t *testing.
 	t.Parallel()
 
 	workspace := &recordingWorkspace{}
-	s := New(nil, workspace, WithOverviewRefresh(config.MemoryOverviewRefreshCacheCold))
+	s := New(nil, workspace)
 	if !s.OverviewStale("bot-1") {
 		t.Fatal("a bot this process never wrote must count as stale")
 	}
@@ -91,7 +76,7 @@ func TestOverviewCleanIgnoresRefreshSupersededByNewerWrite(t *testing.T) {
 	t.Parallel()
 
 	workspace := &recordingWorkspace{}
-	s := New(nil, workspace, WithOverviewRefresh(config.MemoryOverviewRefreshCacheCold))
+	s := New(nil, workspace)
 	conversation := WithConversationWrite(context.Background())
 
 	generation := s.overviewGeneration("bot-1")
