@@ -184,12 +184,11 @@ func (d *Driver) PurgeBotAgentAuth(ctx context.Context, botID, botAgentID string
 		}
 	}
 	// A sign-in under way would set a credential again after the Agent let go
-	// of its own. It ends here, under the gate its store runs in.
-	releaseSignIn, err := d.lockSignIn(ctx, botID, botAgentID)
-	if err != nil {
-		return err
-	}
-	defer releaseSignIn()
+	// of its own, so it ends here. Not under the sign-in gate: Agent deletion
+	// purges inside its transaction, holding the Agent row a storing poll waits
+	// for while it holds the gate. A poll already storing can still commit
+	// after a disconnect; a deleted Agent refuses it (deleted_at). Closing that
+	// window needs the store to compare the binding in the database.
 	d.cancelAgentSignIns(ctx, botID, botAgentID)
 	if credential, err := d.credentials.GetForBotAgent(ctx, botID, botAgentID); err == nil {
 		agent.purged = credential.ID

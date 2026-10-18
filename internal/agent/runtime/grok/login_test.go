@@ -197,3 +197,35 @@ func TestDisconnectEndsSignInsUnderWay(t *testing.T) {
 		t.Fatalf("sign-ins outlived the disconnect: canceled = %d, tracked = %d", canceled, len(d.signIns))
 	}
 }
+
+func TestPurgeDoesNotWaitForAStoringPoll(t *testing.T) {
+	// Agent deletion purges inside its transaction, holding the Agent row; a
+	// storing poll holds the sign-in gate and waits for that row. A purge that
+	// waited for the gate would deadlock with it.
+	botID, botAgentID := uuid.NewString(), uuid.NewString()
+	canceled := 0
+	pending := &signIn{id: "pending", botID: botID, botAgentID: botAgentID, done: make(chan struct{}), cancel: func() { canceled++ }}
+	d := &Driver{
+		running:     map[string]*agentProcesses{},
+		signIns:     map[string]*signIn{pending.id: pending},
+		credentials: agentcredential.NewService(&signInQueries{}, config.Config{}),
+		bridges:     unreachableBridges{},
+		servers: servertable.New(func(context.Context, string) (servertable.Resource, error) {
+			return nil, errors.New("no process starts here")
+		}, slog.Default()),
+	}
+	storing, err := d.lockSignIn(t.Context(), botID, botAgentID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer storing()
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+	err = d.PurgeBotAgentAuth(ctx, botID, botAgentID)
+	if errors.Is(err, context.DeadlineExceeded) {
+		t.Fatal("purge waited for the sign-in gate a storing poll holds")
+	}
+	if canceled != 1 || len(d.signIns) != 0 {
+		t.Fatalf("purge left sign-ins: canceled = %d, tracked = %d", canceled, len(d.signIns))
+	}
+}

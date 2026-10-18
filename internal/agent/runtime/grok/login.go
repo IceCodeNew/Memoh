@@ -338,11 +338,13 @@ func (d *Driver) lockSignIn(ctx context.Context, botID, botAgentID string) (func
 	}
 }
 
-// cancelAgentSignIns ends every sign-in of the Agent, approved or not, and is
-// called while holding its sign-in gate. A sign-in may set the Agent's
-// credential only while nothing has replaced it: one stored after a newer
-// sign-in or a disconnect would bring back a login the user moved away from,
-// and revoke the credential it displaced. Other Agents are unaffected.
+// cancelAgentSignIns ends every sign-in of the Agent, approved or not. A new
+// sign-in calls it under the Agent's sign-in gate; a purge calls it without
+// (see PurgeBotAgentAuth), and endSignIn is safe to repeat. A sign-in may set
+// the Agent's credential only while nothing has replaced it: one stored after
+// a newer sign-in or a disconnect would bring back a login the user moved
+// away from, and revoke the credential it displaced. Other Agents are
+// unaffected.
 func (d *Driver) cancelAgentSignIns(ctx context.Context, botID, botAgentID string) {
 	d.signInsMu.Lock()
 	var previous []*signIn
