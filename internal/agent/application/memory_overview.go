@@ -69,7 +69,9 @@ func (s *Service) refreshMemoryOverviewIfCold(ctx context.Context, botID, sessio
 	if !stale {
 		return
 	}
-	lag := now.Sub(since)
+	// A bot the memory store had not seen starts lagging when first asked,
+	// which is a moment after now.
+	lag := max(now.Sub(since), 0)
 	reason := memoryOverviewRefreshMaxLag
 	if lag < memoryOverviewMaxLag {
 		ttl := promptCacheTTLDuration(promptCacheTTL)
