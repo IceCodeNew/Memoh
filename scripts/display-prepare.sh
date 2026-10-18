@@ -186,67 +186,91 @@ display_ready() {
 }
 
 prepare_lock=/tmp/memoh-display-prepare.lock
+prepare_guard=/tmp/memoh-display-prepare.guard
 prepare_owner=0
+# Serialize directory/PID changes, including recovery. Keep this inode: removing
+# a flock file would allow different callers to lock different files.
+exec 9>"$prepare_guard"
 
 prepare_process_alive() {
   prepare_pid="$1"
-  [ -n "$prepare_pid" ] || return 1
+  case "$prepare_pid" in ''|*[!0-9]*|0) return 1 ;; esac
   kill -0 "$prepare_pid" 2>/dev/null || return 1
   [ -r "/proc/$prepare_pid/cmdline" ] || return 1
-  tr '\000' ' ' <"/proc/$prepare_pid/cmdline" 2>/dev/null | grep -Fq 'display-prepare.sh'
+  tr '\000' '\n' <"/proc/$prepare_pid/cmdline" 2>/dev/null | grep -Eq '^([^[:space:]]*/)?display-prepare\.sh$'
+}
+
+legacy_prepare_running() {
+  # Old scripts did not write a PID. Only reclaim their empty directory when
+  # no old preparer is alive. New callers identify themselves by fd 9, so two
+  # waiters cannot mistake one another for a legacy owner and wait forever.
+  for prepare_proc in /proc/[0-9]*; do
+    prepare_pid="${prepare_proc##*/}"
+    [ "$prepare_pid" != "$$" ] || continue
+    [ "$(readlink "$prepare_proc/fd/9" 2>/dev/null || true)" != "$prepare_guard" ] || continue
+    if prepare_process_alive "$prepare_pid"; then return 0; fi
+  done
+  return 1
 }
 
 release_prepare_lock() {
-  rm -f "$prepare_lock/pid"
-  rmdir "$prepare_lock" 2>/dev/null || true
+  flock 9
+  if [ "$(cat "$prepare_lock/pid" 2>/dev/null || true)" = "$$" ]; then
+    rm -f "$prepare_lock/pid"
+    rmdir "$prepare_lock" 2>/dev/null || true
+  fi
+  flock -u 9
 }
 
-takeover_stale_prepare_lock() {
-  [ -f "$prepare_lock/pid" ] || return 1
-  prepare_pid="$(cat "$prepare_lock/pid" 2>/dev/null || true)"
-  [ -n "$prepare_pid" ] || return 1
-  prepare_process_alive "$prepare_pid" && return 1
-  rm -f "$prepare_lock/pid"
-  rmdir "$prepare_lock" 2>/dev/null || return 1
-  mkdir "$prepare_lock" 2>/dev/null
+try_prepare_lock() {
+  flock -n 9 || return 1
+  if ! mkdir "$prepare_lock" 2>/dev/null; then
+    if [ -f "$prepare_lock/pid" ]; then
+      prepare_pid="$(cat "$prepare_lock/pid" 2>/dev/null || true)"
+      if prepare_process_alive "$prepare_pid"; then
+        flock -u 9
+        return 1
+      fi
+    elif legacy_prepare_running; then
+      flock -u 9
+      return 1
+    fi
+    # Never remove unknown contents or a newly replaced directory recursively.
+    rm -f "$prepare_lock/pid"
+    if ! rmdir "$prepare_lock" 2>/dev/null || ! mkdir "$prepare_lock" 2>/dev/null; then
+      flock -u 9
+      return 1
+    fi
+  fi
+  printf '%s\n' "$$" >"$prepare_lock/pid"
+  prepare_owner=1
+  trap release_prepare_lock EXIT
+  trap 'exit 130' INT
+  trap 'exit 143' TERM
+  # Background desktop children must not retain the guard while they run.
+  flock -u 9
 }
 
-if mkdir "$prepare_lock" 2>/dev/null; then
-  prepare_owner=1
-elif takeover_stale_prepare_lock; then
-  prepare_owner=1
-fi
-
-if [ "$prepare_owner" -ne 1 ]; then
+if ! try_prepare_lock; then
   progress 12 checking "Waiting for another desktop preparation"
   wait_i=0
-  while [ -d "$prepare_lock" ] && [ "$wait_i" -lt 180 ]; do
+  while [ "$wait_i" -lt 180 ]; do
     if display_ready; then
       emit_complete
       exit 0
     fi
-    if takeover_stale_prepare_lock; then
-      prepare_owner=1
-      break
-    fi
+    if try_prepare_lock; then break; fi
     sleep 1
     wait_i=$((wait_i + 1))
   done
-  if [ "$prepare_owner" -ne 1 ] && display_ready; then
-    emit_complete
-    exit 0
-  fi
   if [ "$prepare_owner" -ne 1 ]; then
+    if display_ready; then
+      emit_complete
+      exit 0
+    fi
     echo "Another desktop preparation is still running." >&2
     exit 1
   fi
-fi
-
-if [ "$prepare_owner" -eq 1 ]; then
-  # A forced process-group kill cannot run the EXIT trap. Record the owner so
-  # a later preparation can distinguish that stale lock from an active one.
-  trap release_prepare_lock EXIT INT TERM
-  printf '%s\n' "$$" >"$prepare_lock/pid"
 fi
 
 progress 10 checking "Checking display runtime"

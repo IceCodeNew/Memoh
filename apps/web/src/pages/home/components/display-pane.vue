@@ -810,6 +810,7 @@ function onPointerMove(event: MouseEvent) {
 }
 
 function onPointerUp(event: MouseEvent) {
+  if (event.button === 0) clipboard.preparePointerCopy(true)
   pointerMask &= ~buttonBit(event.button)
   sendPointer(event)
 }
@@ -1012,11 +1013,19 @@ watch([connection.stream, videoRef, viewing], () => {
   bindStream()
 }, { immediate: true, flush: 'post' })
 
+function cancelCompositionOnPointerDown(event: PointerEvent) {
+  // Cancel the pending native composition commit when leaving its editor.
+  // Candidate-window selection has no DOM pointer event and still commits.
+  if (event.target !== keyboardRef.value) cancelTextInput()
+}
+
 onMounted(() => {
+  window.addEventListener('pointerdown', cancelCompositionOnPointerDown, true)
   window.addEventListener('blur', releaseKeyboard)
 })
 
 onBeforeUnmount(() => {
+  window.removeEventListener('pointerdown', cancelCompositionOnPointerDown, true)
   window.removeEventListener('blur', releaseKeyboard)
   releaseKeyboard()
   if (fullScreenIconTimer) {
