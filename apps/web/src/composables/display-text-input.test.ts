@@ -37,6 +37,17 @@ describe('local IME commit boundary', () => {
     expect(text.mock.calls).toEqual([['世界']])
   })
 
+  it('accepts input without a keydown once the canceled preedit settles', () => {
+    const { input, text } = setup()
+    input.start()
+    input.cancel()
+    input.input('shijie', false) // late input of the abandoned preedit
+    vi.runAllTimers()
+    input.input('🙂', false) // emoji picker or dictation sends no keydown
+    vi.runAllTimers()
+    expect(text.mock.calls).toEqual([['🙂']])
+  })
+
   it.each(['input-first', 'end-first'])('commits a confirmed candidate once: %s', (order) => {
     const { input, text } = setup()
     input.start()

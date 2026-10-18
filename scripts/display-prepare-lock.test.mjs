@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { spawn } from 'node:child_process'
-import { mkdtemp, readFile, writeFile, mkdir, rm, access } from 'node:fs/promises'
+import { mkdtemp, readFile, readlink, writeFile, mkdir, rm, access } from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import { test } from 'node:test'
@@ -27,8 +27,8 @@ async function fixture(t) {
     + '\nprintf "start:%s\\n" "$$" >>"$EVENTS"\nsleep "${HOLD_SECONDS:-0}"\nprintf "end:%s\\n" "$$" >>"$EVENTS"\n')
   const events = path.join(dir, 'events')
   await writeFile(events, '')
-  function run(file = script, hold = '0', wrapped = false) {
-    const child = spawn('/bin/sh', wrapped ? ['-c', `/bin/sh ${file}`] : [file], {
+  function run(hold = '0') {
+    const child = spawn('/bin/sh', [script], {
       detached: true, env: { ...process.env, EVENTS: events, HOLD_SECONDS: hold }, stdio: ['ignore', 'ignore', 'pipe'],
     })
     children.push(child)
@@ -47,7 +47,7 @@ async function fixture(t) {
       await delay(20)
     }
   }
-  return { dir, lock, script, events, run, waitFor }
+  return { lock, events, run, waitFor }
 }
 
 const linux = { skip: process.platform !== 'linux', timeout: 15000 }
@@ -61,27 +61,11 @@ for (const pid of [null, '99999999']) {
   })
 }
 
-test('does not take an empty lock from a live legacy preparer', linux, async t => {
-  const f = await fixture(t)
-  const legacyDir = path.join(f.dir, 'legacy')
-  await mkdir(legacyDir)
-  const legacy = path.join(legacyDir, 'display-prepare.sh')
-  await writeFile(legacy, `#!/bin/sh\nmkdir '${f.lock}'\nsleep 30\n`)
-  const owner = f.run(legacy)
-  await f.waitFor(async () => access(f.lock).then(() => true, () => false))
-  const waiter = f.run()
-  await delay(200)
-  assert.equal(await readFile(f.events, 'utf8'), '')
-  process.kill(-owner.child.pid, 'SIGKILL')
-  await owner.done
-  assert.equal((await waiter.done).code, 0)
-})
-
 test('concurrent recovery has one owner and releases before the next enters', linux, async t => {
   const f = await fixture(t)
   await mkdir(f.lock)
-  const a = f.run(f.script, '0.2')
-  const b = f.run(f.script, '0.2')
+  const a = f.run('0.2')
+  const b = f.run('0.2')
   assert.equal((await a.done).code, 0)
   assert.equal((await b.done).code, 0)
   const events = (await readFile(f.events, 'utf8')).trim().split('\n')
@@ -92,8 +76,10 @@ test('concurrent recovery has one owner and releases before the next enters', li
 
 test('recovers a killed new owner and leaves unknown lock contents intact', linux, async t => {
   const f = await fixture(t)
-  const owner = f.run(f.script, '30')
+  const owner = f.run('30')
   await f.waitFor(async () => (await readFile(f.events, 'utf8')).includes('start:'))
+  // Processes the owner starts from here on cannot inherit the guard.
+  await assert.rejects(readlink(`/proc/${owner.child.pid}/fd/9`))
   process.kill(-owner.child.pid, 'SIGKILL')
   await owner.done
   assert.equal((await f.run().done).code, 0)
@@ -104,11 +90,4 @@ test('recovers a killed new owner and leaves unknown lock contents intact', linu
   assert.equal(await readFile(path.join(f.lock, 'unknown'), 'utf8'), 'keep')
   process.kill(-waiter.child.pid, 'SIGKILL')
   await waiter.done
-})
-
-test('ignores shell command arguments that mention the script path', linux, async t => {
-  const f = await fixture(t)
-  await mkdir(f.lock)
-  assert.equal((await f.run(f.script, '0', true).done).code, 0)
-  await assert.rejects(access(f.lock))
 })

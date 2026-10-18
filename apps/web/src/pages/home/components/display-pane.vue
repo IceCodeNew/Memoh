@@ -1013,19 +1013,15 @@ watch([connection.stream, videoRef, viewing], () => {
   bindStream()
 }, { immediate: true, flush: 'post' })
 
-function cancelCompositionOnPointerDown(event: PointerEvent) {
-  // Cancel the pending native composition commit when leaving its editor.
-  // Candidate-window selection has no DOM pointer event and still commits.
-  if (event.target !== keyboardRef.value) cancelTextInput()
-}
-
 onMounted(() => {
-  window.addEventListener('pointerdown', cancelCompositionOnPointerDown, true)
+  // A pointer press abandons pending native composition text. Choosing in the
+  // IME candidate window has no DOM pointer event and still commits.
+  window.addEventListener('pointerdown', cancelTextInput, true)
   window.addEventListener('blur', releaseKeyboard)
 })
 
 onBeforeUnmount(() => {
-  window.removeEventListener('pointerdown', cancelCompositionOnPointerDown, true)
+  window.removeEventListener('pointerdown', cancelTextInput, true)
   window.removeEventListener('blur', releaseKeyboard)
   releaseKeyboard()
   if (fullScreenIconTimer) {

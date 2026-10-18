@@ -194,48 +194,32 @@ exec 9>"$prepare_guard"
 
 prepare_process_alive() {
   prepare_pid="$1"
-  case "$prepare_pid" in ''|*[!0-9]*|0) return 1 ;; esac
+  [ -n "$prepare_pid" ] || return 1
   kill -0 "$prepare_pid" 2>/dev/null || return 1
   [ -r "/proc/$prepare_pid/cmdline" ] || return 1
-  tr '\000' '\n' <"/proc/$prepare_pid/cmdline" 2>/dev/null | grep -Eq '^([^[:space:]]*/)?display-prepare\.sh$'
-}
-
-legacy_prepare_running() {
-  # Old scripts did not write a PID. Only reclaim their empty directory when
-  # no old preparer is alive. New callers identify themselves by fd 9, so two
-  # waiters cannot mistake one another for a legacy owner and wait forever.
-  for prepare_proc in /proc/[0-9]*; do
-    prepare_pid="${prepare_proc##*/}"
-    [ "$prepare_pid" != "$$" ] || continue
-    [ "$(readlink "$prepare_proc/fd/9" 2>/dev/null || true)" != "$prepare_guard" ] || continue
-    if prepare_process_alive "$prepare_pid"; then return 0; fi
-  done
-  return 1
+  tr '\000' ' ' <"/proc/$prepare_pid/cmdline" 2>/dev/null | grep -Fq 'display-prepare.sh'
 }
 
 release_prepare_lock() {
+  # The owner closed fd 9 before starting the desktop; exit releases this one.
+  exec 9>"$prepare_guard"
   flock 9
   if [ "$(cat "$prepare_lock/pid" 2>/dev/null || true)" = "$$" ]; then
     rm -f "$prepare_lock/pid"
     rmdir "$prepare_lock" 2>/dev/null || true
   fi
-  flock -u 9
 }
 
 try_prepare_lock() {
   flock -n 9 || return 1
   if ! mkdir "$prepare_lock" 2>/dev/null; then
-    if [ -f "$prepare_lock/pid" ]; then
-      prepare_pid="$(cat "$prepare_lock/pid" 2>/dev/null || true)"
-      if prepare_process_alive "$prepare_pid"; then
-        flock -u 9
-        return 1
-      fi
-    elif legacy_prepare_running; then
+    # Owners create the directory and write its PID under the guard, so a
+    # directory without a live owner here is stale, even one without a PID.
+    if prepare_process_alive "$(cat "$prepare_lock/pid" 2>/dev/null || true)"; then
       flock -u 9
       return 1
     fi
-    # Never remove unknown contents or a newly replaced directory recursively.
+    # Never remove unknown contents recursively.
     rm -f "$prepare_lock/pid"
     if ! rmdir "$prepare_lock" 2>/dev/null || ! mkdir "$prepare_lock" 2>/dev/null; then
       flock -u 9
@@ -247,8 +231,9 @@ try_prepare_lock() {
   trap release_prepare_lock EXIT
   trap 'exit 130' INT
   trap 'exit 143' TERM
-  # Background desktop children must not retain the guard while they run.
-  flock -u 9
+  # Desktop processes started below must not inherit the guard: they would
+  # share its lock, which a kill during release could then leave held.
+  exec 9>&-
 }
 
 if ! try_prepare_lock; then

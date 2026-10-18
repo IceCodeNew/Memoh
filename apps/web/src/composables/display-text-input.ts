@@ -14,28 +14,32 @@ export function createDisplayTextInput(options: {
 }) {
   let composing = false
   let lastCommit: string | null = null
+  // Abandoned preedit can still deliver input from its native event batch.
   let canceled = false
   let commits: string[] = []
-  let commitTimer: ReturnType<typeof setTimeout> | undefined
+  let settleTimer: ReturnType<typeof setTimeout> | undefined
 
-  function flushCommits() {
-    clearTimeout(commitTimer)
-    commitTimer = undefined
+  // Once the native event batch settles, deliver its commits and accept input
+  // again, including text without a keydown (emoji picker, dictation).
+  function settle() {
+    clearTimeout(settleTimer)
+    settleTimer = undefined
+    canceled = false
     const pending = commits
     commits = []
-    if (!canceled && options.active()) {
+    if (options.active()) {
       for (const text of pending) options.text(text)
     }
   }
 
   function queueCommit(value: string) {
     commits.push(value)
-    if (commitTimer !== undefined) return
+    if (settleTimer !== undefined) return
     // macOS can deliver compositionend in a separate task before the mouse
     // event that caused it (observed ~14 ms before pointerdown). One task is
     // not a cancellation boundary. Allow that native event batch to settle;
     // an ordinary next key flushes first so editing never overtakes the text.
-    commitTimer = setTimeout(flushCommits, COMPOSITION_SETTLE_MS)
+    settleTimer = setTimeout(settle, COMPOSITION_SETTLE_MS)
   }
 
   const localKeys = new Set<string>()
@@ -46,9 +50,8 @@ export function createDisplayTextInput(options: {
     const local = composing || event.isComposing || event.keyCode === IME_PROCESS_KEY_CODE || ['Process', 'Dead'].includes(event.key)
     // A new ordinary key ends the window for deduplicating the last commit.
     if (!local) {
-      flushCommits()
+      settle()
       lastCommit = null
-      canceled = false
     }
     if (local) localKeys.add(event.code || event.key)
     return local
@@ -62,7 +65,6 @@ export function createDisplayTextInput(options: {
   }
 
   function start() {
-    canceled = false
     composing = options.active()
     lastCommit = null
     // Composition takes ownership of subsequent keys; do not leave keys
@@ -71,7 +73,7 @@ export function createDisplayTextInput(options: {
   }
 
   function end(value: string) {
-    const commit = composing && !canceled && options.active()
+    const commit = composing && options.active()
     composing = false
     // Composition-owned keydowns must not affect a later ordinary key if the
     // browser does not deliver their keyup after the IME closes.
@@ -95,11 +97,11 @@ export function createDisplayTextInput(options: {
   function cancel() {
     // Blur, hiding the pane, or replacing the connection abandons preedit.
     // A later compositionend must not send it to a different remote focus.
-    canceled ||= composing || commits.length > 0
+    if (composing || commits.length > 0) canceled = true
     composing = false
     commits = []
-    clearTimeout(commitTimer)
-    commitTimer = undefined
+    clearTimeout(settleTimer)
+    settleTimer = canceled ? setTimeout(settle, COMPOSITION_SETTLE_MS) : undefined
     lastCommit = null
     localKeys.clear()
   }

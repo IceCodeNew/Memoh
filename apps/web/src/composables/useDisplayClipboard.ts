@@ -28,7 +28,7 @@ export function useDisplayClipboard(connection: ClipboardConnection, isActive: (
       permission.addEventListener('change', update)
       permissionCleanup = () => permission.removeEventListener('change', update)
     } catch {
-      pointerCopyEnabled = true
+      // Safari and Firefox reject this descriptor; keep the gesture path.
     }
   }
   void detectGestureWrite()
