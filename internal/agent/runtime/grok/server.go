@@ -362,7 +362,6 @@ func (s *server) toolSession(th *thread) mcp.ToolSessionContext {
 	session.CanRequestUserInput = in.CanRequestUserInput
 	session.RuntimeActive = true
 	session.ContextBudgetMaxTokens = in.ContextBudgetMaxTokens
-	session.ContextToolExchangePolicy = in.ContextToolExchangePolicy
 	if fence, ok := runtimefence.FromContext(turn.ctx); ok {
 		session.RuntimeFence = fence
 	}
