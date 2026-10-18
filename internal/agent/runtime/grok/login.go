@@ -71,6 +71,11 @@ type signIn struct {
 
 // StartDeviceLogin implements external.DeviceLoginProvider.
 func (d *Driver) StartDeviceLogin(ctx context.Context, botID, botAgentID string) (external.DeviceLoginStart, error) {
+	release, err := d.lockSignIn(ctx, botID, botAgentID)
+	if err != nil {
+		return external.DeviceLoginStart{}, err
+	}
+	defer release()
 	cfg, err := d.agentConfig(ctx, botID, botAgentID)
 	if err != nil {
 		return external.DeviceLoginStart{}, external.Unavailable(err)
@@ -78,6 +83,7 @@ func (d *Driver) StartDeviceLogin(ctx context.Context, botID, botAgentID string)
 	if cfg.Auth != grokcfg.AuthGrokAccount {
 		return external.DeviceLoginStart{}, external.CredentialError(agentcredential.ErrIncompatible)
 	}
+	d.cancelAgentSignIns(ctx, botID, botAgentID)
 	s, err := d.launchSignIn(ctx, botID, botAgentID)
 	if err != nil {
 		return external.DeviceLoginStart{}, serverFailure(err)
@@ -90,7 +96,7 @@ func (d *Driver) StartDeviceLogin(ctx context.Context, botID, botAgentID string)
 	d.signInsMu.Lock()
 	d.signIns[s.id] = s
 	s.expiry = time.AfterFunc(signInTTL, func() { //nolint:contextcheck // the expiry has no request to answer.
-		d.endSignIn(context.Background(), s)
+		_ = d.CancelDeviceLogin(context.Background(), botID, botAgentID, s.id)
 	})
 	d.signInsMu.Unlock()
 	return start, nil
@@ -129,6 +135,11 @@ func (d *Driver) launchSignIn(ctx context.Context, botID, botAgentID string) (*s
 
 // PollDeviceLogin implements external.DeviceLoginProvider.
 func (d *Driver) PollDeviceLogin(ctx context.Context, ownerUserID, botID, botAgentID, loginID string) (external.DeviceLoginStatus, error) {
+	release, err := d.lockSignIn(ctx, botID, botAgentID)
+	if err != nil {
+		return external.DeviceLoginStatus{}, err
+	}
+	defer release()
 	s := d.signIn(loginID, botAgentID)
 	if s == nil {
 		return external.DeviceLoginStatus{Status: "unknown"}, nil
@@ -184,7 +195,12 @@ func (d *Driver) storeSignIn(ctx context.Context, ownerUserID string, s *signIn)
 // CancelDeviceLogin implements external.DeviceLoginProvider. Grok keeps
 // polling the device code until it expires, so the process goes with the
 // sign-in; the Agent's own process is untouched.
-func (d *Driver) CancelDeviceLogin(ctx context.Context, _, botAgentID, loginID string) error {
+func (d *Driver) CancelDeviceLogin(ctx context.Context, botID, botAgentID, loginID string) error {
+	release, err := d.lockSignIn(ctx, botID, botAgentID)
+	if err != nil {
+		return err
+	}
+	defer release()
 	if s := d.signIn(loginID, botAgentID); s != nil {
 		d.endSignIn(ctx, s)
 	}
@@ -272,6 +288,17 @@ func (s *signIn) awaitURL(ctx context.Context) (external.DeviceLoginStart, error
 	}
 }
 
+// approved reports a sign-in Grok has completed: authenticate answered without
+// an error.
+func (s *signIn) approved() bool {
+	select {
+	case <-s.done:
+		return s.err == nil
+	default:
+		return false
+	}
+}
+
 func (s *signIn) close() {
 	if s.cancel != nil {
 		s.cancel()
@@ -298,4 +325,33 @@ func userCode(rawURL string) string {
 		return ""
 	}
 	return parsed.Query().Get("user_code")
+}
+
+// lockSignIn covers the whole login lifecycle operation, not only map writes.
+// A canceled tab must not race a poll that is storing its completed credential.
+func (d *Driver) lockSignIn(ctx context.Context, botID, botAgentID string) (func(), error) {
+	gate := d.processes(serverKey(botID, botAgentID)).signingIn
+	select {
+	case gate <- struct{}{}:
+		return func() { <-gate }, nil
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+}
+
+// Called while holding this Agent's sign-in gate. Other Agents are unaffected.
+// A sign-in the user already approved stays for its poll to store: ending it
+// would throw away a login Grok has issued.
+func (d *Driver) cancelAgentSignIns(ctx context.Context, botID, botAgentID string) {
+	d.signInsMu.Lock()
+	var previous []*signIn
+	for _, s := range d.signIns {
+		if s.botID == botID && s.botAgentID == botAgentID && !s.approved() {
+			previous = append(previous, s)
+		}
+	}
+	d.signInsMu.Unlock()
+	for _, s := range previous {
+		d.endSignIn(ctx, s)
+	}
 }

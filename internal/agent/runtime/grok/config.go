@@ -14,8 +14,8 @@
 // file Grok writes is kept in the encrypted Agent credential store. The
 // driver puts that file into the Agent's home when a process starts, and
 // each process writes what Grok refreshed back to the credential it was
-// started from. Every process of an Agent shares that home, so one started
-// from a replaced credential is ended before the next starts.
+// started from. Every process of an Agent shares that home, so a process
+// that holds a login finishes before another one starts.
 package grok
 
 import (

@@ -3,11 +3,15 @@
 package db_test
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"io/fs"
 	"maps"
 	"testing"
+	"time"
 
+	migratepostgres "github.com/golang-migrate/migrate/v4/database/postgres"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 
@@ -136,4 +140,85 @@ func runtimeKindConstraints(t *testing.T, ctx context.Context, pool *pgxpool.Poo
 		t.Fatalf("runtime kind constraints = %v, err = %v, want 6", definitions, err)
 	}
 	return definitions
+}
+
+// Pause the validation file at a later table, after history validation has
+// finished. History must still be readable/writable while this transaction
+// remains open; putting DROP/ADD back in this file would block both probes.
+func TestGrokValidationDoesNotRetainDDLTableLocks(t *testing.T) {
+	ctx := t.Context()
+	pool := freshMigratedDB(t)
+	dsn := teamMigrationDSN(t)
+	migrateTo(t, dsn, 167)
+	blocker, err := pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = blocker.Rollback(context.Background()) }()
+	if _, err = blocker.Exec(ctx, "LOCK TABLE schedule IN SHARE UPDATE EXCLUSIVE MODE"); err != nil {
+		t.Fatal(err)
+	}
+	driver, err := (&migratepostgres.Postgres{}).Open(dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer driver.Close()
+	sql, err := fs.ReadFile(postgresMigrationsFS(t), "0168_validate_grok_build_runtime.up.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	go func() { done <- driver.Run(bytes.NewReader(sql)) }()
+	defer func() {
+		_ = blocker.Rollback(context.Background())
+		select {
+		case <-done:
+		case <-time.After(5 * time.Second):
+		}
+	}()
+	deadline := time.NewTimer(5 * time.Second)
+	defer deadline.Stop()
+	tick := time.NewTicker(10 * time.Millisecond)
+	defer tick.Stop()
+	for {
+		var waiting bool
+		err = pool.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM pg_locks WHERE relation='schedule'::regclass AND mode='ShareUpdateExclusiveLock' AND NOT granted)`).Scan(&waiting)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if waiting {
+			break
+		}
+		select {
+		case err := <-done:
+			t.Fatalf("validation finished before blocker: %v", err)
+		case <-deadline.C:
+			t.Fatal("validation never reached schedule")
+		case <-tick.C:
+		}
+	}
+	var exclusive bool
+	if err = pool.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM pg_locks WHERE relation='bot_history_messages'::regclass AND mode='AccessExclusiveLock' AND granted)`).Scan(&exclusive); err != nil || exclusive {
+		t.Fatalf("history exclusive lock=%v error=%v", exclusive, err)
+	}
+	probe, cancel := context.WithTimeout(ctx, time.Second)
+	defer cancel()
+	if _, err = pool.Exec(probe, "SELECT 1 FROM bot_history_messages LIMIT 1"); err != nil {
+		t.Fatalf("read blocked during validation: %v", err)
+	}
+	if _, err = pool.Exec(probe, "UPDATE bot_history_messages SET runtime_type=runtime_type WHERE false"); err != nil {
+		t.Fatalf("write blocked during validation: %v", err)
+	}
+	if err = blocker.Rollback(ctx); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+		done <- nil
+	case <-deadline.C:
+		t.Fatal("validation did not finish")
+	}
 }

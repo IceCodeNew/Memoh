@@ -31,23 +31,17 @@ func authFilePath(botAgentID string) string {
 
 // prepareHome makes Grok's home agree with the Agent's auth mode before a
 // process reads it. Grok prefers a stored login over XAI_API_KEY, so a login
-// left from an earlier mode would silently win over the configured key.
-//
-// loginInUse says a process started from the same credential is still
-// running. The file is then what that process last refreshed, and the stored
-// copy can only be older.
-func prepareHome(ctx context.Context, client *bridge.Client, botAgentID string, cfg Config, loginInUse bool) error {
+// left from an earlier mode would silently win over the configured key. No
+// earlier process holds a login by then (awaitLoginHolders), so the stored
+// copy is the latest one.
+func prepareHome(ctx context.Context, client *bridge.Client, botAgentID string, cfg Config) error {
 	if err := client.Mkdir(ctx, grokHome(botAgentID)); err != nil {
 		return errs.WrapDependency(err, "")
 	}
-	switch {
-	case cfg.Auth != grokcfg.AuthGrokAccount:
+	if cfg.Auth != grokcfg.AuthGrokAccount {
 		return deleteLogin(ctx, client, botAgentID)
-	case loginInUse:
-		return nil
-	default:
-		return errs.WrapDependency(client.WriteFile(ctx, authFilePath(botAgentID), []byte(cfg.AuthJSON)), "")
 	}
+	return errs.WrapDependency(client.WriteFile(ctx, authFilePath(botAgentID), []byte(cfg.AuthJSON)), "")
 }
 
 func deleteLogin(ctx context.Context, client *bridge.Client, botAgentID string) error {

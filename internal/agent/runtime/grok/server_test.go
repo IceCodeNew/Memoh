@@ -3,6 +3,7 @@ package grok
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -83,8 +84,9 @@ func (g *fakeGrok) handle(ctx context.Context, method string, params json.RawMes
 	defer g.mu.Unlock()
 	switch method {
 	case signInURLMethod:
-		// Grok names the URL only once a sign-in is under way.
-		if !g.signingIn {
+		// A refused authentication never produces a device URL. Advertising
+		// one races the authenticate error response and makes refusal tests flaky.
+		if !g.signingIn || g.authErr != nil {
 			return map[string]any{"auth_url": nil, "external_provider": false, "mode": nil}, nil
 		}
 		return map[string]any{"auth_url": "https://accounts.x.ai/oauth2/device?user_code=ABCD-1234", "external_provider": false, "mode": "device"}, nil
@@ -257,5 +259,120 @@ func TestOpenThreadTreatsTheStoredSessionIDAsTheAuthority(t *testing.T) {
 	replaced, lost := open(newTestServer(t, grok), "gone")
 	if !lost || replaced.session.ID() != "new-3" {
 		t.Fatalf("refused resume = session %q lost=%v, want a new session reported as lost", replaced.session.ID(), lost)
+	}
+}
+
+func TestOpenThreadNeverReplacesAnActiveSession(t *testing.T) {
+	for _, mismatch := range []string{"stored-id", "fresh-discuss", "toolless", "mode"} {
+		t.Run(mismatch, func(t *testing.T) {
+			agent := &fakeGrok{}
+			srv := newTestServer(t, agent)
+			input := external.PromptInput{ThreadID: "thread"}
+			th, _, err := srv.openThread(t.Context(), toolmount.Gateway{}, nil, nil, input, grokcfg.PermissionAsk, true)
+			if err != nil {
+				t.Fatal(err)
+			}
+			th.turn.Store(&turnContext{ctx: t.Context()})
+			input.RuntimeMetadata = map[string]any{metadataSessionIDKey: th.session.ID()}
+			mode := grokcfg.PermissionAsk
+			switch mismatch {
+			case "stored-id":
+				input.RuntimeMetadata[metadataSessionIDKey] = "previous"
+			case "fresh-discuss":
+				input.ForceFreshRuntime = true
+			case "toolless":
+				th.toolless = true
+				srv.workspaceInfo.ToolsHTTPURL = "http://127.0.0.1:18732/mcp"
+			case "mode":
+				mode = grokcfg.PermissionAuto
+			}
+			_, _, err = srv.openThread(t.Context(), toolmount.Gateway{}, nil, nil, input, mode, false)
+			var failure *external.Failure
+			if !errors.As(err, &failure) || failure.Kind != external.FailureRuntimeBusy {
+				t.Fatalf("active replacement: %v", err)
+			}
+			agent.mu.Lock()
+			defer agent.mu.Unlock()
+			if len(agent.closed) != 0 || agent.created != 1 || len(agent.resumed) != 0 || srv.thread("thread") != th {
+				t.Fatal("active native session was changed")
+			}
+		})
+	}
+}
+
+func isRuntimeBusy(err error) bool {
+	var failure *external.Failure
+	return errors.As(err, &failure) && failure.Kind == external.FailureRuntimeBusy
+}
+
+func TestAwaitLoginHoldersWaitsOnlyWhereALoginIsShared(t *testing.T) {
+	// API key processes on both sides run side by side: a displaced one keeps
+	// finishing its turns, and the start does not wait for it.
+	apiKey := &server{done: make(chan struct{})}
+	if err := awaitLoginHolders(t.Context(), []*server{apiKey}, false, time.Hour); err != nil {
+		t.Fatalf("API key start waited on an API key predecessor: %v", err)
+	}
+	// A login on either side waits, held or not by a turn (a process can be
+	// held between Acquire and its turn starting), and answers busy once the
+	// timeout passes without stopping the predecessor.
+	for _, tc := range []struct {
+		name     string
+		previous *server
+		signedIn bool
+	}{
+		{"predecessor holds a login", &server{done: make(chan struct{}), login: &loginSync{}}, false},
+		{"start signs in", &server{done: make(chan struct{})}, true},
+	} {
+		if err := awaitLoginHolders(t.Context(), []*server{tc.previous}, tc.signedIn, 10*time.Millisecond); !isRuntimeBusy(err) {
+			t.Fatalf("%s: err = %v, want busy", tc.name, err)
+		}
+		select {
+		case <-tc.previous.Done():
+			t.Fatalf("%s: predecessor was stopped", tc.name)
+		default:
+		}
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	if err := awaitLoginHolders(ctx, []*server{{done: make(chan struct{})}}, true, time.Hour); !errors.Is(err, context.Canceled) {
+		t.Fatalf("cancelled start: %v", err)
+	}
+	// Predecessors that end within the timeout let the start through once
+	// their teardown, login write-back included, has finished.
+	ended := &server{done: make(chan struct{}), login: &loginSync{}}
+	ended.closeOnce.Do(func() { close(ended.done) })
+	draining := &server{done: make(chan struct{}), login: &loginSync{}}
+	go func() {
+		time.Sleep(20 * time.Millisecond)
+		draining.closeOnce.Do(func() { close(draining.done) })
+	}()
+	if err := awaitLoginHolders(t.Context(), []*server{ended, draining}, true, time.Minute); err != nil {
+		t.Fatalf("drained predecessors: %v", err)
+	}
+}
+
+func TestReleaseOtherCopiesKeepsOneProcessPerSession(t *testing.T) {
+	oldAgent := &fakeGrok{}
+	previous, current := newTestServer(t, oldAgent), newTestServer(t, &fakeGrok{})
+	d := &Driver{running: map[string]*agentProcesses{serverKey("bot", "agent"): {servers: []*server{previous, current}}}}
+	input := external.PromptInput{BotID: "bot", BotAgentID: "agent", ThreadID: "thread"}
+	th, _, err := previous.openThread(t.Context(), toolmount.Gateway{}, nil, nil, input, grokcfg.PermissionAsk, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// A copy a turn still runs on is never taken away.
+	th.turn.Store(&turnContext{ctx: t.Context()})
+	if err := d.releaseOtherCopies(current, input); !isRuntimeBusy(err) || previous.thread("thread") != th {
+		t.Fatalf("active copy: err = %v", err)
+	}
+	// An idle copy is closed before the current process opens the session.
+	th.turn.Store(nil)
+	if err := d.releaseOtherCopies(current, input); err != nil {
+		t.Fatal(err)
+	}
+	oldAgent.mu.Lock()
+	defer oldAgent.mu.Unlock()
+	if previous.thread("thread") != nil || len(oldAgent.closed) != 1 {
+		t.Fatalf("idle copy kept: closed = %v", oldAgent.closed)
 	}
 }

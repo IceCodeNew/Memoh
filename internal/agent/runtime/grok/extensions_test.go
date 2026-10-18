@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/felinics/memoh/internal/agent/runtime/external"
+	"github.com/felinics/memoh/internal/runtimekind"
 )
 
 func TestModelStateFollowsWhatGrokReports(t *testing.T) {
@@ -79,10 +80,19 @@ func TestForkThreadRefusesAnEarlierTurn(t *testing.T) {
 	metadata := map[string]any{metadataSessionIDKey: "s1", metadataLastPromptIDKey: "p2"}
 	_, err := d.ForkThread(context.Background(), "bot", "agent", metadata, "p1")
 	var failure *external.Failure
-	if !errors.As(err, &failure) || failure.Kind != external.FailureControlFailed {
-		t.Fatalf("ForkThread(earlier turn) error = %v, want a control failure", err)
+	if !errors.As(err, &failure) || failure.Kind != external.FailureForkLatestOnly {
+		t.Fatalf("ForkThread(earlier turn) error = %v, want the latest-only fork failure", err)
 	}
 	if _, err := d.ForkThread(context.Background(), "bot", "agent", map[string]any{}, ""); err == nil {
 		t.Fatal("a conversation without a Grok session cannot be forked")
+	}
+}
+
+func TestGrokForkPolicyUsesThePersistedPromptAnchor(t *testing.T) {
+	if runtimekind.LatestForkAnchorKey(RuntimeType) != metadataLastPromptIDKey {
+		t.Fatal("fork projection and driver anchor keys differ")
+	}
+	if !runtimekind.ReadCommandsRequireIdle(RuntimeType) {
+		t.Fatal("native session reads must be admitted")
 	}
 }

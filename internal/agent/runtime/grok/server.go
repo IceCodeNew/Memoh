@@ -37,10 +37,8 @@ type server struct {
 	workspaceInfo bridge.WorkspaceInfo
 	launcher      external.Launcher
 	// login is nil for an API key Agent.
-	login *loginSync
-	// credentialID names the credential the process was started from.
-	credentialID string
-	logger       *slog.Logger
+	login  *loginSync
+	logger *slog.Logger
 	// mountCtx bounds thread tool-gateway mounts to the process's lifetime.
 	mountCtx    context.Context
 	mountCancel context.CancelFunc
@@ -274,6 +272,9 @@ func (s *server) openThread(ctx context.Context, gateway toolmount.Gateway, appr
 		baseURL = toolmount.ResolveBaseURL(s.workspaceInfo, input.ToolHTTPURL)
 	}
 	if current := s.thread(input.ThreadID); current != nil {
+		if current.turn.Load() != nil {
+			return nil, false, external.Fail(external.FailureRuntimeBusy, nil)
+		}
 		fits := storedID != "" && current.session.ID() == storedID && current.mode == mode && current.cwd == resolved.ProjectPath
 		if fits && (!current.toolless || baseURL == "") {
 			return current, false, nil

@@ -32,6 +32,10 @@ const contextURI = "memoh://context/current-turn"
 // permission callbacks to unwind before its session is given up.
 const decisionQuiesceTimeout = 3 * time.Second
 
+// predecessorDrainTimeout bounds how long a start waits for an earlier
+// process holding the Agent's login to finish its work (awaitLoginHolders).
+const predecessorDrainTimeout = 30 * time.Second
+
 // BridgeSource resolves the workspace bridge client for a bot.
 type BridgeSource interface {
 	MCPClient(ctx context.Context, botID string) (*bridge.Client, error)
@@ -71,6 +75,8 @@ type agentProcesses struct {
 	// disconnect cleans the home. It is a channel so a waiter can give up with
 	// its context.
 	starting chan struct{}
+	// signingIn serializes creation, polling and cancellation per Agent.
+	signingIn chan struct{}
 	// servers lists every live process: the one the table hands out and the
 	// displaced ones still finishing their turns.
 	servers []*server
@@ -180,10 +186,11 @@ func (d *Driver) startServer(ctx context.Context, key string) (servertable.Resou
 	if err != nil {
 		return nil, err
 	}
-	// Listed before the credential is read, so a process that ends in between
-	// still counts as holding the file: the copy read here may predate its
-	// last refresh.
-	running := d.runningServers(key)
+	// Before the credential is read: a process that held the login has
+	// written its last refresh back by the time it has closed.
+	if err := awaitLoginHolders(ctx, d.runningServers(key), cfg.Auth == grokcfg.AuthGrokAccount, predecessorDrainTimeout); err != nil {
+		return nil, err
+	}
 	credential, err := d.credentials.ResolveForBotAgent(ctx, botID, botAgentID)
 	if err != nil {
 		return nil, external.CredentialError(err)
@@ -206,18 +213,7 @@ func (d *Driver) startServer(ctx context.Context, key string) (servertable.Resou
 	if err != nil {
 		return nil, err
 	}
-	// A process started from another credential would write its own login
-	// over the file this one is about to read, so it ends here, and the turns
-	// it was finishing with it.
-	loginInUse := false
-	for _, other := range running {
-		if other.credentialID == credential.ID {
-			loginInUse = true
-			continue
-		}
-		_ = other.Close() //nolint:contextcheck // teardown is not the starting turn's to cancel.
-	}
-	if err := prepareHome(ctx, client, botAgentID, cfg, loginInUse); err != nil {
+	if err := prepareHome(ctx, client, botAgentID, cfg); err != nil {
 		return nil, err
 	}
 	var login *loginSync
@@ -232,9 +228,57 @@ func (d *Driver) startServer(ctx context.Context, key string) (servertable.Resou
 	if err != nil {
 		return nil, err
 	}
-	srv.credentialID = credential.ID
 	d.track(key, srv) //nolint:contextcheck // the process outlives the turn that started it.
 	return srv, nil
+}
+
+// awaitLoginHolders waits until no earlier process of the Agent can touch
+// the login file a start is about to depend on. A Grok account process reads
+// and refreshes that file, and Grok prefers a stored login over XAI_API_KEY,
+// so a start waits whenever it or an earlier process holds a login. API key
+// processes share nothing a turn changes: they run side by side, and a
+// displaced one finishes its turns. A predecessor still busy when timeout
+// passes answers busy rather than holding the start for a whole turn.
+func awaitLoginHolders(ctx context.Context, running []*server, signedIn bool, timeout time.Duration) error {
+	deadline := time.NewTimer(timeout)
+	defer deadline.Stop()
+	for _, other := range running {
+		if !signedIn && other.login == nil {
+			continue
+		}
+		select {
+		case <-other.Done():
+		case <-deadline.C:
+			return external.Fail(external.FailureRuntimeBusy, nil)
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+		// Done closes when teardown begins; the login is final only once Close
+		// has synced it back.
+		_ = other.Close() //nolint:contextcheck // predecessor teardown and credential sync outlive this request.
+	}
+	return nil
+}
+
+// releaseOtherCopies keeps one process per Grok session: a copy of the
+// conversation's session an earlier process of the Agent still holds is closed
+// before srv opens it. Admission keeps two operations off one conversation, so
+// such a copy is idle; one that is not refuses.
+func (d *Driver) releaseOtherCopies(srv *server, input external.PromptInput) error {
+	for _, other := range d.runningServers(serverKey(input.BotID, input.BotAgentID)) {
+		if other == srv {
+			continue
+		}
+		th := other.thread(input.ThreadID)
+		if th == nil {
+			continue
+		}
+		if th.turn.Load() != nil {
+			return external.Fail(external.FailureRuntimeBusy, nil)
+		}
+		other.dropThread(input.ThreadID, th, false)
+	}
+	return nil
 }
 
 func (d *Driver) processes(key string) *agentProcesses {
@@ -242,7 +286,7 @@ func (d *Driver) processes(key string) *agentProcesses {
 	defer d.runningMu.Unlock()
 	agent := d.running[key]
 	if agent == nil {
-		agent = &agentProcesses{starting: make(chan struct{}, 1)}
+		agent = &agentProcesses{starting: make(chan struct{}, 1), signingIn: make(chan struct{}, 1)}
 		d.running[key] = agent
 	}
 	return agent
@@ -337,6 +381,9 @@ func (d *Driver) Prompt(ctx context.Context, input external.PromptInput) (extern
 	}
 	defer release()
 	defer srv.login.sync(ctx)
+	if err := d.releaseOtherCopies(srv, input); err != nil { //nolint:contextcheck // an idle copy closes on the old process's own lifecycle.
+		return external.PromptResult{}, err
+	}
 
 	th, resumeLost, err := srv.openThread(ctx, d.toolGateway, d.approval, d.userInput, input, permissionMode(input.RuntimeMetadata, cfg), true)
 	if err != nil {

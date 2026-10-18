@@ -27392,6 +27392,9 @@ const docTemplate = `{
                 "compact": {
                     "type": "boolean"
                 },
+                "fork_latest_only": {
+                    "type": "boolean"
+                },
                 "goal": {
                     "type": "boolean"
                 },

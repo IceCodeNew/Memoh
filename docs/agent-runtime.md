@@ -79,7 +79,15 @@ lists them; a process of another version is logged at start): compaction is
 follows `_x.ai/models/update` because the snapshot in initialize goes stale.
 A fork is `_x.ai/session/fork`, which copies the session whole; the turn's
 prompt id is recorded as the fork anchor and a fork is refused from any turn
-but the latest. Grok reports a Memoh tool gateway it could not reach through
+but the latest. Fork preparation and Grok's `status` command take the session's
+turn slot, as a configuration-only run, and return busy while a turn runs.
+After the Agent's process is recycled, a displaced process keeps finishing its
+turns: a conversation opened on the replacement first closes any idle copy of
+its session the old process still holds. When the old or the new process
+uses a Grok account login, the login file is shared, so the replacement waits
+up to 30 seconds for the earlier processes to end and answers
+`external_runtime.busy` if they have not.
+Grok reports a Memoh tool gateway it could not reach through
 `_x.ai/mcp/server_status`, which the turn surfaces as a tools-unavailable
 notice. Grok's ACP surface has no mid-turn input: a prompt sent while one runs
 is queued until the turn ends, so steering is not offered, and `mcp/upsert`

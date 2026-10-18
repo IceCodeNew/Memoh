@@ -116,6 +116,10 @@ func (d *Driver) openForControl(ctx context.Context, input external.PromptInput)
 	if err != nil {
 		return nil, nil, nil, serverFailure(err)
 	}
+	if err := d.releaseOtherCopies(srv, input); err != nil { //nolint:contextcheck // an idle copy closes on the old process's own lifecycle.
+		release()
+		return nil, nil, nil, err
+	}
 	th, _, err := srv.openThread(ctx, d.toolGateway, d.approval, d.userInput, input, permissionMode(input.RuntimeMetadata, cfg), false)
 	if err != nil {
 		release()
@@ -141,7 +145,7 @@ func (d *Driver) ForkThread(ctx context.Context, botID, botAgentID string, runti
 	}
 	lastPromptID := metadataString(runtimeMetadata, metadataLastPromptIDKey)
 	if anchor := strings.TrimSpace(lastTurnID); anchor != "" && anchor != lastPromptID {
-		return nil, external.Fail(external.FailureControlFailed, errs.New("grok forks a conversation only from its latest turn"))
+		return nil, external.Fail(external.FailureForkLatestOnly, errs.New("grok forks a conversation only from its latest turn"))
 	}
 	srv, release, err := d.acquireServer(ctx, botID, botAgentID)
 	if err != nil {

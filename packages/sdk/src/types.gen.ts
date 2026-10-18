@@ -4217,6 +4217,7 @@ export type TurnRuntimeCommandKind = 'turn' | 'read' | 'operation';
 
 export type TurnRuntimeControlCapabilities = {
     compact?: boolean;
+    fork_latest_only?: boolean;
     goal?: boolean;
     permission_modes?: boolean;
     plan_mode?: boolean;
