@@ -95,6 +95,37 @@ func (s *graphSync) syncMarkdownFromNodes(ctx context.Context, botID string, nod
 	return nil
 }
 
+// overviewRefresher is the part of a memory store that can defer MEMORY.md
+// rewrites made during a conversation (storefs.Service).
+type overviewRefresher interface {
+	OverviewStale(botID string) bool
+	RefreshOverview(ctx context.Context, botID string) error
+}
+
+// overviewStale reports whether the store left MEMORY.md behind its memory
+// files for botID.
+func (s *graphSync) overviewStale(botID string) bool {
+	refresher, ok := s.fs.(overviewRefresher)
+	return ok && refresher.OverviewStale(strings.TrimSpace(botID))
+}
+
+// refreshOverview rewrites a stale MEMORY.md under the same per-bot lock the
+// write path holds, so it never interleaves with a projection rebuild.
+func (s *graphSync) refreshOverview(ctx context.Context, botID string) error {
+	refresher, ok := s.fs.(overviewRefresher)
+	if !ok {
+		return nil
+	}
+	botID = strings.TrimSpace(botID)
+	if botID == "" {
+		return errors.New("graph sync: bot_id is required")
+	}
+	mu := s.botLock(botID)
+	mu.Lock()
+	defer mu.Unlock()
+	return refresher.RefreshOverview(ctx, botID)
+}
+
 // nodeSpecToStoreItem converts a wiki node into the storefs item shape so the
 // canonical Markdown serializer (storefs) renders layer/fact_type/subject/
 // confidence/profile_ref/topic into the YAML front matter. Metadata is the

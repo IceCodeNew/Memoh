@@ -1448,6 +1448,7 @@ func (s *Service) prepareRunConfig(ctx context.Context, cfg native.RunConfig) na
 			nowFn = func() time.Time { return time.Now().In(cfg.Identity.TimezoneLocation) }
 		}
 		fs := native.NewFSClient(s.agent.BridgeProvider(), cfg.Identity.BotID, nowFn)
+		s.refreshMemoryOverviewIfCold(ctx, cfg.Identity.BotID, cfg.Identity.SessionID, cfg.SessionType, cfg.PromptCacheTTL)
 		files = fs.LoadSystemFiles(ctx)
 	}
 

@@ -13,6 +13,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 	"unicode/utf8"
 
@@ -43,6 +44,12 @@ type scanEntry struct {
 type Service struct {
 	provider bridge.Provider
 	logger   *slog.Logger
+
+	// deferConversationOverview leaves MEMORY.md unchanged after a
+	// conversation write until RefreshOverview runs (OverviewRefreshCacheCold).
+	deferConversationOverview bool
+	overviewMu                sync.Mutex
+	overview                  map[string]overviewState
 }
 
 type MemoryItem struct {
@@ -101,11 +108,21 @@ type conceptPersistWrite struct {
 	OldFilePath string
 }
 
-func New(log *slog.Logger, provider bridge.Provider) *Service {
+func New(log *slog.Logger, provider bridge.Provider, opts ...Option) *Service {
 	if log == nil {
 		log = slog.Default()
 	}
-	return &Service{provider: provider, logger: log.With(slog.String("component", "storefs"))}
+	s := &Service{
+		provider: provider,
+		logger:   log.With(slog.String("component", "storefs")),
+		overview: make(map[string]overviewState),
+	}
+	for _, opt := range opts {
+		if opt != nil {
+			opt(s)
+		}
+	}
+	return s
 }
 
 func (s *Service) client(ctx context.Context, botID string) (*bridge.Client, error) {
@@ -234,7 +251,15 @@ func (s *Service) PersistMemories(ctx context.Context, botID string, items []Mem
 			return err
 		}
 	}
-	return s.writeFile(ctx, botID, memoryOverviewPath(), formatMemoryOverviewMDWithPaths(overviewItems, overviewPaths))
+	if s.deferOverview(ctx, botID) {
+		return nil
+	}
+	generation := s.overviewGeneration(botID)
+	if err := s.writeFile(ctx, botID, memoryOverviewPath(), formatMemoryOverviewMDWithPaths(overviewItems, overviewPaths)); err != nil {
+		return err
+	}
+	s.markOverviewClean(botID, generation)
+	return nil
 }
 
 func (s *Service) RebuildFiles(ctx context.Context, botID string, items []MemoryItem, _ map[string]any) error {
@@ -512,15 +537,16 @@ func (s *Service) CountMemoryFiles(ctx context.Context, botID string) (int, erro
 	return count, nil
 }
 
+// SyncOverview rewrites MEMORY.md from the memory files, unless ctx carries a
+// conversation write the Service defers (see WithOverviewRefresh).
 func (s *Service) SyncOverview(ctx context.Context, botID string) error {
 	if s.provider == nil {
 		return ErrNotConfigured
 	}
-	items, err := s.ReadAllMemoryFiles(ctx, botID)
-	if err != nil {
-		return err
+	if s.deferOverview(ctx, botID) {
+		return nil
 	}
-	return s.writeFile(ctx, botID, memoryOverviewPath(), formatMemoryOverviewMD(items))
+	return s.writeOverview(ctx, botID)
 }
 
 func (s *Service) readMemoryDay(ctx context.Context, botID, filePath string) ([]MemoryItem, error) {

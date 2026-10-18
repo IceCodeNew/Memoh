@@ -56,6 +56,15 @@ type MemoryVersionProvider interface {
 	MemoryVersion(ctx context.Context, botID string) string
 }
 
+// OverviewRefresher is implemented by providers that can leave the MEMORY.md
+// overview behind the memory written during a conversation, so the system
+// prompt of a warm session stays byte-identical. OverviewStale is cheap and
+// local; RefreshOverview rewrites MEMORY.md from the memory files.
+type OverviewRefresher interface {
+	OverviewStale(botID string) bool
+	RefreshOverview(ctx context.Context, botID string) error
+}
+
 // SourceSyncProvider is implemented by providers that can report runtime status
 // and rebuild derived storage from a canonical source of truth.
 type SourceSyncProvider interface {

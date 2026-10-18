@@ -414,9 +414,13 @@ func provideMemoryLLM(modelsService *models.Service, settingsService *settings.S
 	}
 }
 
-func provideMemoryProviderRegistry(log *slog.Logger, llm memprovider.LLM, provider bridge.Provider, queries dbstore.Queries, vectorStore *pgvectordb.Store, wikiStore *wikistore.Store) *memprovider.Registry {
+func provideMemoryProviderRegistry(log *slog.Logger, cfg config.Config, llm memprovider.LLM, provider bridge.Provider, queries dbstore.Queries, vectorStore *pgvectordb.Store, wikiStore *wikistore.Store) *memprovider.Registry {
 	registry := memprovider.NewRegistry(log)
-	fileStore := storefs.New(log, provider)
+	overviewRefresh, recognized := cfg.Agent.EffectiveMemoryOverviewRefresh()
+	if !recognized {
+		log.Warn("unrecognized agent.memory_overview_refresh value; defaulting to immediate", slog.String("value", cfg.Agent.MemoryOverviewRefresh))
+	}
+	fileStore := storefs.New(log, provider, storefs.WithOverviewRefresh(overviewRefresh))
 	registry.RegisterFactory(string(memprovider.ProviderBuiltin), func(ctx context.Context, teamID, _ string, providerConfig map[string]any) (memprovider.Provider, error) {
 		var ws wikistore.Store
 		if wikiStore != nil {

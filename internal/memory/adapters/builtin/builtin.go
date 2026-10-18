@@ -160,6 +160,29 @@ func (p *BuiltinProvider) MemoryVersion(ctx context.Context, botID string) strin
 	return versioned.MemoryVersion(ctx, botID)
 }
 
+// OverviewStale reports whether MEMORY.md lags behind memory written during a
+// conversation. It implements adapters.OverviewRefresher.
+func (p *BuiltinProvider) OverviewStale(botID string) bool {
+	if p == nil || p.service == nil {
+		return false
+	}
+	refresher, ok := p.service.(adapters.OverviewRefresher)
+	return ok && refresher.OverviewStale(botID)
+}
+
+// RefreshOverview rewrites a MEMORY.md that lags behind memory written during
+// a conversation. It implements adapters.OverviewRefresher.
+func (p *BuiltinProvider) RefreshOverview(ctx context.Context, botID string) error {
+	if p == nil || p.service == nil {
+		return nil
+	}
+	refresher, ok := p.service.(adapters.OverviewRefresher)
+	if !ok {
+		return nil
+	}
+	return refresher.RefreshOverview(ctx, botID)
+}
+
 func (p *BuiltinProvider) SemanticCompactCapability() adapters.MemoryCompactCapability {
 	if p.service == nil || p.llm == nil {
 		return adapters.MemoryCompactCapability{Reason: adapters.CompactNotConfigured}

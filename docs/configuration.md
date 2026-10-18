@@ -21,6 +21,7 @@ The main configuration file is `config.toml` (copied from `conf/app.example.toml
 - `[web]` — Web frontend address
 - `[registry]` — Provider registry (`providers_dir` pointing to `conf/providers/`)
 - `[supermarket]` — Supermarket integration (base_url)
+- `[agent]` — Agent runtime limits and rollout switches (tool output caps, system file budget, in-loop reselection, context admission cap, synchronous compaction, `memory_overview_refresh`); `conf/app.example.toml` documents each option
 
 Provider YAML templates in `conf/providers/` define preset configurations for various LLM providers (OpenAI, Anthropic, GitHub Copilot, etc.).
 
