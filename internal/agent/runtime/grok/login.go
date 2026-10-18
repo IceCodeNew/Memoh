@@ -154,6 +154,16 @@ func (d *Driver) PollDeviceLogin(ctx context.Context, ownerUserID, botID, botAge
 		d.logger.WarnContext(ctx, "grok sign-in failed", slog.String("bot_id", botID), slog.Any("error", s.err))
 		return external.DeviceLoginStatus{Status: "error", Error: s.err.Error()}, nil
 	}
+	// The Agent may have left Grok account sign-in since this one started.
+	// Storing it then would replace, and revoke, the credential its mode uses.
+	cfg, err := d.agentConfig(ctx, botID, botAgentID)
+	if err != nil {
+		return external.DeviceLoginStatus{}, external.Unavailable(err)
+	}
+	if cfg.Auth != grokcfg.AuthGrokAccount {
+		d.endSignIn(ctx, s)
+		return external.DeviceLoginStatus{}, external.CredentialError(agentcredential.ErrIncompatible)
+	}
 	// A store that failed on the way leaves the sign-in for the next poll.
 	if err := d.storeSignIn(ctx, ownerUserID, s); err != nil {
 		return external.DeviceLoginStatus{}, err
@@ -288,17 +298,6 @@ func (s *signIn) awaitURL(ctx context.Context) (external.DeviceLoginStart, error
 	}
 }
 
-// approved reports a sign-in Grok has completed: authenticate answered without
-// an error.
-func (s *signIn) approved() bool {
-	select {
-	case <-s.done:
-		return s.err == nil
-	default:
-		return false
-	}
-}
-
 func (s *signIn) close() {
 	if s.cancel != nil {
 		s.cancel()
@@ -339,14 +338,16 @@ func (d *Driver) lockSignIn(ctx context.Context, botID, botAgentID string) (func
 	}
 }
 
-// Called while holding this Agent's sign-in gate. Other Agents are unaffected.
-// A sign-in the user already approved stays for its poll to store: ending it
-// would throw away a login Grok has issued.
+// cancelAgentSignIns ends every sign-in of the Agent, approved or not, and is
+// called while holding its sign-in gate. A sign-in may set the Agent's
+// credential only while nothing has replaced it: one stored after a newer
+// sign-in or a disconnect would bring back a login the user moved away from,
+// and revoke the credential it displaced. Other Agents are unaffected.
 func (d *Driver) cancelAgentSignIns(ctx context.Context, botID, botAgentID string) {
 	d.signInsMu.Lock()
 	var previous []*signIn
 	for _, s := range d.signIns {
-		if s.botID == botID && s.botAgentID == botAgentID && !s.approved() {
+		if s.botID == botID && s.botAgentID == botAgentID {
 			previous = append(previous, s)
 		}
 	}

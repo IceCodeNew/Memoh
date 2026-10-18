@@ -3,8 +3,22 @@ package grok
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"testing"
 	"time"
+
+	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgtype"
+
+	"github.com/felinics/memoh/internal/agent/runtime/external"
+	"github.com/felinics/memoh/internal/agent/runtime/servertable"
+	"github.com/felinics/memoh/internal/agentcredential"
+	"github.com/felinics/memoh/internal/botagents"
+	"github.com/felinics/memoh/internal/config"
+	"github.com/felinics/memoh/internal/db/postgres/sqlc"
+	dbstore "github.com/felinics/memoh/internal/db/store"
+	"github.com/felinics/memoh/internal/workspace/bridge"
 )
 
 func TestSignInHandsOutTheDeviceURLWhileGrokWaits(t *testing.T) {
@@ -83,18 +97,103 @@ func TestReplacingSignInCancelsOnlyThatAgentsPreviousAttempts(t *testing.T) {
 	}
 }
 
-func TestReplacingSignInKeepsALoginTheUserApproved(t *testing.T) {
-	ended := func(id string, err error, cancel func()) *signIn {
-		s := &signIn{id: id, botID: "bot", botAgentID: "agent", done: make(chan struct{}), err: err, cancel: cancel}
-		close(s.done)
-		return s
-	}
-	approved := ended("approved", nil, func() { t.Error("approved login canceled before its poll stored it") })
-	refusedCanceled := false
-	refused := ended("refused", errors.New("denied"), func() { refusedCanceled = true })
-	d := &Driver{signIns: map[string]*signIn{approved.id: approved, refused.id: refused}}
+// approvedSignIn is a sign-in whose authenticate has answered: the user
+// confirmed the code and Grok wrote its login, which no poll has stored yet.
+func approvedSignIn(id, botID, botAgentID string, canceled *int) *signIn {
+	s := &signIn{id: id, botID: botID, botAgentID: botAgentID, done: make(chan struct{}), cancel: func() { *canceled++ }}
+	close(s.done)
+	return s
+}
+
+func TestReplacingSignInEndsEvenAnApprovedOne(t *testing.T) {
+	// Stored after the newer sign-in, an approved one would bring the older
+	// account back and revoke the newer credential, so it ends with the rest.
+	canceled := 0
+	approved := approvedSignIn("approved", "bot", "agent", &canceled)
+	pending := &signIn{id: "pending", botID: "bot", botAgentID: "agent", done: make(chan struct{}), cancel: func() { canceled++ }}
+	d := &Driver{running: map[string]*agentProcesses{}, signIns: map[string]*signIn{approved.id: approved, pending.id: pending}}
 	d.cancelAgentSignIns(t.Context(), "bot", "agent")
-	if d.signIn("approved", "agent") != approved || d.signIn("refused", "agent") != nil || !refusedCanceled {
-		t.Fatal("replacement must end only sign-ins that cannot complete")
+	if canceled != 2 || len(d.signIns) != 0 {
+		t.Fatalf("earlier sign-ins left: canceled = %d, tracked = %d", canceled, len(d.signIns))
+	}
+	// The earlier tab's late poll finds nothing to store. The driver has no
+	// credential store here, so a store would panic.
+	status, err := d.PollDeviceLogin(t.Context(), "owner", "bot", "agent", "approved")
+	if err != nil || status.Status != "unknown" {
+		t.Fatalf("late poll = %+v, %v; want unknown", status, err)
+	}
+}
+
+// signInQueries answers the reads a sign-in's poll and a disconnect make: the
+// Agent row and its (absent) credential. Any other query is a test bug.
+type signInQueries struct {
+	dbstore.Queries
+	agent sqlc.BotAgent
+}
+
+func (q *signInQueries) GetBotAgentByID(context.Context, sqlc.GetBotAgentByIDParams) (sqlc.BotAgent, error) {
+	return q.agent, nil
+}
+
+func (*signInQueries) GetBotAgentCredential(context.Context, sqlc.GetBotAgentCredentialParams) (sqlc.GetBotAgentCredentialRow, error) {
+	return sqlc.GetBotAgentCredentialRow{}, pgx.ErrNoRows
+}
+
+func TestApprovedSignInStoresNothingOnceTheAgentLeftGrokAccount(t *testing.T) {
+	botID, botAgentID := uuid.New(), uuid.New()
+	q := &signInQueries{agent: sqlc.BotAgent{
+		ID: pgtype.UUID{Bytes: botAgentID, Valid: true}, BotID: pgtype.UUID{Bytes: botID, Valid: true},
+		Runtime: RuntimeType, Enabled: true, Metadata: []byte(`{"auth":"api_key","provider":"grok-build"}`),
+	}}
+	canceled := 0
+	late := approvedSignIn("late", botID.String(), botAgentID.String(), &canceled)
+	// No credential store: storing would replace, and revoke, the API key the
+	// Agent now runs on.
+	d := &Driver{
+		running: map[string]*agentProcesses{},
+		signIns: map[string]*signIn{late.id: late},
+		agents:  botagents.NewService(slog.Default(), q),
+	}
+	_, err := d.PollDeviceLogin(t.Context(), uuid.NewString(), botID.String(), botAgentID.String(), "late")
+	var failure *external.Failure
+	if !errors.As(err, &failure) || failure.Kind != external.FailureCredential || !errors.Is(failure.Err, agentcredential.ErrIncompatible) {
+		t.Fatalf("poll after the mode changed: %v", err)
+	}
+	if canceled != 1 || d.signIn("late", botAgentID.String()) != nil {
+		t.Fatal("a sign-in that can no longer be stored was kept")
+	}
+}
+
+type unreachableBridges struct{}
+
+func (unreachableBridges) MCPClient(context.Context, string) (*bridge.Client, error) {
+	return nil, errors.New("workspace unreachable")
+}
+
+func (unreachableBridges) WorkspaceInfo(context.Context, string) (bridge.WorkspaceInfo, error) {
+	return bridge.WorkspaceInfo{}, errors.New("workspace unreachable")
+}
+
+func TestDisconnectEndsSignInsUnderWay(t *testing.T) {
+	botID, botAgentID := uuid.NewString(), uuid.NewString()
+	canceled := 0
+	pending := &signIn{id: "pending", botID: botID, botAgentID: botAgentID, done: make(chan struct{}), cancel: func() { canceled++ }}
+	approved := approvedSignIn("approved", botID, botAgentID, &canceled)
+	d := &Driver{
+		running:     map[string]*agentProcesses{},
+		signIns:     map[string]*signIn{pending.id: pending, approved.id: approved},
+		credentials: agentcredential.NewService(&signInQueries{}, config.Config{}),
+		bridges:     unreachableBridges{},
+		servers: servertable.New(func(context.Context, string) (servertable.Resource, error) {
+			return nil, errors.New("no process starts here")
+		}, slog.Default()),
+	}
+	// The workspace being unreachable fails the disconnect, but only after the
+	// sign-ins that would set a credential again have ended.
+	if err := d.PurgeBotAgentAuth(t.Context(), botID, botAgentID); err == nil {
+		t.Fatal("disconnect reported success without deleting the login file")
+	}
+	if canceled != 2 || len(d.signIns) != 0 {
+		t.Fatalf("sign-ins outlived the disconnect: canceled = %d, tracked = %d", canceled, len(d.signIns))
 	}
 }

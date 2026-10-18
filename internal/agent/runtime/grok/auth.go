@@ -183,6 +183,14 @@ func (d *Driver) PurgeBotAgentAuth(ctx context.Context, botID, botAgentID string
 			return external.Fail(external.FailureCredentialBusy, nil)
 		}
 	}
+	// A sign-in under way would set a credential again after the Agent let go
+	// of its own. It ends here, under the gate its store runs in.
+	releaseSignIn, err := d.lockSignIn(ctx, botID, botAgentID)
+	if err != nil {
+		return err
+	}
+	defer releaseSignIn()
+	d.cancelAgentSignIns(ctx, botID, botAgentID)
 	if credential, err := d.credentials.GetForBotAgent(ctx, botID, botAgentID); err == nil {
 		agent.purged = credential.ID
 	}

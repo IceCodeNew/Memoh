@@ -125,6 +125,14 @@ credential and signs in from its settings. The staged authorizations
 (`/agent-authorizations`) cover API keys, the ChatGPT device login and the
 Claude browser login only.
 
+A Grok sign-in may set the Agent's credential only while nothing has replaced
+it: storing a login replaces the Agent's credential and revokes the one it
+displaces, so a late store would bring back an account the user moved away
+from. Starting a sign-in ends the Agent's earlier ones, approved or not, a
+disconnect or Agent deletion ends them too, and a sign-in that completes
+after the Agent has left `grok_account` mode is refused
+(`agent_credential.incompatible`) instead of stored.
+
 ## Execution timeouts and budgets
 
 Model silence, tool silence, human decisions, and total execution budgets have
