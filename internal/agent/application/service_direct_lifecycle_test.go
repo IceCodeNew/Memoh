@@ -205,6 +205,9 @@ func newDirectLifecycleFixture(t *testing.T, mode directLifecycleModelMode) dire
 			Stream bool `json:"stream"`
 		}
 		body, err := io.ReadAll(r.Body)
+		if err != nil && r.Context().Err() != nil {
+			return
+		}
 		if err == nil {
 			requests.add(body)
 			err = json.Unmarshal(body, &request)
@@ -376,6 +379,12 @@ func TestDirectChatCallerDeadlineWinsOverNonStreamingClientTimeout(t *testing.T)
 	})
 	if !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("Chat() error = %v, want caller context deadline exceeded", err)
+	}
+	if ctx.Err() != context.DeadlineExceeded {
+		t.Fatalf("caller context error = %v, want deadline exceeded", ctx.Err())
+	}
+	if strings.Contains(err.Error(), "timeout awaiting response headers") || strings.Contains(err.Error(), "Client.Timeout exceeded") {
+		t.Fatalf("Chat() error = %v, want caller deadline rather than client timeout", err)
 	}
 }
 
