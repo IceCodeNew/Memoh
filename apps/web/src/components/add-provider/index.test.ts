@@ -171,6 +171,8 @@ describe('add provider dialog', () => {
     expect(labels).toContain('OpenAI Codex')
     expect(labels).not.toContain('OpenRouter Template')
     expect(labels).toContain('OpenRouter')
+    // The custom entry, then the subscriptions, as in the gallery, then the rest.
+    expect(labels.slice(1, 4)).toEqual(['OpenAI Codex', 'GitHub Copilot', 'OpenCode Go'])
     expect(presetSelect.value).toBe('source:openrouter')
     await vi.waitFor(() => {
       expect((root.querySelector('#provider-create-base-url') as HTMLInputElement).value).toBe('https://openrouter.ai/api/v1')
