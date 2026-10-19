@@ -86,7 +86,7 @@ func (s *graphSync) syncMarkdownFromNodes(ctx context.Context, botID string, nod
 		"scopeId":   botID,
 		"bot_id":    botID,
 	}
-	// RebuildFiles also synchronizes (or defers) the overview.
+	// RebuildFiles also syncs (or defers) the overview; see memoryStore.
 	if err := s.fs.RebuildFiles(ctx, botID, items, filters); err != nil {
 		return fmt.Errorf("graph sync: rebuild files: %w", err)
 	}

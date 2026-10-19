@@ -251,6 +251,9 @@ func (s *Service) PersistMemories(ctx context.Context, botID string, items []Mem
 	return nil
 }
 
+// RebuildFiles rewrites the memory projection from items and finishes with
+// SyncOverview, so callers need not sync the overview again. A conversation
+// write defers the MEMORY.md rewrite as SyncOverview does.
 func (s *Service) RebuildFiles(ctx context.Context, botID string, items []MemoryItem, _ map[string]any) error {
 	if s.provider == nil {
 		return ErrNotConfigured

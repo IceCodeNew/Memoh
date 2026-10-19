@@ -26,7 +26,9 @@ var memoryOverviewNow = time.Now
 const memoryOverviewMaxLag = 30 * time.Minute
 
 // memoryOverviewActivityHorizon is the longest prompt cache TTL; activity
-// older than this can no longer keep any session warm.
+// older than this can no longer keep any session warm. It must stay at least
+// the longest TTL promptCacheTTLDuration returns, or a session still inside a
+// longer cache would be pruned and treated as cold.
 const memoryOverviewActivityHorizon = time.Hour
 
 // Reasons a stale MEMORY.md is rewritten before the system prompt is built.
@@ -37,11 +39,31 @@ const (
 )
 
 // refreshMemoryOverview applies the bot-wide overview freshness policy before
-// loading system files. Normally it refreshes only at a cold turn, while no
-// other session is warm or running. At the 30-minute lag limit it deliberately
-// refreshes even warm sessions, trading cache reuse for a current index.
-// Subagents never trigger a refresh. New memories remain available through
-// recall and memory tools while the shared index lags.
+// loading system files. MEMORY.md sits in the system prompt ahead of the whole
+// history, so rewriting it while a session is warm makes every following token
+// of that session's next request miss the prompt cache. Normally it refreshes
+// only at a cold turn, while no other session is warm or running, because the
+// file is shared by every session of the bot. At the 30-minute lag limit it
+// deliberately refreshes even warm sessions, trading cache reuse for a current
+// index. Subagents never trigger a refresh: a subagent session is new by
+// construction while its parent is warm, so the rewrite would break the
+// parent's next request instead. New memories remain available through recall
+// and memory tools while the shared index lags.
+//
+// TODO(memory): pin a MEMORY.md snapshot per session instead of deferring the
+// shared file. The system prompt would carry the snapshot the session took at
+// its last cold point (new session, after compaction, cache TTL expired, model
+// switch, or too many pending updates), and memory written since then would
+// reach the model as <memory-update> records persisted on the turn's request
+// and replayed byte-identically, the way injectWorkspaceTransitionRecords
+// replays workspace switches. One session's refresh would then never touch
+// another's prompt, so MEMORY.md could again be rewritten on every write, the
+// cross-session guard (process-local activity and the active-run lookup, with
+// their restart and multi-instance blind spots) and the forced max-lag rewrite
+// would go away, and subagents could inherit their parent's snapshot. It needs
+// durable per-session state (a snapshot table keyed by content hash plus a
+// memory view in the session metadata), so it is left to a migration of its
+// own.
 func (s *Service) refreshMemoryOverview(ctx context.Context, botID, sessionID, sessionType, promptCacheTTL string) {
 	botID = strings.TrimSpace(botID)
 	sessionID = strings.TrimSpace(sessionID)
