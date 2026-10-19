@@ -42,9 +42,7 @@ func orderedDiscoveryRoots(ctx context.Context, client fileClient, rawCompatRoot
 	return roots
 }
 
-// discoverManagedSkillRoots walks the namespace/app/Skill layout below
-// ManagedDirPath. A directory holding its own SKILL.md is a user Skill, not a
-// namespace, so its subdirectories are never read as Registry Apps.
+// discoverManagedSkillRoots walks the canonical namespace/app/Skill layout.
 func discoverManagedSkillRoots(ctx context.Context, client fileClient) (userRoots, registryRoots []Root) {
 	if client == nil {
 		return nil, nil
@@ -71,7 +69,7 @@ func discoverManagedSkillRoots(ctx context.Context, client fileClient) (userRoot
 			continue
 		}
 		apps, err := client.ListDirAll(ctx, namespacePath, false)
-		if err != nil || containsSkillFile(apps) {
+		if err != nil {
 			continue
 		}
 		slices.SortFunc(apps, func(a, b *pb.FileEntry) int {
@@ -121,13 +119,4 @@ func discoverManagedSkillRoots(ctx context.Context, client fileClient) (userRoot
 		}
 	}
 	return userRoots, registryRoots
-}
-
-func containsSkillFile(entries []*pb.FileEntry) bool {
-	for _, entry := range entries {
-		if !entry.GetIsDir() && path.Base(entry.GetPath()) == "SKILL.md" {
-			return true
-		}
-	}
-	return false
 }

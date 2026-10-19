@@ -8,12 +8,10 @@ import (
 )
 
 const (
-	// UserSkillNamespace is reserved below ManagedDirPath. Releases that
-	// shipped the namespaced layout wrote user Skills to
-	// /data/skills/user/personal/<skill>; that directory stays discoverable
-	// and editable in place, but new user Skills are never written there.
+	// UserSkillNamespace holds user Skills written before they moved back to
+	// /data/skills/<skill>. It stays discoverable and editable in place.
 	UserSkillNamespace = "user"
-	// UserApp is the only app of UserSkillNamespace.
+	// UserApp groups a workspace user's personal Skills.
 	UserApp = "personal"
 )
 
@@ -76,17 +74,11 @@ func skillNamespaceDirForID(namespaceID string) (string, error) {
 	return dirPath, nil
 }
 
-// isValidUserSkillName reports whether name can be a user Skill directory
-// directly below ManagedDirPath.
-func isValidUserSkillName(name string) bool {
-	return IsValidName(name) && strings.TrimSpace(name) != UserSkillNamespace
-}
-
 // userSkillDirForName returns /data/skills/<name>, the directory of one user
 // Skill.
 func userSkillDirForName(name string) (string, error) {
 	name = strings.TrimSpace(name)
-	if !isValidUserSkillName(name) {
+	if !IsValidName(name) {
 		return "", ErrInvalidSkillRequest
 	}
 	dirPath := path.Clean(path.Join(ManagedDirPath, name))
@@ -204,7 +196,7 @@ func UserSkillName(skillMDPath string) (string, bool) {
 		return "", false
 	}
 	name := path.Base(dir)
-	if !isValidUserSkillName(name) {
+	if !IsValidName(name) {
 		return "", false
 	}
 	return name, true
@@ -288,8 +280,4 @@ var (
 	// ErrSkillNotFound reports that the Skill an action names is not among
 	// the discovered Skills.
 	ErrSkillNotFound = errors.New("skill not found")
-	// ErrSkillDirTaken reports that a user Skill name names a directory
-	// below ManagedDirPath that holds something other than a user Skill,
-	// such as a Registry namespace.
-	ErrSkillDirTaken = errors.New("skill directory is taken")
 )

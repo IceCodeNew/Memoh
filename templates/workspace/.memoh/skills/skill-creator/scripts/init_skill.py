@@ -8,8 +8,6 @@ from pathlib import Path
 
 
 MAX_SKILL_NAME_LENGTH = 64
-# "user" is a directory Memoh reserves below /data/skills.
-RESERVED_SKILL_NAMES = {"user"}
 ALLOWED_RESOURCES = {"scripts", "references", "assets"}
 
 
@@ -137,8 +135,6 @@ def main() -> int:
             raise ValueError("skill name must contain at least one letter or digit")
         if len(skill_name) > MAX_SKILL_NAME_LENGTH:
             raise ValueError(f"skill name is too long; max {MAX_SKILL_NAME_LENGTH} characters")
-        if skill_name in RESERVED_SKILL_NAMES:
-            raise ValueError(f"skill name {skill_name!r} is reserved")
         resources = parse_resources(args.resources)
         if args.examples and not resources:
             raise ValueError("--examples requires --resources")

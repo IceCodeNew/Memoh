@@ -9,8 +9,7 @@ Use this skill to create or maintain Memoh workspace skills.
 
 ## Location Policy
 
-- Store user-created workspace skills directly under `/data/skills`, one folder per skill: `/data/skills/<skill-name>/SKILL.md`. Memoh does not discover a `SKILL.md` nested deeper than that.
-- Skills installed from Supermarket apps live in `/data/skills/<registry>/<app>/<skill>/` and are read-only. Do not edit them or create skills inside them.
+- Store user-created workspace skills under `/data/skills/<skill-name>/SKILL.md`.
 - Treat `/data/.memoh/skills` as Memoh-managed built-in skill space. Do not create user skills there unless the user explicitly asks to maintain built-in templates.
 - Prefer lowercase hyphen-case names, for example `docs-publisher` or `gh-review-helper`.
 

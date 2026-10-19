@@ -8,8 +8,6 @@ from pathlib import Path
 
 
 MAX_SKILL_NAME_LENGTH = 64
-# "user" is a directory Memoh reserves below /data/skills.
-RESERVED_SKILL_NAMES = {"user"}
 ALLOWED_FRONTMATTER = {"name", "description", "metadata", "license", "allowed-tools"}
 
 
@@ -56,8 +54,6 @@ def validate(skill_dir: Path) -> list[str]:
         warnings.append(f"name {name!r} differs from folder {skill_dir.name!r}")
     if len(name) > MAX_SKILL_NAME_LENGTH:
         raise ValueError(f"name is longer than {MAX_SKILL_NAME_LENGTH} characters")
-    if name in RESERVED_SKILL_NAMES:
-        raise ValueError(f"name {name!r} is reserved")
     if not description:
         raise ValueError("frontmatter.description is required")
     if len(description) > 1024:

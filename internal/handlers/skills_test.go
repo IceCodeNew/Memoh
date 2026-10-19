@@ -433,24 +433,6 @@ func TestSkillsAPIKeepsCompatUserSkillsInPlace(t *testing.T) {
 	}
 }
 
-func TestUpsertSkillsAPIRejectsNameOfRegistryNamespace(t *testing.T) {
-	env := newSkillsTestEnv(t)
-	registryRoot := path.Join(skillset.ManagedDir(), "openai-api-curated")
-	registryPath := path.Join(registryRoot, "docs", "xlsx", "SKILL.md")
-	env.writeSkillFile(t, registryPath, managedSkillRaw("xlsx", "Spreadsheet"))
-
-	_, err := env.callJSON(t, http.MethodPost, "/bots/:bot_id/container/skills", SkillsUpsertRequest{
-		Skills: []string{managedSkillRaw("openai-api-curated", "Shadow")},
-	}, env.handler.UpsertSkills)
-	if got := apperror.CodeOf(err); got != apperror.CodeSkillNameTaken {
-		t.Fatalf("UpsertSkills(registry namespace name) error = %v, want code %s", err, apperror.CodeSkillNameTaken)
-	}
-	if _, statErr := os.Stat(env.localPath(path.Join(registryRoot, "SKILL.md"))); !os.IsNotExist(statErr) {
-		t.Fatalf("user Skill was written into the Registry namespace, stat err = %v", statErr)
-	}
-	mustFindSkillByPath(t, env.listSkills(t), registryPath)
-}
-
 func TestUpsertSkillsAPIRenameRejectsExistingDestination(t *testing.T) {
 	env := newSkillsTestEnv(t)
 	alphaPath := path.Join(skillset.ManagedDir(), "alpha", "SKILL.md")
