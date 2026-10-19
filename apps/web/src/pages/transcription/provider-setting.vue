@@ -91,12 +91,13 @@
                 :model-value="!!providerConfig[field.key]"
                 @update:model-value="(val) => providerConfig[field.key] = !!val"
               />
-              <Input
+              <NumberField
                 v-else-if="field.type === 'number'"
                 :id="`transcription-provider-${field.key}`"
-                v-model.number="providerConfig[field.key] as number"
-                type="number"
+                :model-value="providerConfig[field.key] as number"
                 class="w-full sm:w-80"
+                disable-wheel-change
+                @update:model-value="(value) => providerConfig[field.key] = value"
               />
               <Select
                 v-else-if="field.type === 'enum' && field.enum"
@@ -212,7 +213,8 @@
 </template>
 
 <script setup lang="ts">
-import { computed, inject, reactive, ref, watch } from 'vue'
+import { computed, inject, reactive, ref } from 'vue'
+import { useServerSyncedRecord, useServerSyncedScalar } from '@/composables/use-server-synced-form'
 import { useQuery, useQueryCache } from '@pinia/colada'
 import { ModelListRow, SettingsRow, SettingsSection, SettingsShell, toast } from '@felinic/ui'
 import { useI18n } from 'vue-i18n'
@@ -234,7 +236,7 @@ import type {
   ProvidersGetResponse,
 } from '@memohai/sdk'
 import { Eye, EyeOff } from 'lucide-vue-next'
-import { Dialog, DialogContent, DialogHeader, DialogTitle, Input, Select, SelectContent, SelectItem, SelectTrigger, SelectValue, Switch } from '@felinic/ui'
+import { Dialog, DialogContent, DialogHeader, DialogTitle, Input, NumberField, Select, SelectContent, SelectItem, SelectTrigger, SelectValue, Switch } from '@felinic/ui'
 import ProviderIcon from '@/components/provider-icon/index.vue'
 import LoadingButton from '@/components/loading-button/index.vue'
 import ModelConfigEditor from '@/pages/speech/components/model-config-editor.vue'
@@ -372,11 +374,26 @@ const providerModels = computed<AudioTranscriptionModelResponse[]>(() => {
   }))
 })
 
-watch(() => providerDetail.value, (provider) => {
-  providerName.value = provider?.name ?? curProvider.value?.name ?? ''
-  Object.keys(providerConfig).forEach((key) => delete providerConfig[key])
-  Object.assign(providerConfig, { ...(provider?.config ?? curProvider.value?.config ?? {}) })
-}, { immediate: true, deep: true })
+// providerName/providerConfig are shared between the user's draft and the
+// server snapshot that colada's refetchOnWindowFocus can replace at any
+// moment — the composables reconcile them (hard reset on provider switch,
+// per-field guard on background refresh). The detail pane is NOT keyed by
+// provider, so the identity function must cover id / template / client_type.
+const providerIdentity = (provider: typeof providerDetail.value) =>
+  String(provider?.id ?? curProvider.value?.id ?? curProvider.value?.provider_template_id ?? curProvider.value?.client_type ?? '')
+
+useServerSyncedScalar(providerName, {
+  source: () => providerDetail.value,
+  identity: providerIdentity,
+  server: provider => provider?.name ?? curProvider.value?.name ?? '',
+  deep: true,
+})
+useServerSyncedRecord(providerConfig, {
+  source: () => providerDetail.value,
+  identity: providerIdentity,
+  server: provider => ({ ...(provider?.config ?? curProvider.value?.config ?? {}) } as Record<string, unknown>),
+  deep: true,
+})
 
 function getModelSchema(modelID: string): ConfigSchema | null {
   const models = currentMeta.value?.transcription_models ?? currentMeta.value?.models ?? []

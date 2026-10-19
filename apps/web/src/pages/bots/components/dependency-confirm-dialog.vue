@@ -12,7 +12,6 @@ import { toTypedSchema } from '@vee-validate/zod'
 import z from 'zod'
 import {
   Button,
-  CalloutBanner,
   Dialog,
   DialogBody,
   DialogDescription,
@@ -37,16 +36,18 @@ const props = withDefaults(defineProps<{
   open: boolean
   mode: DependencyConfirmMode
   item: DependencyItem | null
-  targetKind: 'native' | 'remote'
+
   /** Display name identifying the computer where the script will run. */
-  targetName?: string
+
   loading?: boolean
   /** Overrides the confirm label (the enable flow says "Install and enable"). */
   confirmLabel?: string
+  /** Display names of missing prerequisites the Server installs first. */
+  prerequisites?: string[]
 }>(), {
-  targetName: '',
   loading: false,
   confirmLabel: '',
+  prerequisites: () => [],
 })
 
 const emit = defineEmits<{
@@ -55,8 +56,9 @@ const emit = defineEmits<{
   confirm: [version: string]
 }>()
 
-const { t } = useI18n()
+const { t, locale } = useI18n()
 const { dependencyName } = useWorkspaceDependencyText()
+const prerequisiteNames = computed(() => new Intl.ListFormat(locale.value, { type: 'conjunction' }).format(props.prerequisites))
 
 const name = computed(() => (props.item ? dependencyName(props.item) : ''))
 const installedVersion = computed(() => formatDependencyVersion(props.item?.installed_version))
@@ -139,6 +141,12 @@ const submit = form.handleSubmit(({ version }) => {
       </DialogHeader>
 
       <DialogBody class="min-w-0 space-y-4">
+        <p
+          v-if="prerequisites.length"
+          class="text-sm text-muted-foreground break-words"
+        >
+          {{ t('bots.dependencies.confirm.prerequisites', { names: prerequisiteNames }) }}
+        </p>
         <form
           id="dependency-confirm-form"
           @submit.prevent="submit"
@@ -164,13 +172,6 @@ const submit = form.handleSubmit(({ version }) => {
             </FieldStack>
           </FormField>
         </form>
-
-        <CalloutBanner
-          v-if="targetKind === 'remote'"
-          tone="warning"
-          :title="t('bots.dependencies.confirm.remoteWarningTitle', { name: targetName })"
-          :description="t('bots.dependencies.confirm.remoteWarningDescription')"
-        />
       </DialogBody>
 
       <DialogFooter class="min-w-0 items-center gap-2">

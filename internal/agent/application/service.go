@@ -22,6 +22,7 @@ import (
 
 	sdk "github.com/felinics/twilight/sdk"
 	"github.com/google/uuid"
+	"golang.org/x/sync/singleflight"
 
 	"github.com/felinics/memoh/internal/accounts"
 	"github.com/felinics/memoh/internal/agent/background"
@@ -34,7 +35,9 @@ import (
 	"github.com/felinics/memoh/internal/agent/runtime/native"
 	sessionruntime "github.com/felinics/memoh/internal/agent/runtime/session"
 	"github.com/felinics/memoh/internal/agent/sessionmode"
+	"github.com/felinics/memoh/internal/agent/toolexec"
 	turnpkg "github.com/felinics/memoh/internal/agent/turn"
+	"github.com/felinics/memoh/internal/apperror"
 	messageevent "github.com/felinics/memoh/internal/chat/event"
 	messagepkg "github.com/felinics/memoh/internal/chat/message"
 	sessionpkg "github.com/felinics/memoh/internal/chat/thread"
@@ -104,10 +107,17 @@ type compactionRunner interface {
 
 // Service orchestrates chat with the internal agent.
 type Service struct {
+	activeTurns             activeTurnTracker
+	resumeSecret            string
+	resumeScopes            SessionResumeScopeProvider
+	resumeReady             func(context.Context, string, string) error
+	resumeStop              context.CancelFunc
+	resumeDone              chan struct{}
 	agent                   *native.Agent
 	modelsService           *models.Service
 	queries                 dbstore.Queries
 	memoryRegistry          *memprovider.Registry
+	memoryOverviewActivity  sessionActivity
 	messageService          messagepkg.Service
 	settingsService         *settings.Service
 	accountService          *accounts.Service
@@ -118,6 +128,7 @@ type Service struct {
 	eventPublisher          messageevent.Publisher
 	skillLoader             SkillLoader
 	assetLoader             gatewayAssetLoader
+	animationFrames         animationCache
 	platformIdentities      PlatformIdentitySource
 	botPermissions          botPermissionChecker
 	workspaceTargets        workspaceTargetResolver
@@ -134,6 +145,7 @@ type Service struct {
 	hookService             *hooks.Service
 	memoryContextMu         sync.Mutex
 	memoryContextCache      *memprovider.MemoryContextCache
+	starterPromptFlights    singleflight.Group
 	externalAgentPromptHubs sync.Map
 	// continueUserInputFn overrides the application resume after a user input
 	// response; nil means storeUserInputResultAndContinue. Test seam.
@@ -363,33 +375,33 @@ func (s *Service) Pipeline() *timeline.Pipeline {
 
 // InlineImageAttachments resolves image content hashes to sdk.ImagePart values
 // using the configured asset loader. Intended for the discuss driver to inline
-// images from new RC segments before calling the LLM.
-func (s *Service) InlineImageAttachments(ctx context.Context, botID string, refs []timeline.ImageAttachmentRef) []sdk.ImagePart {
+// images from new RC segments before calling the LLM. The result holds what
+// each reference contributes, in order, under one turn-wide vision budget; a
+// duplicate or unusable reference contributes nothing.
+func (s *Service) InlineImageAttachments(ctx context.Context, botID string, refs []timeline.ImageAttachmentRef) [][]sdk.ImagePart {
 	if s == nil || s.assetLoader == nil || len(refs) == 0 {
 		return nil
 	}
-	var parts []sdk.ImagePart
-	for _, ref := range refs {
+	ctx, cancel := context.WithTimeout(ctx, attachmentPreparationTimeout)
+	defer cancel()
+	parts := make([][]sdk.ImagePart, len(refs))
+	var budget visionBudget
+	seen := make(map[string]bool, len(refs))
+	for i, ref := range refs {
 		contentHash := strings.TrimSpace(ref.ContentHash)
-		if contentHash == "" {
+		if contentHash == "" || seen[contentHash] {
 			continue
 		}
-		dataURL, mime, err := s.inlineAssetAsDataURL(ctx, botID, contentHash, "image", strings.TrimSpace(ref.Mime))
+		seen[contentHash] = true
+		framed, err := s.inlineStoredImageParts(ctx, botID, contentHash, ref.Mime)
 		if err != nil {
-			if s.logger != nil {
-				s.logger.Warn(
-					"inline discuss image attachment failed",
-					slog.Any("error", err),
-					slog.String("bot_id", botID),
-					slog.String("content_hash", contentHash),
-				)
-			}
+			// One unusable attachment must not cost the turn its other images:
+			// the reference stays in the rendered context and every later turn
+			// skips the same bytes again instead of failing the model call.
+			s.logImageInputRejected(err, botID, contentHash)
 			continue
 		}
-		parts = append(parts, sdk.ImagePart{
-			Image:     dataURL,
-			MediaType: mime,
-		})
+		parts[i] = budget.take(framed)
 	}
 	return parts
 }
@@ -404,6 +416,7 @@ type resolvedContext struct {
 	estimatedTokens             int // estimated input token count for compaction
 	compactableTokens           int // raw history eligible for compaction
 	compactableTokensKnown      bool
+	historyPressureTokens       int
 	contextTokenBudget          int // token budget used to clamp compaction triggers
 }
 
@@ -437,10 +450,6 @@ func markRequiredHistoryMessageCurrent(cfg *native.RunConfig, requiredMessageID 
 		cfg.ContextCurrentUserMessageIndex = intPointer(index)
 		return
 	}
-}
-
-func defaultToolExchangePolicy() *contextfrag.ToolExchangePolicy {
-	return contextfrag.DefaultToolExchangePolicy()
 }
 
 // resolve builds the run context for one turn and returns the effective
@@ -507,7 +516,7 @@ func (s *Service) resolveWithHTTPClient(ctx context.Context, req ChatRequest, mo
 		HTTPClient:         modelHTTPClient,
 	})
 	if err != nil {
-		s.logger.Error("resolve: buildBaseRunConfig failed",
+		s.logger.ErrorContext(ctx, "resolve: buildBaseRunConfig failed",
 			slog.String("bot_id", req.BotID),
 			slog.Any("error", err),
 		)
@@ -543,7 +552,7 @@ func (s *Service) resolveWithHTTPClient(ctx context.Context, req ChatRequest, mo
 	// the rendered event stream (RC) + bot turn responses (TR) instead of
 	// loading raw history from bot_history_messages. The current inbound
 	// message is already in the RC, so it must not be appended again.
-	usePipeline := s.pipeline != nil &&
+	usePipeline := !req.ShutdownResume && s.pipeline != nil &&
 		strings.TrimSpace(req.ThreadID) != "" &&
 		strings.TrimSpace(req.HistoryCutoffBeforeMessageID) == "" &&
 		len(req.RequestedSkills) == 0
@@ -560,19 +569,20 @@ func (s *Service) resolveWithHTTPClient(ctx context.Context, req ChatRequest, mo
 	var historyRecords []historyfrag.HistoryRecord
 	var estimatedTokens int
 	var compactableTokens int
+	var historyPressureTokens int
 	var compactableTokensKnown bool
 	var currentMessageIndex *int
 	if usePipeline {
-		messages, compactableTokens = s.buildMessagesFromPipeline(ctx, req, contextTokenBudget)
+		messages, compactableTokens, historyPressureTokens = s.buildMessagesFromPipeline(ctx, req, contextTokenBudget)
 		compactableTokensKnown = true
 		// Pre-turn synchronous compaction backstop (CM-CMP-001), gated per
 		// CM-CMP-003. Mirrors the legacy path below: only a pass that
 		// actually produced a summary triggers recomposition; a noop keeps
 		// this turn's (already trimmed) context untouched.
-		if mode := s.effectiveSyncCompactionMode(); mode != syncCompactionModeOff && syncCompactionShouldRun(compactableTokens, contextTokenBudget) {
+		if mode := s.effectiveSyncCompactionMode(); mode != syncCompactionModeOff && syncCompactionShouldRun(historyPressureTokens, contextTokenBudget) {
 			threshold := hardCompactionThreshold(contextTokenBudget)
 			if mode == syncCompactionModeShadow {
-				s.logger.Info("sync_compaction_backstop",
+				s.logger.InfoContext(ctx, "sync_compaction_backstop",
 					slog.String("path", "pipeline_chat"),
 					slog.String("mode", "shadow"),
 					slog.Bool("would_fire", true),
@@ -582,8 +592,8 @@ func (s *Service) resolveWithHTTPClient(ctx context.Context, req ChatRequest, mo
 					slog.Int("threshold_tokens", threshold))
 			} else {
 				start := time.Now()
-				res := s.runCompactionSync(ctx, req, compactableTokens, contextTokenBudget, chatModel.ID)
-				s.logger.Info("sync_compaction_backstop",
+				res := s.runCompactionSync(ctx, req, historyPressureTokens, contextTokenBudget, chatModel.ID)
+				s.logger.InfoContext(ctx, "sync_compaction_backstop",
 					slog.String("path", "pipeline_chat"),
 					slog.String("mode", "active"),
 					slog.String("status", res.Status),
@@ -593,7 +603,7 @@ func (s *Service) resolveWithHTTPClient(ctx context.Context, req ChatRequest, mo
 					slog.Int("pressure_tokens", compactableTokens),
 					slog.Int("threshold_tokens", threshold))
 				if res.Status == compaction.StatusOK {
-					messages, compactableTokens = s.buildMessagesFromPipeline(ctx, req, contextTokenBudget)
+					messages, compactableTokens, historyPressureTokens = s.buildMessagesFromPipeline(ctx, req, contextTokenBudget)
 				}
 			}
 		}
@@ -602,7 +612,7 @@ func (s *Service) resolveWithHTTPClient(ctx context.Context, req ChatRequest, mo
 		historyFallback := historyScopeFallbackFromChatRequest(req)
 		prepared, loadErr := s.prepareHistoryContext(ctx, req, historyFallback, contextTokenBudget)
 		if loadErr != nil {
-			s.logger.Error("resolve: prepare history context failed",
+			s.logger.ErrorContext(ctx, "resolve: prepare history context failed",
 				slog.String("bot_id", req.BotID),
 				slog.String("stage", "initial"),
 				slog.Any("error", loadErr),
@@ -613,13 +623,11 @@ func (s *Service) resolveWithHTTPClient(ctx context.Context, req ChatRequest, mo
 		historyRecords = prepared.records
 		estimatedTokens = prepared.estimatedTokens
 		compactableTokens = prepared.compactableTokens
+		historyPressureTokens = prepared.pressureTokens
 		compactableTokensKnown = true
-		// The trigger only counts raw (compactable) rows: active summaries can
-		// never be compacted away, so including them would make the trigger
-		// self-sustaining once accumulated summaries cross the threshold.
-		if syncCompactionShouldRun(compactableTokens, contextTokenBudget) {
+		if syncCompactionShouldRun(historyPressureTokens, contextTokenBudget) {
 			compactionThreshold := hardCompactionThreshold(contextTokenBudget)
-			s.logger.Warn("resolve: context reached compaction threshold, running synchronous compaction",
+			s.logger.WarnContext(ctx, "resolve: context reached compaction threshold, running synchronous compaction",
 				slog.String("bot_id", req.BotID),
 				slog.Int("estimated_tokens", estimatedTokens),
 				slog.Int("compactable_tokens", compactableTokens),
@@ -630,10 +638,10 @@ func (s *Service) resolveWithHTTPClient(ctx context.Context, req ChatRequest, mo
 			// summary. A noop (cooldown, in-flight, nothing markable) keeps
 			// this turn's context untouched — possibly still above the
 			// threshold — and the next turn re-evaluates.
-			if res := s.runCompactionSync(ctx, req, compactableTokens, contextTokenBudget, chatModel.ID); res.Status == compaction.StatusOK {
+			if res := s.runCompactionSync(ctx, req, historyPressureTokens, contextTokenBudget, chatModel.ID); res.Status == compaction.StatusOK {
 				prepared, loadErr = s.prepareHistoryContext(ctx, req, historyFallback, contextTokenBudget)
 				if loadErr != nil {
-					s.logger.Error("resolve: prepare history context failed",
+					s.logger.ErrorContext(ctx, "resolve: prepare history context failed",
 						slog.String("bot_id", req.BotID),
 						slog.String("stage", "post_compaction"),
 						slog.Any("error", loadErr),
@@ -644,17 +652,16 @@ func (s *Service) resolveWithHTTPClient(ctx context.Context, req ChatRequest, mo
 				historyRecords = prepared.records
 				estimatedTokens = prepared.estimatedTokens
 				compactableTokens = prepared.compactableTokens
-				// Remove tool messages from the recent context — they are large
-				// and unnecessary when we already have a summary. Keep only
-				// user/assistant conversation turns.
-				messages = stripToolMessagesWhenCompactionSummaryIsActive(messages, historyRecords)
+				historyPressureTokens = prepared.pressureTokens
 			}
 		}
 	}
+	forkMessageCount := 0
 	if forkContext := s.subagentForkContextModelMessages(ctx, req); len(forkContext) > 0 {
 		// The inherited parent snapshot precedes the thread's own transcript,
 		// exactly as parent-driven subagent tasks assemble it.
 		messages, currentMessageIndex = prependContextMessages(forkContext, messages, currentMessageIndex)
+		forkMessageCount = normalizedContextPrefixLength(messages, len(forkContext))
 	}
 	historyMessageCount := len(messages)
 	if notice := s.currentWorkspaceContextMessage(ctx, req); notice != nil {
@@ -682,9 +689,6 @@ func (s *Service) resolveWithHTTPClient(ctx context.Context, req ChatRequest, mo
 		runCfg.ContextHistoryTokenEstimates[index] = estimateMessageTokens(messages[index])
 	}
 	runCfg.ContextTrimmableMessages = min(trimmableMessages, len(messages))
-	if runCfg.ContextToolExchangePolicy == nil {
-		runCfg.ContextToolExchangePolicy = defaultToolExchangePolicy()
-	}
 
 	displayName := s.resolveDisplayName(ctx, req)
 	mergedAttachments := s.routeAndMergeAttachments(ctx, chatModel, req)
@@ -733,6 +737,11 @@ func (s *Service) resolveWithHTTPClient(ctx context.Context, req ChatRequest, mo
 	runCfg.InlineAttachments = extractNativeAttachmentParts(mergedAttachments)
 	runCfg.ContextScope = buildContextFragScope(req, displayName, runCfg.Identity)
 	runCfg = runCfg.RefreshContextFrag()
+	historyLayout := chatHistoryLayout{forkCount: min(forkMessageCount, runCfg.ContextTrimmableMessages), historyCount: runCfg.ContextTrimmableMessages, pressureTokens: historyPressureTokens, usePipeline: usePipeline}
+	if index := runCfg.ContextCurrentUserMessageIndex; index != nil && *index >= historyLayout.forkCount && *index < historyLayout.historyCount {
+		historyLayout.pressureTokens = max(0, historyLayout.pressureTokens-estimateMessageTokens(messages[*index]))
+	}
+	runCfg.RecoverContextBudget = s.chatBudgetRecovery(req, historyLayout)
 
 	var injectedRecords *[]InjectedMessageRecord
 	if req.InjectCh != nil {
@@ -776,6 +785,7 @@ func (s *Service) resolveWithHTTPClient(ctx context.Context, req ChatRequest, mo
 		injectedRecords:             injectedRecords,
 		estimatedTokens:             estimatedTokens,
 		compactableTokens:           compactableTokens,
+		historyPressureTokens:       historyPressureTokens,
 		compactableTokensKnown:      compactableTokensKnown,
 		contextTokenBudget:          contextTokenBudget,
 	}, req, nil
@@ -823,10 +833,9 @@ func (s *Service) Chat(ctx context.Context, req ChatRequest) (ChatResponse, erro
 	req.Query = rc.query
 	req.RunID = rc.runConfig.RunID
 
-	go s.maybeGenerateSessionTitle(context.WithoutCancel(ctx), req, req.RawQuery)
+	s.maybeGenerateSessionTitle(context.WithoutCancel(ctx), req, req.RawQuery)
 
 	cfg := rc.runConfig
-	cfg.StepIndexOffset = req.StepIndexOffset
 	stepCommitter := s.newAgentStepCommitter(ctx, req, rc)
 	if stepCommitter != nil {
 		cfg.OnStepCommitted = stepCommitter.commit
@@ -846,7 +855,7 @@ func (s *Service) Chat(ctx context.Context, req ChatRequest) (ChatResponse, erro
 		return ChatResponse{}, err
 	}
 
-	outputMessages := sdkMessagesToModelMessages(result.Messages)
+	outputMessages := sdkMessagesWithOrigins(result.Messages, result.InternalFeedbackIndexes)
 	storeReq := req
 	if stepCommitter != nil {
 		inputTokens := 0
@@ -871,7 +880,7 @@ func (s *Service) Chat(ctx context.Context, req ChatRequest) (ChatResponse, erro
 			return ChatResponse{}, err
 		}
 		if result.Usage != nil {
-			go s.maybeCompact(context.WithoutCancel(ctx), req, rc, result.Usage.InputTokens)
+			s.maybeCompact(context.WithoutCancel(ctx), req, rc, result.Usage.InputTokens)
 		}
 	}
 
@@ -927,6 +936,9 @@ func (s *Service) buildBaseRunConfig(ctx context.Context, p baseRunConfigParams)
 
 	chatModel, provider, err := s.selectChatModel(ctx, req, botSettings, p.SessionPrefModelID)
 	if err != nil {
+		if errors.Is(err, errChatModelNotConfigured) {
+			err = apperror.Wrap(apperror.CodeAgentChatModelNotConfigured, err, nil)
+		}
 		return native.RunConfig{}, models.GetResponse{}, sqlc.Provider{}, err
 	}
 
@@ -964,13 +976,14 @@ func (s *Service) buildBaseRunConfig(ctx context.Context, p baseRunConfigParams)
 		ThinkingBudgetMin:     chatModel.Config.ThinkingBudgetMin,
 		ThinkingBudgetMax:     chatModel.Config.ThinkingBudgetMax,
 		ContextWindow:         contextBudgetFromChatModel(chatModel),
+		MaxOutputTokens:       chatModel.Config.MaxOutputTokensLimit(),
 	})
 
 	var agentSkills []native.SkillEntry
 	if s.skillLoader != nil {
 		entries, skillErr := s.skillLoader.LoadSkills(ctx, p.BotID)
 		if skillErr != nil {
-			s.logger.Warn("failed to load skills", slog.String("bot_id", p.BotID), slog.Any("error", skillErr))
+			s.logger.WarnContext(ctx, "failed to load skills", slog.String("bot_id", p.BotID), slog.Any("error", skillErr))
 		} else {
 			for _, e := range entries {
 				if skill, ok := normalizeGatewaySkill(e); ok {
@@ -988,6 +1001,7 @@ func (s *Service) buildBaseRunConfig(ctx context.Context, p baseRunConfigParams)
 		CurrentModelUUID:         chatModel.ID,
 		CurrentModelID:           chatModel.ModelID,
 		CurrentModelProvider:     provider.Name,
+		CurrentModelProviderID:   chatModel.ProviderID,
 		ReasoningConfig:          reasoningConfig,
 		ReasoningStoredEffort:    strings.TrimSpace(botSettings.ReasoningEffort),
 		ReasoningRequestedEffort: strings.TrimSpace(p.ReasoningEffort),
@@ -997,6 +1011,7 @@ func (s *Service) buildBaseRunConfig(ctx context.Context, p baseRunConfigParams)
 		SupportsImageInput:       supportsImageInputForModel(chatModel),
 		SupportsFileInput:        supportsFileInputForModel(chatModel),
 		SupportsToolCall:         chatModel.HasCompatibility(models.CompatToolCall),
+		ModelMaxOutputTokens:     chatModel.Config.MaxOutputTokensLimit(),
 		Identity: native.SessionContext{
 			BotID:             p.BotID,
 			ChatID:            chatID,
@@ -1105,27 +1120,26 @@ func resolveReasoningConfig(chatModel models.GetResponse, botSettings settings.S
 		chatModel.ReasoningOptions(clientType),
 		stored,
 		requestedEffort,
-		clientType,
 	)
 }
 
-func (s *Service) buildToolApprovalHandler(p baseRunConfigParams) func(context.Context, sdk.ToolCall) (sdk.ToolApprovalResult, error) {
-	return func(ctx context.Context, call sdk.ToolCall) (sdk.ToolApprovalResult, error) {
+func (s *Service) buildToolApprovalHandler(p baseRunConfigParams) func(context.Context, sdk.ToolCall) (toolexec.ToolApprovalResult, error) {
+	return func(ctx context.Context, call sdk.ToolCall) (toolexec.ToolApprovalResult, error) {
 		if strings.TrimSpace(call.ToolName) == userinput.ToolNameAskUser {
-			if err := userinput.ValidateAskUserInput(call.Input); err != nil {
+			if err := userinput.ValidateAskUserInput(toolexec.ArgumentsValue(call.Input)); err != nil {
 				// Let the tool's Execute handler return an instructional tool result
 				// to the model instead of creating a fake pending request.
-				return sdk.ToolApprovalResult{Decision: sdk.ToolApprovalDecisionApproved}, nil
+				return toolexec.ToolApprovalResult{Decision: toolexec.ToolApprovalDecisionApproved}, nil
 			}
 			if s.userInput == nil {
-				return s.limitToolApprovalResult(sdk.ToolApprovalResult{
-					Decision: sdk.ToolApprovalDecisionRejected,
+				return s.limitToolApprovalResult(toolexec.ToolApprovalResult{
+					Decision: toolexec.ToolApprovalDecisionRejected,
 					Reason:   "user input service is not configured",
 				}, call.ToolName), nil
 			}
 			if !isInteractiveApprovalSession(p.SessionType) {
-				return s.limitToolApprovalResult(sdk.ToolApprovalResult{
-					Decision: sdk.ToolApprovalDecisionRejected,
+				return s.limitToolApprovalResult(toolexec.ToolApprovalResult{
+					Decision: toolexec.ToolApprovalDecisionRejected,
 					Reason:   "user input requested in a non-interactive session",
 				}, call.ToolName), nil
 			}
@@ -1140,25 +1154,25 @@ func (s *Service) buildToolApprovalHandler(p baseRunConfigParams) func(context.C
 				RequestedByChannelIdentityID: p.ChannelIdentityID,
 				ToolCallID:                   call.ToolCallID,
 				ToolName:                     call.ToolName,
-				Input:                        call.Input,
+				Input:                        toolexec.ArgumentsValue(call.Input),
 				SourcePlatform:               p.CurrentPlatform,
 				ReplyTarget:                  p.ReplyTarget,
 				ConversationType:             p.ConversationType,
 				WorkspaceTargetID:            workspace.WorkspaceTargetFromContext(ctx),
 			})
 			if err != nil {
-				return sdk.ToolApprovalResult{}, err
+				return toolexec.ToolApprovalResult{}, err
 			}
 			if req.Status != userinput.StatusPending {
-				return s.limitToolApprovalResult(sdk.ToolApprovalResult{
-					Decision:   sdk.ToolApprovalDecisionRejected,
+				return s.limitToolApprovalResult(toolexec.ToolApprovalResult{
+					Decision:   toolexec.ToolApprovalDecisionRejected,
 					ApprovalID: req.ID,
 					Reason:     "ask_user request is already " + req.Status,
 					Metadata:   userinput.DeferredMetadata(req),
 				}, call.ToolName), nil
 			}
-			return sdk.ToolApprovalResult{
-				Decision:   sdk.ToolApprovalDecisionDeferred,
+			return toolexec.ToolApprovalResult{
+				Decision:   toolexec.ToolApprovalDecisionDeferred,
 				ApprovalID: req.ID,
 				Metadata:   userinput.DeferredMetadata(req),
 			}, nil
@@ -1171,7 +1185,7 @@ func (s *Service) buildToolApprovalHandler(p baseRunConfigParams) func(context.C
 			RequestedByChannelIdentityID: p.ChannelIdentityID,
 			ToolCallID:                   call.ToolCallID,
 			ToolName:                     call.ToolName,
-			ToolInput:                    call.Input,
+			ToolInput:                    toolexec.ArgumentsValue(call.Input),
 			SourcePlatform:               p.CurrentPlatform,
 			ReplyTarget:                  p.ReplyTarget,
 			ConversationType:             p.ConversationType,
@@ -1181,18 +1195,18 @@ func (s *Service) buildToolApprovalHandler(p baseRunConfigParams) func(context.C
 		forcedApprovalReason, forcedApproval := native.HookForcedApprovalReason(ctx)
 		if s.toolApproval == nil {
 			if forcedApproval {
-				return s.limitToolApprovalResult(sdk.ToolApprovalResult{
-					Decision: sdk.ToolApprovalDecisionRejected,
+				return s.limitToolApprovalResult(toolexec.ToolApprovalResult{
+					Decision: toolexec.ToolApprovalDecisionRejected,
 					Reason:   firstNonEmpty(forcedApprovalReason, "hook requested approval but tool approval is not configured"),
 				}, call.ToolName), nil
 			}
-			return sdk.ToolApprovalResult{Decision: sdk.ToolApprovalDecisionApproved}, nil
+			return toolexec.ToolApprovalResult{Decision: toolexec.ToolApprovalDecisionApproved}, nil
 		}
 		eval, err := s.toolApproval.EvaluatePolicy(ctx, input)
 		if err != nil {
 			if input.WorkspaceTargeted && errors.Is(err, workspace.ErrWorkspaceTargetNotFound) {
 				requestedTargetID := ""
-				if args, ok := call.Input.(map[string]any); ok {
+				if args, ok := toolexec.ArgumentsValue(call.Input).(map[string]any); ok {
 					requestedTargetID = strings.TrimSpace(readAnyString(args["target_id"]))
 				}
 				if s.logger != nil {
@@ -1207,37 +1221,48 @@ func (s *Service) buildToolApprovalHandler(p baseRunConfigParams) func(context.C
 				// A missing target is invalid model input, so let the tool execute
 				// and return its normal, instructional error instead. This is safe
 				// only for not-found targets: they cannot execute or bypass policy.
-				return sdk.ToolApprovalResult{Decision: sdk.ToolApprovalDecisionApproved}, nil
+				return toolexec.ToolApprovalResult{Decision: toolexec.ToolApprovalDecisionApproved}, nil
 			}
-			return sdk.ToolApprovalResult{}, err
+			return toolexec.ToolApprovalResult{}, err
 		}
 		input.ExecutionLocation = eval.ExecutionLocation
 		locationMetadata := executionLocationResultMetadata(eval.ExecutionLocation)
+		// The policy resolved the workspace target and pinned it on the
+		// argument map it evaluated. The executor takes these arguments for
+		// the call, so the tool runs where the policy looked and the persisted
+		// call names that target (call.Input is a copy the handler cannot
+		// mutate).
+		var approvedInput *sdk.ToolArguments
+		if input.WorkspaceTargeted {
+			rewritten := toolexec.ArgumentsFromValue(input.ToolInput)
+			approvedInput = &rewritten
+		}
 		if eval.Decision == toolapproval.DecisionDeny {
-			return s.limitToolApprovalResult(sdk.ToolApprovalResult{
-				Decision: sdk.ToolApprovalDecisionRejected,
+			return s.limitToolApprovalResult(toolexec.ToolApprovalResult{
+				Decision: toolexec.ToolApprovalDecisionRejected,
 				Reason:   toolapproval.PolicyDeniedReason,
 				Metadata: locationMetadata,
 			}, call.ToolName), nil
 		}
 		if eval.Decision == toolapproval.DecisionBypass && !forcedApproval {
-			return sdk.ToolApprovalResult{
-				Decision: sdk.ToolApprovalDecisionApproved,
+			return toolexec.ToolApprovalResult{
+				Decision: toolexec.ToolApprovalDecisionApproved,
 				Metadata: locationMetadata,
+				Input:    approvedInput,
 			}, nil
 		}
 		if !isInteractiveApprovalSession(p.SessionType) {
 			req, err := s.toolApproval.CreatePending(ctx, input)
 			if err != nil {
-				return sdk.ToolApprovalResult{}, err
+				return toolexec.ToolApprovalResult{}, err
 			}
 			reason := "tool execution requires approval, but this session type cannot request approval"
 			rejected, err := s.toolApproval.Reject(ctx, req.ID, p.ChannelIdentityID, reason)
 			if err != nil {
-				return sdk.ToolApprovalResult{}, err
+				return toolexec.ToolApprovalResult{}, err
 			}
-			return s.limitToolApprovalResult(sdk.ToolApprovalResult{
-				Decision:   sdk.ToolApprovalDecisionRejected,
+			return s.limitToolApprovalResult(toolexec.ToolApprovalResult{
+				Decision:   toolexec.ToolApprovalDecisionRejected,
 				ApprovalID: rejected.ID,
 				Reason:     reason,
 				Metadata:   approvalResultMetadata(rejected),
@@ -1245,17 +1270,21 @@ func (s *Service) buildToolApprovalHandler(p baseRunConfigParams) func(context.C
 		}
 		req, err := s.toolApproval.CreatePending(ctx, input)
 		if err != nil {
-			return sdk.ToolApprovalResult{}, err
+			return toolexec.ToolApprovalResult{}, err
 		}
-		return sdk.ToolApprovalResult{
-			Decision:   sdk.ToolApprovalDecisionDeferred,
+		return toolexec.ToolApprovalResult{
+			Decision:   toolexec.ToolApprovalDecisionDeferred,
 			ApprovalID: req.ID,
 			Metadata:   approvalResultMetadata(req),
+			Input:      approvedInput,
 		}, nil
 	}
 }
 
 func isWorkspaceTargetTool(toolName string) bool {
+	if toolName == "mcp_manage" || toolName == "app_manage" {
+		return false
+	}
 	_, ok := toolapproval.OperationForTool(toolName)
 	return ok
 }
@@ -1297,7 +1326,7 @@ func (s *Service) resolveRunConfigSessionDescriptor(ctx context.Context, session
 	sess, err := s.sessionService.Get(ctx, sessionID)
 	if err != nil {
 		if s.logger != nil {
-			s.logger.Warn("ResolveRunConfig: session lookup failed; falling back to chat session type",
+			s.logger.WarnContext(ctx, "ResolveRunConfig: session lookup failed; falling back to chat session type",
 				slog.String("session_id", sessionID),
 				slog.Any("error", err),
 			)
@@ -1420,6 +1449,7 @@ func (s *Service) prepareRunConfig(ctx context.Context, cfg native.RunConfig) na
 			nowFn = func() time.Time { return time.Now().In(cfg.Identity.TimezoneLocation) }
 		}
 		fs := native.NewFSClient(s.agent.BridgeProvider(), cfg.Identity.BotID, nowFn)
+		s.refreshMemoryOverview(ctx, cfg.Identity.BotID, cfg.Identity.SessionID, cfg.SessionType, cfg.PromptCacheTTL)
 		files = fs.LoadSystemFiles(ctx)
 	}
 
@@ -1428,7 +1458,7 @@ func (s *Service) prepareRunConfig(ctx context.Context, cfg native.RunConfig) na
 	if s.platformIdentities != nil {
 		identities, err := s.platformIdentities.ListPlatformIdentities(ctx, cfg.Identity.BotID)
 		if err != nil {
-			s.logger.Warn("load bot platform identities failed",
+			s.logger.WarnContext(ctx, "load bot platform identities failed",
 				slog.String("bot_id", cfg.Identity.BotID),
 				slog.Any("error", err),
 			)
@@ -1486,7 +1516,7 @@ func (s *Service) prepareRunConfig(ctx context.Context, cfg native.RunConfig) na
 	} else if len(cfg.InlineImages) > 0 || len(cfg.InlineAttachments) > 0 {
 		// Pipeline path: the user query is already embedded in the RC messages,
 		// but media parts are not rendered by the pipeline renderer. Inject the
-		// inline media into the last user message so the model receives them.
+		// inline media into the identified current input.
 		imageParts := make([]sdk.MessagePart, 0, len(cfg.InlineImages)+len(cfg.InlineAttachments))
 		for _, img := range cfg.InlineImages {
 			if strings.TrimSpace(img.Image) != "" {
@@ -1500,18 +1530,13 @@ func (s *Service) prepareRunConfig(ctx context.Context, cfg native.RunConfig) na
 				cfg.ContextCurrentUserMessageIndex,
 				cfg.ContextMemoryMessageIndex,
 			)
-			injected := false
-			for i := len(cfg.Messages) - 1; i >= 0; i-- {
-				if cfg.Messages[i].Role == sdk.MessageRoleUser {
-					cfg.Messages[i].Content = append(cfg.Messages[i].Content, imageParts...)
-					if i < len(cfg.ForkContextSourceMessageIDs) {
-						cfg.ForkContextSourceMessageIDs[i] = ""
-					}
-					injected = true
-					break
+			if currentIndex != nil {
+				i := *currentIndex
+				cfg.Messages[i].Content = append(cfg.Messages[i].Content, imageParts...)
+				if i < len(cfg.ForkContextSourceMessageIDs) {
+					cfg.ForkContextSourceMessageIDs[i] = ""
 				}
-			}
-			if !injected {
+			} else {
 				cfg.Messages = append(cfg.Messages, sdk.UserMessage("", imageParts...))
 				cfg.ForkContextSourceMessageIDs = append(cfg.ForkContextSourceMessageIDs, "")
 				index := len(cfg.Messages) - 1
@@ -1538,16 +1563,10 @@ func (s *Service) prepareRunConfig(ctx context.Context, cfg native.RunConfig) na
 
 func normalizeContextMessages(messages []ModelMessage, currentIndex, memoryIndex *int) ([]ModelMessage, *int, *int) {
 	cleaned := sanitizeMessages(messages)
-	stripTools := len(cleaned) > 10
-	if stripTools {
-		// Tool outputs are large and waste tokens; the LLM doesn't need raw
-		// tool results when summaries and memory tools are available for lookup.
-		cleaned = stripToolMessages(cleaned)
-	}
 	cleaned = repairToolCallClosures(cleaned, syntheticToolClosureError)
 	return cleaned,
-		remapContextMessageIndex(messages, currentIndex, stripTools),
-		remapContextMessageIndex(messages, memoryIndex, stripTools)
+		remapContextMessageIndex(messages, currentIndex),
+		remapContextMessageIndex(messages, memoryIndex)
 }
 
 func prependContextMessages(prefix, messages []ModelMessage, trackedIndex *int) ([]ModelMessage, *int) {
@@ -1569,23 +1588,16 @@ func normalizedContextPrefixLength(messages []ModelMessage, rawPrefixLength int)
 		return 0
 	}
 	rawPrefixLength = min(rawPrefixLength, len(messages))
-	stripTools := len(sanitizeMessages(messages)) > 10
 	prefix := sanitizeMessages(messages[:rawPrefixLength])
-	if stripTools {
-		prefix = stripToolMessages(prefix)
-	}
 	prefix = repairToolCallClosures(prefix, syntheticToolClosureError)
 	return len(prefix)
 }
 
-func remapContextMessageIndex(messages []ModelMessage, index *int, stripTools bool) *int {
+func remapContextMessageIndex(messages []ModelMessage, index *int) *int {
 	if index == nil || *index < 0 || *index >= len(messages) || !strings.EqualFold(strings.TrimSpace(messages[*index].Role), "user") {
 		return nil
 	}
 	prefix := sanitizeMessages(messages[:*index+1])
-	if stripTools {
-		prefix = stripToolMessages(prefix)
-	}
 	prefix = repairToolCallClosures(prefix, syntheticToolClosureError)
 	if len(prefix) == 0 || !strings.EqualFold(strings.TrimSpace(prefix[len(prefix)-1].Role), "user") {
 		return nil
@@ -1594,6 +1606,18 @@ func remapContextMessageIndex(messages []ModelMessage, index *int, stripTools bo
 }
 
 func latestModelUserMessageIndex(messages []ModelMessage) *int {
+	known := false
+	for i, message := range messages {
+		if message.ContextSource != nil {
+			known = true
+			if message.ContextSource.Current {
+				return intPointer(i)
+			}
+		}
+	}
+	if known {
+		return nil
+	}
 	for i := len(messages) - 1; i >= 0; i-- {
 		if strings.EqualFold(strings.TrimSpace(messages[i].Role), "user") {
 			return intPointer(i)
@@ -1848,10 +1872,18 @@ func extractNativeImageParts(attachments []any) []sdk.ImagePart {
 		if payload == "" {
 			continue
 		}
-		parts = append(parts, sdk.ImagePart{
-			Image:     payload,
-			MediaType: strings.TrimSpace(ga.Mime),
-		})
+		// An animated attachment carries every rendered frame; anything else
+		// is its single payload.
+		images := ga.Frames
+		if len(images) == 0 {
+			images = []string{payload}
+		}
+		for _, image := range images {
+			parts = append(parts, sdk.ImagePart{
+				Image:     image,
+				MediaType: strings.TrimSpace(ga.Mime),
+			})
+		}
 	}
 	return parts
 }

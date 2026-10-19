@@ -7,21 +7,19 @@
             :model-value="language"
             @update:model-value="(value) => value && setLanguage(value as Locale)"
           >
-            <SelectTrigger size="sm">
+            <SelectTrigger>
               <SelectValue :placeholder="t('settings.languagePlaceholder')" />
             </SelectTrigger>
             <SelectContent
               align="end"
               :align-offset="0"
             >
-              <SelectItem value="en">
-                {{ t('settings.langEn') }}
-              </SelectItem>
-              <SelectItem value="zh">
-                {{ t('settings.langZh') }}
-              </SelectItem>
-              <SelectItem value="ja">
-                {{ t('settings.langJa') }}
+              <SelectItem
+                v-for="option in LOCALE_OPTIONS"
+                :key="option.value"
+                :value="option.value"
+              >
+                {{ option.label }}
               </SelectItem>
             </SelectContent>
           </Select>
@@ -49,7 +47,6 @@
             @update:model-value="(value) => value && setColorScheme(value as ColorSchemeId)"
           >
             <SelectTrigger
-              size="sm"
               class="min-w-36"
             >
               <span class="flex min-w-0 items-center gap-1.5">
@@ -95,19 +92,19 @@
           :label="t('settings.appearance.uiFontSize')"
           :description="t('settings.appearance.uiFontSizeDescription')"
         >
-          <Input
+          <!-- NumberField emits only on commit (blur/Enter/stepper); reka
+               clamps to min/max first. An emptied field commits undefined,
+               which the setters normalize back to the default size. -->
+          <NumberField
             id="ui-font-size"
-            type="number"
-            min="12"
-            max="20"
-            step="1"
-            :model-value="uiFontSizeDraft"
+            :model-value="uiFontSizePx"
+            :min="12"
+            :max="20"
+            :step="1"
             :placeholder="String(DEFAULT_UI_FONT_SIZE_PX)"
-            class="h-8 w-20 tabular-nums"
-            @update:model-value="(value) => updateUiFontSizeDraft(value)"
-            @change="commitUiFontSizeDraft"
-            @blur="commitUiFontSizeDraft"
-            @keydown.enter="commitUiFontSizeDraft"
+            disable-wheel-change
+            class="w-32"
+            @update:model-value="(value) => setUiFontSizePx(value ?? '')"
           />
         </SettingsRow>
 
@@ -115,19 +112,16 @@
           :label="t('settings.appearance.codeFontSize')"
           :description="t('settings.appearance.codeFontSizeDescription')"
         >
-          <Input
+          <NumberField
             id="code-font-size"
-            type="number"
-            min="11"
-            max="20"
-            step="1"
-            :model-value="codeFontSizeDraft"
+            :model-value="codeFontSizePx"
+            :min="11"
+            :max="20"
+            :step="1"
             :placeholder="String(DEFAULT_CODE_FONT_SIZE_PX)"
-            class="h-8 w-20 tabular-nums"
-            @update:model-value="(value) => updateCodeFontSizeDraft(value)"
-            @change="commitCodeFontSizeDraft"
-            @blur="commitCodeFontSizeDraft"
-            @keydown.enter="commitCodeFontSizeDraft"
+            disable-wheel-change
+            class="w-32"
+            @update:model-value="(value) => setCodeFontSizePx(value ?? '')"
           />
         </SettingsRow>
 
@@ -139,7 +133,7 @@
             id="ui-font-family"
             :model-value="uiFontFamilyDraft"
             :placeholder="defaultUiFontFamily"
-            class="h-8 w-48 font-mono text-xs"
+            class="w-48 font-mono"
             @update:model-value="(value) => updateUiFontFamilyDraft(value)"
             @change="commitUiFontFamilyDraft"
             @blur="commitUiFontFamilyDraft"
@@ -155,7 +149,7 @@
             id="code-font-family"
             :model-value="codeFontFamilyDraft"
             :placeholder="defaultCodeFontFamily"
-            class="h-8 w-48 font-mono text-xs"
+            class="w-48 font-mono"
             @update:model-value="(value) => updateCodeFontFamilyDraft(value)"
             @change="commitCodeFontFamilyDraft"
             @blur="commitCodeFontFamilyDraft"
@@ -170,10 +164,10 @@
            sub-level (sub-pages are reserved for entities like a Provider); a
            dialog keeps the page visibly underneath, so "where am I" never
            arises and no back-button chrome is needed. -->
-      <section class="space-y-2.5">
-        <h2 class="px-2 text-label font-medium text-muted-foreground">
-          {{ t('settings.appearance.advanced') }}
-        </h2>
+      <SectionGroup
+        :title="t('settings.appearance.advanced')"
+        tone="muted"
+      >
         <ActionCard
           :title="t('settings.appearance.advancedEntryTitle')"
           @click="advancedOpen = true"
@@ -182,7 +176,7 @@
             <SlidersHorizontal />
           </template>
         </ActionCard>
-      </section>
+      </SectionGroup>
     </div>
   </PageShell>
 
@@ -275,7 +269,6 @@
                 @update:model-value="(value) => isMermaidTheme(value) && setMermaidTheme(value)"
               >
                 <SelectTrigger
-                  size="sm"
                   class="min-w-36"
                 >
                   <SelectValue>
@@ -356,6 +349,7 @@ import {
   DialogPanel,
   DialogTitle,
   Input,
+  NumberField,
   SegmentedControl,
   type SegmentedItem,
   Select,
@@ -369,9 +363,9 @@ import { storeToRefs } from 'pinia'
 import { computed, onMounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import MarkdownRender, { enableMermaid, setCustomComponents } from 'markstream-vue'
-import { PageShell, SettingsRow, SettingsSection } from '@felinic/ui'
+import { PageShell, SettingsRow, SettingsSection, SectionGroup } from '@felinic/ui'
 import { useShikiHighlighter } from '@/composables/useShikiHighlighter'
-import type { Locale } from '@/i18n'
+import { LOCALE_OPTIONS, type Locale } from '@/i18n'
 import type { BundledTheme } from 'shiki'
 import SearchableSelectPopover from '@/components/searchable-select-popover/index.vue'
 import type { SearchableSelectOption } from '@/components/searchable-select-popover/index.vue'
@@ -380,7 +374,7 @@ import { colorSchemes, type ColorSchemeId, type ColorSchemeOption } from '@/cons
 import { MERMAID_THEMES, type MermaidTheme, useSettingsStore, type ThemePreference } from '@/store/settings'
 import { isMermaidTheme } from '@/store/settings/mermaid'
 import { listBundledShikiThemes } from '@/store/settings/shiki-theme'
-import { cssCodeFontFamilyStyleValue, DEFAULT_CODE_FONT_SIZE_PX, DEFAULT_UI_FONT_SIZE_PX, normalizeCodeFontSizePx } from '@/store/settings/typography'
+import { cssCodeFontFamilyStyleValue, DEFAULT_CODE_FONT_SIZE_PX, DEFAULT_UI_FONT_SIZE_PX } from '@/store/settings/typography'
 
 enableMermaid()
 setCustomComponents({ mermaid: ThemedMermaidBlock })
@@ -472,8 +466,6 @@ const themeIcons: Record<ThemePreference, Component> = {
   dark: Moon,
 }
 
-const uiFontSizeDraft = ref(String(uiFontSizePx.value))
-const codeFontSizeDraft = ref(String(codeFontSizePx.value))
 const uiFontFamilyDraft = ref(uiFontFamily.value)
 const codeFontFamilyDraft = ref(codeFontFamily.value)
 // Each variant renders in its own highlighter against its picked theme, so
@@ -489,7 +481,7 @@ const codeFontPreviewLightHtml = computed(() => codeFontPreviewLight.html.value 
 const codeFontPreviewDarkHtml = computed(() => codeFontPreviewDark.html.value || codeFontPreviewFallback)
 const codeFontPreviewStyle = computed(() => ({
   '--typography-code-preview-font-family': cssCodeFontFamilyStyleValue(codeFontFamilyDraft.value),
-  '--typography-code-preview-font-size': `${normalizeCodeFontSizePx(codeFontSizeDraft.value)}px`,
+  '--typography-code-preview-font-size': `${codeFontSizePx.value}px`,
 }))
 
 function renderCodeFontPreview() {
@@ -512,36 +504,12 @@ onMounted(() => {
   renderCodeFontPreview()
 })
 
-watch(uiFontSizePx, (value) => { uiFontSizeDraft.value = String(value) })
-watch(codeFontSizePx, (value) => { codeFontSizeDraft.value = String(value) })
 watch(uiFontFamily, (value) => { uiFontFamilyDraft.value = value })
 watch(codeFontFamily, (value) => { codeFontFamilyDraft.value = value })
 watch([shikiThemeLight, shikiThemeDark], () => { renderCodeFontPreview() })
 
-function updateUiFontSizeDraft(value: string | number) { uiFontSizeDraft.value = String(value) }
-function updateCodeFontSizeDraft(value: string | number) { codeFontSizeDraft.value = String(value) }
 function updateUiFontFamilyDraft(value: string | number) { uiFontFamilyDraft.value = String(value) }
 function updateCodeFontFamilyDraft(value: string | number) { codeFontFamilyDraft.value = String(value) }
-
-function commitUiFontSizeDraft() {
-  const draft = uiFontSizeDraft.value.trim()
-  if (draft === '' || !Number.isFinite(Number(draft))) {
-    uiFontSizeDraft.value = String(uiFontSizePx.value)
-    return
-  }
-  setUiFontSizePx(draft)
-  uiFontSizeDraft.value = String(uiFontSizePx.value)
-}
-
-function commitCodeFontSizeDraft() {
-  const draft = codeFontSizeDraft.value.trim()
-  if (draft === '' || !Number.isFinite(Number(draft))) {
-    codeFontSizeDraft.value = String(codeFontSizePx.value)
-    return
-  }
-  setCodeFontSizePx(draft)
-  codeFontSizeDraft.value = String(codeFontSizePx.value)
-}
 
 function commitUiFontFamilyDraft() {
   setUiFontFamily(uiFontFamilyDraft.value)

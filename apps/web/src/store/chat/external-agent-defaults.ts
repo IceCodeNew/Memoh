@@ -1,6 +1,7 @@
+import { EXTERNAL_AGENT_DEFAULT_PROJECT_MODE, EXTERNAL_AGENT_DEFAULT_PROJECT_PATH } from '@/utils/external-agent'
+import { isAgentRuntimeType } from '../chat-list.utils'
 import type { Ref } from 'vue'
 import { getBotsByBotIdSettings } from '@memohai/sdk'
-import { ACP_DEFAULT_PROJECT_MODE, ACP_DEFAULT_PROJECT_PATH } from '@/utils/acp'
 import type { ExternalAgentSessionInput } from './types'
 
 interface ExternalAgentSettings {
@@ -68,25 +69,25 @@ export function createExternalAgentDefaults(deps: {
         deps.rememberDefault(bid, null)
         return null
       }
-      const runtime = settings?.chat_runtime ?? ''
-      const isDirect = runtime === 'codex' || runtime === 'claude-code'
-      if (runtime !== 'acp_agent' && !isDirect) {
+      const runtime = settings?.chat_runtime
+      if (!isAgentRuntimeType(runtime)) {
         deps.rememberDefault(bid, null)
         return null
       }
+      const isDirect = runtime !== 'acp_agent'
       const agentId = isDirect ? runtime : (settings?.chat_acp_agent_id?.trim() ?? '')
       if (!agentId) {
         deps.rememberDefault(bid, null)
         return null
       }
       const input: ExternalAgentSessionInput = {
-        runtime: runtime === 'codex' || runtime === 'claude-code' ? runtime : 'acp',
+        runtime: isDirect ? runtime : 'acp',
         botAgentId: settings.default_bot_agent_id?.trim() || undefined,
         agentId,
         projectPath: settings.chat_acp_project_path?.trim()
-          || ACP_DEFAULT_PROJECT_PATH,
+          || EXTERNAL_AGENT_DEFAULT_PROJECT_PATH,
         projectMode: settings.chat_acp_project_mode?.trim()
-          || ACP_DEFAULT_PROJECT_MODE,
+          || EXTERNAL_AGENT_DEFAULT_PROJECT_MODE,
       }
       deps.rememberDefault(bid, input)
       return input

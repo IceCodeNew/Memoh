@@ -17,6 +17,8 @@ const (
 	UIMessageTool        UIMessageType = "tool"
 	UIMessageAttachments UIMessageType = "attachments"
 	UIMessageError       UIMessageType = "error"
+	UIMessageCommand     UIMessageType = "command"
+	UIMessageStatus      UIMessageType = "status"
 	// UIMessageNotice is an inline runtime degradation notice (tools
 	// unavailable, an interaction declined). Name carries the machine code,
 	// Content the human-readable text.
@@ -56,25 +58,33 @@ type UIForwardRef struct {
 
 // UIMessage is the normalized assistant output block used by the web frontend.
 type UIMessage struct {
-	ID                int                  `json:"id"`
-	Type              UIMessageType        `json:"type"`
-	Content           string               `json:"content,omitempty"`
-	Name              string               `json:"name,omitempty"`
-	Input             any                  `json:"input,omitempty"`
-	Output            any                  `json:"output,omitempty"`
-	ToolCallID        string               `json:"tool_call_id,omitempty"`
-	Running           *bool                `json:"running,omitempty"`
-	Progress          []any                `json:"progress,omitempty"`
-	Approval          *UIToolApproval      `json:"approval,omitempty"`
-	ExecutionLocation *UIExecutionLocation `json:"execution_location,omitempty"`
-	UserInput         *UIUserInput         `json:"user_input,omitempty"`
-	Attachments       []UIAttachment       `json:"attachments,omitempty"`
-	Background        *UIBackgroundTask    `json:"background_task,omitempty"`
-	ReasoningTiming   *UIReasoningTiming   `json:"reasoning_timing,omitempty"`
-	Code              string               `json:"code,omitempty"`
-	// Args are the machine-readable parameters of a notice block: the string
-	// values of the runtime_notice event metadata (dep_id and install_task_id
-	// for a workspace dependency notice, for instance). The client renders
+	ID                 int                  `json:"id"`
+	Type               UIMessageType        `json:"type"`
+	Content            string               `json:"content,omitempty"`
+	Name               string               `json:"name,omitempty"`
+	Input              any                  `json:"input,omitempty"`
+	Output             any                  `json:"output,omitempty"`
+	ToolCallID         string               `json:"tool_call_id,omitempty"`
+	Running            *bool                `json:"running,omitempty"`
+	Progress           []any                `json:"progress,omitempty"`
+	ElapsedTimeSeconds *float64             `json:"elapsed_time_seconds,omitempty"`
+	Approval           *UIToolApproval      `json:"approval,omitempty"`
+	ExecutionLocation  *UIExecutionLocation `json:"execution_location,omitempty"`
+	// Diff is a UI-only unified diff attached to the tool call at execution
+	// time (edit/write tools). It never reaches the model: rows persist it
+	// under the diffs metadata key — on the assistant row (lifted out of
+	// providerMetadata at store time) or, for the deferred-approval path, on
+	// the tool message row — never inside the tool result.
+	Diff            string             `json:"diff,omitempty"`
+	UserInput       *UIUserInput       `json:"user_input,omitempty"`
+	Attachments     []UIAttachment     `json:"attachments,omitempty"`
+	Background      *UIBackgroundTask  `json:"background_task,omitempty"`
+	ReasoningTiming *UIReasoningTiming `json:"reasoning_timing,omitempty"`
+	Code            string             `json:"code,omitempty"`
+	// Args are the machine-readable parameters of a notice or error block: the
+	// string values of the runtime_notice event metadata (dep_id and
+	// install_task_id for a workspace dependency notice, for instance), or the
+	// catalog args stored with a failure's code. The client renders text and
 	// actions from them instead of parsing Content.
 	Args map[string]string `json:"args,omitempty"`
 } // @name conversation.UIMessage
@@ -120,6 +130,10 @@ type UIUserInput struct {
 
 // UITurn is the normalized chat turn used by the web frontend.
 type UITurn struct {
+	// RuntimeForkable means this persisted turn has a runtime fork anchor.
+	// Session-level runtime support and access permissions still apply.
+	RuntimeForkable bool `json:"runtime_forkable"`
+
 	TurnID string `json:"turn_id" validate:"required" format:"uuid"`
 	// TurnPosition is the immutable turn-level sequence reserved at admission.
 	// The frontend uses it to order turns and reconcile the settled list

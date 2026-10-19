@@ -8,10 +8,13 @@ import (
 
 	sdk "github.com/felinics/twilight/sdk"
 
+	"github.com/felinics/memoh/internal/agent/decision"
 	userinput "github.com/felinics/memoh/internal/agent/decision/input"
 	sessionruntime "github.com/felinics/memoh/internal/agent/runtime/session"
+	"github.com/felinics/memoh/internal/agent/toolexec"
 	"github.com/felinics/memoh/internal/bots"
 	sessionpkg "github.com/felinics/memoh/internal/chat/thread"
+	"github.com/felinics/memoh/internal/i18n"
 	"github.com/felinics/memoh/internal/workspace"
 )
 
@@ -19,6 +22,7 @@ import (
 // on, kept as an interface so the respond/resume routing can be tested with
 // fakes.
 type userInputService interface {
+	Get(ctx context.Context, requestID string) (userinput.Request, error)
 	CreatePending(ctx context.Context, input userinput.CreatePendingInput) (userinput.Request, error)
 	ResolveTarget(ctx context.Context, input userinput.ResolveInput) (userinput.Request, error)
 	AdvanceText(ctx context.Context, input userinput.AdvanceTextInput) (userinput.AdvanceTextResult, error)
@@ -44,6 +48,7 @@ type UserInputResponseInput struct {
 	ExplicitID                 string
 	ReplyExternalMessageID     string
 	Answers                    []userinput.QuestionAnswer
+	UILanguage                 string
 	TextAnswer                 string
 	Canceled                   bool
 	Reason                     string
@@ -109,6 +114,9 @@ func (s *Service) CommitUserInputResponse(ctx context.Context, input UserInputRe
 		}
 		return CommittedUserInputResponse{request: target, input: input, isExternalAgent: true, ackOnly: true}, nil
 	}
+	if !isProcessLocalExternalAgent {
+		ctx = decision.WithNativeContinuation(ctx)
+	}
 	var activePrompt *externalAgentActivePromptSubscription
 	if isProcessLocalExternalAgent && !input.SuppressActivePromptAttach {
 		activePrompt, _ = s.subscribeExternalAgentActivePrompt(
@@ -127,7 +135,7 @@ func (s *Service) CommitUserInputResponse(ctx context.Context, input UserInputRe
 	} else {
 		answers := input.Answers
 		if len(answers) == 0 && strings.TrimSpace(input.TextAnswer) != "" {
-			answers, err = userInputAnswersFromText(target.UIPayload, input.TextAnswer)
+			answers, err = userInputAnswersFromText(target.UIPayload.Localized(i18n.New(input.UILanguage)), input.TextAnswer)
 			if err != nil {
 				if activePrompt != nil {
 					activePrompt.release()
@@ -193,7 +201,7 @@ func (s *Service) continueCommittedUserInputResponse(
 	toolResult := sdk.ToolResultPart{
 		ToolCallID: resolved.ToolCallID,
 		ToolName:   resolved.ToolName,
-		Result:     s.limitToolResultValue(resolved.Result, resolved.ToolName),
+		Result:     toolexec.OutputFromValue(s.limitToolResultValue(resolved.Result, resolved.ToolName)),
 		IsError:    false,
 	}
 	if s.continueUserInputFn != nil {
@@ -349,6 +357,10 @@ func (s *Service) storeUserInputResultAndContinue(
 	if err != nil {
 		return err
 	}
+	requestMessageID, err := s.continuationTurnRequestMessageID(ctx, req.SessionID, runHandle)
+	if err != nil {
+		return err
+	}
 	modelMessages := sdkMessagesToModelMessages([]sdk.Message{sdk.ToolMessage(result)})
 	storeReq := ChatRequest{
 		RunID:                   runID,
@@ -360,9 +372,10 @@ func (s *Service) storeUserInputResultAndContinue(
 		ReplyTarget:             req.ReplyTarget,
 		ConversationType:        req.ConversationType,
 		UserMessagePersisted:    true,
+		PersistedUserMessageID:  requestMessageID,
 		// This write contains only the ask_user tool result. There is no new
-		// user history message to extract, so memory work must not attempt to
-		// resolve an empty PersistedUserMessageID.
+		// user history message to extract, so memory work must not schedule a
+		// second user-message extraction.
 		SkipMemoryExtraction: true,
 		WorkspaceTargetID:    req.WorkspaceTargetID,
 		WorkspaceTarget:      target,
@@ -397,6 +410,10 @@ func (s *Service) continueUserInputSession(
 		return err
 	}
 	resolved.RunConfig.RunID = runIDForChatRequest(runID)
+	requestMessageID, err := s.continuationTurnRequestMessageID(ctx, req.SessionID, runHandle)
+	if err != nil {
+		return err
+	}
 
 	cfg, err := s.prepareContinuationRunConfig(
 		ctx,
@@ -420,9 +437,10 @@ func (s *Service) continueUserInputSession(
 		ReplyTarget:             req.ReplyTarget,
 		ConversationType:        req.ConversationType,
 		UserMessagePersisted:    true,
+		PersistedUserMessageID:  requestMessageID,
 		// The user's answer is already represented by the persisted tool
 		// result above; the resumed invocation must not schedule a second
-		// user-message memory extraction with an empty message id.
+		// user-message memory extraction.
 		SkipMemoryExtraction: true,
 		WorkspaceTargetID:    req.WorkspaceTargetID,
 		WorkspaceTarget:      workspaceTargetFromRunConfig(resolved.RunConfig),

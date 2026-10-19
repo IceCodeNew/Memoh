@@ -15,6 +15,7 @@ import (
 	messageevent "github.com/felinics/memoh/internal/chat/event"
 	messagepkg "github.com/felinics/memoh/internal/chat/message"
 	session "github.com/felinics/memoh/internal/chat/thread"
+	"github.com/felinics/memoh/internal/httpx"
 )
 
 // sessionMessageStreamBuffer sizes the per-subscriber channel for the activity
@@ -30,24 +31,24 @@ const sseHeartbeatInterval = 20 * time.Second
 // @Summary Stream bot-wide sessions activity
 // @Description Lightweight SSE for sidebar live-sort. Carries only session
 // @Description identifiers and minimal metadata (touched timestamps, titles).
-// @Description Never includes message bodies. Filters out internal session
-// @Description types such as schedule and subagent.
+// @Description Never includes message bodies. Filters out sessions with
+// @Description internal visibility, such as managed subagent work.
 // @Tags messages
 // @Produce text/event-stream
 // @Param bot_id path string true "Bot ID"
 // @Success 200 {string} string "SSE stream"
-// @Failure 400 {object} ErrorResponse
-// @Failure 403 {object} ErrorResponse
-// @Failure 500 {object} ErrorResponse
+// @Failure 400 {object} server.Problem
+// @Failure 403 {object} server.Problem
+// @Failure 500 {object} server.Problem
 // @Router /bots/{bot_id}/sessions/events [get].
 func (h *MessageHandler) StreamSessionsActivityEvents(c echo.Context) error {
 	channelIdentityID, err := h.requireChannelIdentityID(c)
 	if err != nil {
 		return err
 	}
-	botID := strings.TrimSpace(c.Param("bot_id"))
-	if botID == "" {
-		return echo.NewHTTPError(http.StatusBadRequest, "bot id is required")
+	botID, err := httpx.RequiredParam(c, "bot_id")
+	if err != nil {
+		return err
 	}
 	bot, perms, err := h.authorizeBotMessageAccess(c, channelIdentityID, botID)
 	if err != nil {
@@ -71,6 +72,17 @@ func (h *MessageHandler) StreamSessionsActivityEvents(c echo.Context) error {
 	// propagate within one reconnect window.
 	sub, cancel := h.messageEvents.Subscribe(botID, sessionMessageStreamBuffer)
 	defer cancel()
+	// Declare coverage only when this handler can actually emit every
+	// invalidation source: admission events flow through the runtime observer,
+	// delete-history events flow through messagePublisher. A Subscriber that
+	// lacks Publish must not leave clients trusting deletions they never hear.
+	if err := writeSSEJSON(writer, flusher, map[string]any{
+		"type": "activity_ready", "cache_invalidation": h.activityInvalidationSupported && h.messagePublisher != nil,
+		// Older clients treat unknown types as session_created and read this id.
+		"session_id": "",
+	}); err != nil {
+		return nil
+	}
 
 	cache := newSessionCache(h.logger, h.sessionService)
 	// Subscribe before sampling: changes racing the snapshot remain queued.
@@ -127,6 +139,13 @@ func (h *MessageHandler) StreamSessionsActivityEvents(c echo.Context) error {
 			}
 
 			switch event.Type {
+			case messageevent.EventTypeSessionInvalidated:
+				activity := sessionInvalidationActivity(c.Request().Context(), channelIdentityID, botID, perms, cache, event.Data)
+				if activity != nil {
+					if err := writeSSEJSON(writer, flusher, activity); err != nil {
+						return nil
+					}
+				}
 			case messageevent.EventTypeCompactionChanged:
 				if err := writeCompaction(); err != nil {
 					return nil
@@ -134,7 +153,7 @@ func (h *MessageHandler) StreamSessionsActivityEvents(c echo.Context) error {
 			case messageevent.EventTypeMessageCreated:
 				var message messagepkg.Message
 				if err := json.Unmarshal(event.Data, &message); err != nil {
-					h.logger.Warn("activity stream: decode message_created event failed",
+					h.logger.WarnContext(c.Request().Context(), "activity stream: decode message_created event failed",
 						slog.String("bot_id", botID),
 						slog.Any("error", err),
 					)
@@ -149,7 +168,7 @@ func (h *MessageHandler) StreamSessionsActivityEvents(c echo.Context) error {
 			case messageevent.EventTypeSessionTitleUpdated:
 				var payload map[string]string
 				if err := json.Unmarshal(event.Data, &payload); err != nil {
-					h.logger.Warn("activity stream: decode session_title_updated event failed",
+					h.logger.WarnContext(c.Request().Context(), "activity stream: decode session_title_updated event failed",
 						slog.String("bot_id", botID),
 						slog.Any("error", err),
 					)
@@ -172,7 +191,7 @@ func (h *MessageHandler) StreamSessionsActivityEvents(c echo.Context) error {
 			case messageevent.EventTypeSessionCreated:
 				var payload map[string]any
 				if err := json.Unmarshal(event.Data, &payload); err != nil {
-					h.logger.Warn("activity stream: decode session_created event failed",
+					h.logger.WarnContext(c.Request().Context(), "activity stream: decode session_created event failed",
 						slog.String("bot_id", botID),
 						slog.Any("error", err),
 					)
@@ -181,10 +200,6 @@ func (h *MessageHandler) StreamSessionsActivityEvents(c echo.Context) error {
 				sessionID, _ := payload["session_id"].(string)
 				sessionID = strings.TrimSpace(sessionID)
 				if sessionID == "" {
-					continue
-				}
-				typ, _ := payload["type"].(string)
-				if !session.IsUserFacingType(typ) {
 					continue
 				}
 				if !canDeliverSessionActivity(c.Request().Context(), channelIdentityID, botID, perms, cache, sessionID) {
@@ -201,6 +216,28 @@ func (h *MessageHandler) StreamSessionsActivityEvents(c echo.Context) error {
 					out["created_at"] = createdAt
 				}
 				if err := writeSSEJSON(writer, flusher, out); err != nil {
+					return nil
+				}
+			case messageevent.EventTypeScheduleChanged:
+				var change messageevent.ScheduleChange
+				if err := json.Unmarshal(event.Data, &change); err != nil {
+					h.logger.WarnContext(c.Request().Context(), "activity stream: decode schedule_changed event failed",
+						slog.String("bot_id", botID),
+						slog.Any("error", err),
+					)
+					continue
+				}
+				scheduleID := strings.TrimSpace(change.ScheduleID)
+				if scheduleID == "" {
+					continue
+				}
+				if err := writeSSEJSON(writer, flusher, map[string]any{
+					"type":        "schedule_changed",
+					"schedule_id": scheduleID,
+					// Older clients treat unknown activity types as session-created
+					// notifications and trim session_id unconditionally.
+					"session_id": "",
+				}); err != nil {
 					return nil
 				}
 			}
@@ -223,6 +260,18 @@ func messageSessionActivity(message messagepkg.Message) map[string]any {
 	return activity
 }
 
+func sessionInvalidationActivity(ctx context.Context, userID, botID string, perms []string, cache *sessionCache, data json.RawMessage) map[string]any {
+	var invalidation messageevent.SessionInvalidation
+	if err := json.Unmarshal(data, &invalidation); err != nil {
+		return nil
+	}
+	sessionID := strings.TrimSpace(invalidation.SessionID)
+	if sessionID != "" && !canDeliverSessionActivity(ctx, userID, botID, perms, cache, sessionID) {
+		return nil
+	}
+	return map[string]any{"type": "session_invalidated", "session_id": sessionID}
+}
+
 func (h *MessageHandler) visibleCompactingSessions(ctx context.Context, userID, botID string, perms []string, cache *sessionCache) []string {
 	ids := make([]string, 0)
 	if h.compactionActivity != nil {
@@ -236,7 +285,7 @@ func (h *MessageHandler) visibleCompactingSessions(ctx context.Context, userID, 
 }
 
 // canDeliverSessionActivity returns true when the subscriber may see an
-// activity event for sessionID: the session must be a user-facing type AND
+// activity event for sessionID: the session must have user visibility AND
 // the subscriber must have read access to it. The session row is loaded
 // at most once per stream — both the user-facing and access checks read
 // from the cached value.
@@ -249,7 +298,7 @@ func canDeliverSessionActivity(ctx context.Context, channelIdentityID, botID str
 	if !ok {
 		return false
 	}
-	if !session.IsUserFacingType(sess.Type) {
+	if sess.Visibility != session.VisibilityUser {
 		return false
 	}
 	return canReadMessageSessionFromCache(sess, channelIdentityID, botID, perms)
@@ -291,13 +340,12 @@ func beginSSEResponse(c echo.Context) (io.Writer, http.Flusher, error) {
 
 // sessionCache memoizes the session row for the lifetime of one activity
 // stream. Without it every delivered event would issue two DB reads — one
-// for the user-facing-type check and one for the access check. Both checks
+// for the visibility check and one for the access check. Both checks
 // now read the same cached value, so the first event for a session pays a
 // single Get and subsequent events for that session are DB-free.
 //
 // Caching the full row is safe because the only mutable bit either check
-// reads is `Type`, which IsUserFacingType doesn't filter on for an already
-// admitted session, and CreatedByUserID, which is immutable.
+// reads is Visibility or CreatedByUserID, both immutable after creation.
 //
 // The cache is stream-local and consulted only from the single goroutine
 // that drives the SSE writer loop, so no synchronization is needed.
@@ -336,7 +384,7 @@ func (c *sessionCache) get(ctx context.Context, sessionID string) (session.Threa
 	}
 	sess, err := c.svc.Get(ctx, sessionID)
 	if err != nil {
-		c.logger.Warn("activity stream: load session failed",
+		c.logger.WarnContext(ctx, "activity stream: load session failed",
 			slog.String("session_id", sessionID),
 			slog.Any("error", err),
 		)

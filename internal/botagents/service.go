@@ -15,6 +15,7 @@ import (
 	acpprofile "github.com/felinics/memoh/internal/agent/runtime/acp/profile"
 	"github.com/felinics/memoh/internal/agent/runtime/claudecode/claudecfg"
 	"github.com/felinics/memoh/internal/agent/runtime/codex/codexcfg"
+	"github.com/felinics/memoh/internal/agent/runtime/grok/grokcfg"
 	"github.com/felinics/memoh/internal/agentcredential"
 	"github.com/felinics/memoh/internal/db"
 	"github.com/felinics/memoh/internal/db/postgres/sqlc"
@@ -31,8 +32,18 @@ var (
 	ErrUnavailable     = errors.New("bot agent is unavailable")
 	// ErrProviderDirectRuntime rejects new ACP agents for providers that now
 	// run as direct runtimes (migration 0144 retired the old built-in rows).
-	ErrProviderDirectRuntime = errors.New("this provider runs as a direct runtime; create the agent with runtime codex or claude-code")
+	ErrProviderDirectRuntime = errors.New("this provider runs as a direct runtime")
 )
+
+// ProviderDirectRuntimeError carries the direct runtime a rejected ACP
+// provider now runs as. It matches ErrProviderDirectRuntime.
+type ProviderDirectRuntimeError struct{ Runtime string }
+
+func (e *ProviderDirectRuntimeError) Error() string {
+	return ErrProviderDirectRuntime.Error() + ": " + e.Runtime
+}
+
+func (*ProviderDirectRuntimeError) Unwrap() error { return ErrProviderDirectRuntime }
 
 // directRuntimeForProvider maps former ACP providers to their direct runtime.
 func directRuntimeForProvider(provider string) (string, bool) {
@@ -40,6 +51,60 @@ func directRuntimeForProvider(provider string) (string, bool) {
 		return provider, true
 	}
 	return "", false
+}
+
+// directRuntime keeps the per-runtime rules in one table so a new direct
+// runtime adds an entry instead of a case in every switch; an empty
+// credentialAuthKind means the auth mode needs no stored credential.
+type directRuntime struct {
+	validPermissionMode func(string) bool
+	credentialAuthKind  func(metadata map[string]any) (string, error)
+}
+
+var directRuntimes = map[string]directRuntime{
+	RuntimeCodex: {
+		validPermissionMode: codexcfg.ValidPermissionMode,
+		credentialAuthKind: func(metadata map[string]any) (string, error) {
+			cfg, err := codexcfg.ParseAgentConfig(metadata)
+			if err != nil {
+				return "", err
+			}
+			if cfg.Auth == codexcfg.AuthAPIKey {
+				return agentcredential.AuthKindOpenAIAPIKey, nil
+			}
+			return agentcredential.AuthKindOpenAICodexOAuth, nil
+		},
+	},
+	RuntimeClaudeCode: {
+		validPermissionMode: claudecfg.ValidPermissionMode,
+		credentialAuthKind: func(metadata map[string]any) (string, error) {
+			cfg, err := claudecfg.ParseAgentConfig(metadata)
+			if err != nil {
+				return "", err
+			}
+			switch cfg.Auth {
+			case claudecfg.AuthAPIKey:
+				return agentcredential.AuthKindAnthropicAPIKey, nil
+			case claudecfg.AuthOAuthToken:
+				return agentcredential.AuthKindClaudeCodeOAuth, nil
+			default:
+				return "", nil
+			}
+		},
+	},
+	RuntimeGrokBuild: {
+		validPermissionMode: grokcfg.ValidPermissionMode,
+		credentialAuthKind: func(metadata map[string]any) (string, error) {
+			cfg, err := grokcfg.ParseAgentConfig(metadata)
+			if err != nil {
+				return "", err
+			}
+			if cfg.Auth == grokcfg.AuthGrokAccount {
+				return agentcredential.AuthKindXAIGrokOAuth, nil
+			}
+			return agentcredential.AuthKindXAIAPIKey, nil
+		},
+	},
 }
 
 type ConfigurationError struct {
@@ -126,6 +191,13 @@ func (s *Service) Create(ctx context.Context, botID string, req CreateRequest) (
 	if err != nil {
 		return BotAgent{}, err
 	}
+	if runtime == RuntimeACP {
+		// Without its own managed fields a new instance would read the bot's
+		// legacy profile slot and launch another instance's command.
+		if _, owns := metadata[acpprofile.InstanceManagedKey]; !owns {
+			metadata[acpprofile.InstanceManagedKey] = map[string]any{}
+		}
+	}
 	payload, err := json.Marshal(metadata)
 	if err != nil {
 		return BotAgent{}, fmt.Errorf("marshal bot agent metadata: %w", err)
@@ -198,6 +270,24 @@ func (s *Service) GetActive(ctx context.Context, botID, id string) (BotAgent, er
 	return agent, nil
 }
 
+// GetActiveACP admits new work on an ACP instance of provider. ResolveACPSetup
+// cannot do it: it also serves established sessions, which outlive their
+// Agent being disabled or deleted.
+func (s *Service) GetActiveACP(ctx context.Context, botID, id, provider string) (BotAgent, error) {
+	agent, err := s.GetActive(ctx, botID, id)
+	if err != nil {
+		return BotAgent{}, err
+	}
+	descriptor, err := DescriptorFor(agent)
+	if err != nil {
+		return BotAgent{}, err
+	}
+	if descriptor.Runtime != RuntimeACP || descriptor.Provider != acpprofile.NormalizeAgentID(provider) {
+		return BotAgent{}, ErrInvalidRuntime
+	}
+	return agent, nil
+}
+
 func (s *Service) FindActiveByProvider(ctx context.Context, botID, provider string) (BotAgent, error) {
 	pgBotID, err := db.ParseUUID(botID)
 	if err != nil {
@@ -226,6 +316,61 @@ func (s *Service) FindActiveByProvider(ctx context.Context, botID, provider stri
 	return fromRow(row)
 }
 
+// ResolveACPSetup returns the setup an ACP session launches with. A session
+// bound before agents became instances names only the provider and runs as
+// the bot's oldest active instance of it; a bot with no instance at all still
+// reads the legacy profile slot on its own metadata.
+func (s *Service) ResolveACPSetup(ctx context.Context, botID, botAgentID, provider string, botMetadata map[string]any) (acpprofile.AgentSetup, error) {
+	var (
+		agent BotAgent
+		err   error
+	)
+	if strings.TrimSpace(botAgentID) != "" {
+		agent, err = s.Get(ctx, botID, botAgentID)
+	} else {
+		agent, err = s.FindActiveByProvider(ctx, botID, provider)
+		if errors.Is(err, ErrNotFound) {
+			return acpprofile.ParseAgentSetup(botMetadata, provider), nil
+		}
+	}
+	if err != nil {
+		return acpprofile.AgentSetup{}, err
+	}
+	return acpprofile.ParseInstanceSetup(botMetadata, agent.Metadata, provider), nil
+}
+
+// WithACPSetup fills in the managed fields an ACP instance launches with when
+// it does not carry its own yet, so clients read one shape for every instance
+// and saving it back is what gives a legacy instance its own setup.
+func WithACPSetup(agent BotAgent, botMetadata map[string]any) BotAgent {
+	if agent.Runtime != RuntimeACP {
+		return agent
+	}
+	if _, owns := agent.Metadata[acpprofile.InstanceManagedKey]; owns {
+		return agent
+	}
+	provider, _ := agent.Metadata[MetadataProviderKey].(string)
+	profile, ok := acpprofile.Lookup(provider)
+	if !ok {
+		return agent
+	}
+	setup := acpprofile.ParseAgentSetup(botMetadata, provider)
+	managed := make(map[string]any, len(profile.ManagedFields))
+	for _, field := range profile.ManagedFields {
+		id := acpprofile.NormalizeAgentID(field.ID)
+		if value := setup.Managed[id]; value != "" {
+			managed[id] = value
+		}
+	}
+	metadata := make(map[string]any, len(agent.Metadata)+1)
+	for key, value := range agent.Metadata {
+		metadata[key] = value
+	}
+	metadata[acpprofile.InstanceManagedKey] = managed
+	agent.Metadata = metadata
+	return agent
+}
+
 func (s *Service) Update(ctx context.Context, botID, id string, req UpdateRequest) (BotAgent, error) {
 	current, err := s.Get(ctx, botID, id)
 	if err != nil {
@@ -248,6 +393,15 @@ func (s *Service) Update(ctx context.Context, botID, id string, req UpdateReques
 		_, metadata, err = normalizeDescriptor(current.Runtime, req.Metadata)
 		if err != nil {
 			return BotAgent{}, err
+		}
+		if current.Runtime == RuntimeACP {
+			// Metadata is replaced whole, so an update that omits the managed
+			// fields would hand the instance back to the bot's legacy slot.
+			if _, sent := metadata[acpprofile.InstanceManagedKey]; !sent {
+				if managed, owns := current.Metadata[acpprofile.InstanceManagedKey]; owns {
+					metadata[acpprofile.InstanceManagedKey] = managed
+				}
+			}
 		}
 	}
 	metadataJSON, err := json.Marshal(metadata)
@@ -363,84 +517,45 @@ func DescriptorFor(agent BotAgent) (Descriptor, error) {
 }
 
 func AcceptsCredential(agent BotAgent, authKind string) bool {
-	switch agent.Runtime {
-	case RuntimeCodex:
-		cfg, err := codexcfg.ParseAgentConfig(agent.Metadata)
-		if err != nil {
-			return false
-		}
-		if cfg.Auth == codexcfg.AuthAPIKey {
-			return authKind == agentcredential.AuthKindOpenAIAPIKey
-		}
-		return authKind == agentcredential.AuthKindOpenAICodexOAuth
-	case RuntimeClaudeCode:
-		cfg, err := claudecfg.ParseAgentConfig(agent.Metadata)
-		if err != nil {
-			return false
-		}
-		switch cfg.Auth {
-		case claudecfg.AuthAPIKey:
-			return authKind == agentcredential.AuthKindAnthropicAPIKey
-		case claudecfg.AuthOAuthToken:
-			return authKind == agentcredential.AuthKindClaudeCodeOAuth
-		default:
-			return false
-		}
-	default:
+	direct, ok := directRuntimes[agent.Runtime]
+	if !ok {
 		return false
 	}
+	expected, err := direct.credentialAuthKind(agent.Metadata)
+	return err == nil && expected != "" && authKind == expected
 }
 
-// ValidateConfigurationWithStore validates the shared per-provider bot
-// metadata without consulting the legacy metadata enabled flag.
-// BotAgent.Enabled is the availability source of truth.
+// ValidateConfigurationWithStore validates the instance's configuration
+// without consulting the legacy metadata enabled flag. BotAgent.Enabled is the
+// availability source of truth.
 func ValidateConfigurationWithStore(agent BotAgent, botMetadata map[string]any, credentialAuthKind string) error {
 	descriptor, err := DescriptorFor(agent)
 	if err != nil {
 		return err
 	}
-	switch descriptor.Runtime {
-	case RuntimeACP:
+	if descriptor.Runtime == RuntimeACP {
 		profile, ok := acpprofile.Lookup(descriptor.Provider)
 		if !ok {
 			return ErrInvalidMetadata
 		}
-		setup := acpprofile.ParseAgentSetup(botMetadata, descriptor.Provider)
+		setup := acpprofile.ParseInstanceSetup(botMetadata, agent.Metadata, descriptor.Provider)
 		if field, missing := acpprofile.MissingRequiredManagedFieldForPreflight(profile, setup); missing {
 			return &ConfigurationError{Field: field.ID}
 		}
 		return nil
-	case RuntimeCodex:
-		if _, err := codexcfg.ParseAgentConfig(agent.Metadata); err != nil {
-			return &ConfigurationError{Field: "auth"}
-		}
-		expected := agentcredential.AuthKindOpenAICodexOAuth
-		if cfg, _ := codexcfg.ParseAgentConfig(agent.Metadata); cfg.Auth == codexcfg.AuthAPIKey {
-			expected = agentcredential.AuthKindOpenAIAPIKey
-		}
-		if credentialAuthKind != expected {
-			return &ConfigurationError{Field: "agent_credential_id"}
-		}
-		return nil
-	case RuntimeClaudeCode:
-		cfg, err := claudecfg.ParseAgentConfig(agent.Metadata)
-		if err != nil {
-			return &ConfigurationError{Field: "auth"}
-		}
-		expected := ""
-		switch cfg.Auth {
-		case claudecfg.AuthAPIKey:
-			expected = agentcredential.AuthKindAnthropicAPIKey
-		case claudecfg.AuthOAuthToken:
-			expected = agentcredential.AuthKindClaudeCodeOAuth
-		}
-		if credentialAuthKind != expected {
-			return &ConfigurationError{Field: "agent_credential_id"}
-		}
-		return nil
-	default:
+	}
+	direct, ok := directRuntimes[descriptor.Runtime]
+	if !ok {
 		return ErrInvalidRuntime
 	}
+	expected, err := direct.credentialAuthKind(agent.Metadata)
+	if err != nil {
+		return &ConfigurationError{Field: "auth"}
+	}
+	if credentialAuthKind != expected {
+		return &ConfigurationError{Field: "agent_credential_id"}
+	}
+	return nil
 }
 
 func normalizeDescriptor(runtime string, metadata map[string]any) (string, map[string]any, error) {
@@ -455,8 +570,8 @@ func normalizeDescriptor(runtime string, metadata map[string]any) (string, map[s
 			return "", nil, ErrInvalidMetadata
 		}
 		provider = acpprofile.NormalizeAgentID(provider)
-		if _, direct := directRuntimeForProvider(provider); direct {
-			return "", nil, ErrProviderDirectRuntime
+		if runtime, direct := directRuntimeForProvider(provider); direct {
+			return "", nil, &ProviderDirectRuntimeError{Runtime: runtime}
 		}
 		if _, ok := acpprofile.Lookup(provider); !ok {
 			return "", nil, ErrInvalidMetadata
@@ -466,8 +581,29 @@ func normalizeDescriptor(runtime string, metadata map[string]any) (string, map[s
 			normalized[key] = value
 		}
 		normalized[MetadataProviderKey] = provider
+		if value, exists := normalized[acpprofile.InstanceManagedKey]; exists {
+			managed, ok := value.(map[string]any)
+			if !ok {
+				return "", nil, ErrInvalidMetadata
+			}
+			for _, field := range managed {
+				if _, ok := field.(string); !ok {
+					return "", nil, ErrInvalidMetadata
+				}
+			}
+		}
 		return runtime, normalized, nil
-	case RuntimeCodex, RuntimeClaudeCode:
+	default:
+		direct, ok := directRuntimes[runtime]
+		if !ok {
+			return "", nil, ErrInvalidRuntime
+		}
+		if value, exists := metadata["permission_mode"]; exists {
+			mode, ok := value.(string)
+			if !ok || !direct.validPermissionMode(mode) {
+				return "", nil, ErrInvalidMetadata
+			}
+		}
 		normalized := make(map[string]any, len(metadata)+1)
 		for key, value := range metadata {
 			if isCredentialField(key) {
@@ -481,8 +617,6 @@ func normalizeDescriptor(runtime string, metadata map[string]any) (string, map[s
 		// provider lookup) — migrated rows already carry the same value.
 		normalized[MetadataProviderKey] = runtime
 		return runtime, normalized, nil
-	default:
-		return "", nil, ErrInvalidRuntime
 	}
 }
 

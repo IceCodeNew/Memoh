@@ -13,6 +13,7 @@ import (
 	dtsdk "github.com/felinics/dingtalk-stream-sdk-go/client"
 
 	"github.com/felinics/memoh/internal/channel"
+	"github.com/felinics/memoh/internal/errs"
 )
 
 // DingTalkAdapter implements the Memoh channel adapter for DingTalk bots.
@@ -29,6 +30,8 @@ type DingTalkAdapter struct {
 	// webhookCache stores recent sessionWebhook contexts by config ID and msgId.
 	webhookCache *sessionWebhookCache
 }
+
+const dingtalkVerificationTimeout = 15 * time.Second
 
 // NewDingTalkAdapter creates a new DingTalkAdapter.
 func NewDingTalkAdapter(log *slog.Logger) *DingTalkAdapter {
@@ -88,6 +91,16 @@ func (*DingTalkAdapter) Descriptor() channel.Descriptor {
 	}
 }
 
+func (*DingTalkAdapter) SelfIdentityPolicy() channel.SelfIdentityPolicy {
+	return channel.SelfIdentityPolicy{
+		RefreshOnCredentialsChange: true,
+		RequireDiscoveryOnEnable:   true,
+		RequiredSelfIdentityKey:    "app_key",
+		DiscoveryErrorMessage:      "dingtalk bot credential verification failed",
+		MissingIdentityMessage:     "dingtalk bot credential verification returned no app key",
+	}
+}
+
 // NormalizeConfig validates and normalizes a DingTalk channel config map.
 func (*DingTalkAdapter) NormalizeConfig(raw map[string]any) (map[string]any, error) {
 	return normalizeConfig(raw)
@@ -123,10 +136,15 @@ func (a *DingTalkAdapter) DiscoverSelf(ctx context.Context, credentials map[stri
 	if err != nil {
 		return nil, "", err
 	}
+	callCtx, cancel := context.WithTimeout(ctx, dingtalkVerificationTimeout)
+	defer cancel()
 	cli := newAPIClient(cfg.AppKey, cfg.AppSecret)
-	info, err := cli.getBotInfo(ctx, cfg.AppKey)
+	if _, err := cli.getToken(callCtx); err != nil {
+		return nil, "", fmt.Errorf("dingtalk verify credentials: %w", err)
+	}
+	info, err := cli.getBotInfo(callCtx, cfg.AppKey)
 	if err != nil {
-		a.logger.Warn("dingtalk: getBotInfo failed, using appKey as identity",
+		a.logger.WarnContext(ctx, "dingtalk: getBotInfo failed, using appKey as identity",
 			slog.String("app_key", cfg.AppKey),
 			slog.Any("error", err),
 		)
@@ -248,7 +266,7 @@ func (a *DingTalkAdapter) sendViaAPI(
 	if !ok {
 		return errors.New("dingtalk: invalid target")
 	}
-	a.logger.Debug("dingtalk: sendViaAPI",
+	a.logger.DebugContext(ctx, "dingtalk: sendViaAPI",
 		slog.String("target", target),
 		slog.String("kind", kind),
 		slog.String("id", id),
@@ -260,7 +278,7 @@ func (a *DingTalkAdapter) sendViaAPI(
 	case "group":
 		return apiCli.sendToGroup(ctx, parsed.AppKey, id, msgKey, msgParam)
 	default:
-		return errors.New("dingtalk: unknown target kind: " + kind)
+		return errs.New("dingtalk: unknown target kind", slog.String("kind", kind))
 	}
 }
 
@@ -400,12 +418,8 @@ func (a *DingTalkAdapter) newChatBotHandler(cfg channel.ChannelConfig, handler c
 			return nil, nil
 		}
 		msg.BotID = cfg.BotID
-		if err := handler(ctx, cfg, msg); err != nil {
-			a.logger.Error("dingtalk: inbound handler error",
-				slog.String("config_id", cfg.ID),
-				slog.Any("error", err),
-			)
-		}
+		// The inbound unit writes the result line of the message.
+		_ = handler(ctx, cfg, msg)
 		return nil, nil
 	}
 }

@@ -9,13 +9,16 @@ import (
 	"strings"
 	"time"
 
-	contextfrag "github.com/felinics/memoh/internal/agent/context/fragment"
 	"github.com/felinics/memoh/internal/runtimefence"
 )
 
 // Session carries request-scoped identity and runtime ownership for tool
 // execution. Runtime-only fields remain process-local and are never serialized.
 type Session struct {
+	// PublicRequest marks HTTP routing headers that must not become tool authority.
+	PublicRequest bool `json:"-"`
+	// UserID is authenticated by the server; it is never read from a routing header.
+	UserID            string `json:"-"`
 	BotID             string
 	ChatID            string
 	RuntimeID         string
@@ -42,14 +45,13 @@ type Session struct {
 	// RequireActiveRun declares that this session's tool surface exists only
 	// for the duration of a runtime turn. Workspace tool-gateway mounts set it;
 	// the general HTTP tool API remains available outside a turn.
-	RequireActiveRun          bool
-	SupportsImageInput        bool
-	SupportsFileInput         bool
-	ContextBudgetMaxTokens    int
-	ContextToolExchangePolicy *contextfrag.ToolExchangePolicy
-	RuntimeFence              runtimefence.Fence          `json:"-"`
-	RunContext                context.Context             `json:"-"`
-	RuntimeGuard              func(context.Context) error `json:"-"`
+	RequireActiveRun       bool
+	SupportsImageInput     bool
+	SupportsFileInput      bool
+	ContextBudgetMaxTokens int
+	RuntimeFence           runtimefence.Fence          `json:"-"`
+	RunContext             context.Context             `json:"-"`
+	RuntimeGuard           func(context.Context) error `json:"-"`
 }
 
 const runtimeGuardTimeout = 5 * time.Second
@@ -114,6 +116,10 @@ func ValidateRuntimeGuard(ctx context.Context, session Session) error {
 // per-call and assigned by the caller after merging.
 func Merge(base, latest Session) Session {
 	merged := base
+	merged.PublicRequest = base.PublicRequest || latest.PublicRequest
+	if value := strings.TrimSpace(latest.UserID); value != "" {
+		merged.UserID = value
+	}
 	if value := strings.TrimSpace(latest.BotID); value != "" {
 		merged.BotID = value
 	}
@@ -182,9 +188,6 @@ func Merge(base, latest Session) Session {
 	}
 	if latest.ContextBudgetMaxTokens > 0 {
 		merged.ContextBudgetMaxTokens = latest.ContextBudgetMaxTokens
-	}
-	if latest.ContextToolExchangePolicy != nil {
-		merged.ContextToolExchangePolicy = latest.ContextToolExchangePolicy
 	}
 	if latest.RuntimeFence.Valid() {
 		merged.RuntimeFence = latest.RuntimeFence

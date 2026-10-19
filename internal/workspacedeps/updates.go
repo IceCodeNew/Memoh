@@ -16,7 +16,7 @@ const DefaultUpdateCheckInterval = 24 * time.Hour
 
 // UpdateWorker periodically runs check_update for installed dependencies
 // that have a check_update script and no pin. Only running
-// native workspaces are checked; remote targets are never woken.
+// bot workspaces are checked; stopped workspaces are left alone.
 type UpdateWorker struct {
 	service  *Service
 	interval time.Duration
@@ -106,7 +106,7 @@ func (w *UpdateWorker) loop(ctx context.Context, done chan struct{}) {
 		case <-ticks:
 			checks, err := w.RunOnce(ctx)
 			if err != nil {
-				w.logger.Warn("dependency update check round finished with errors",
+				w.logger.WarnContext(ctx, "dependency update check round finished with errors",
 					slog.Int("checks", checks),
 					slog.Any("error", err),
 				)
@@ -154,7 +154,7 @@ func (w *UpdateWorker) RunOnce(ctx context.Context) (int, error) {
 		// The workspace selected for this grouped check is a real script
 		// execution site, so it must participate in the same lock as installs.
 		source := group.members[0]
-		sourceKey := InstallationKey{BotID: source.BotID, WorkspaceTargetID: source.WorkspaceTargetID, DependencyID: source.DependencyID}
+		sourceKey := InstallationKey{BotID: source.BotID, DependencyID: source.DependencyID}
 		if !s.locks.tryLock(sourceKey) {
 			continue
 		}
@@ -162,7 +162,7 @@ func (w *UpdateWorker) RunOnce(ctx context.Context) (int, error) {
 		check, checkErr := s.checkUpdate(ctx, group.client, group.dataRoot, group.platform, dep, source.InstalledVersion)
 		checks++
 		for _, rec := range group.members {
-			recKey := InstallationKey{BotID: rec.BotID, WorkspaceTargetID: rec.WorkspaceTargetID, DependencyID: rec.DependencyID}
+			recKey := InstallationKey{BotID: rec.BotID, DependencyID: rec.DependencyID}
 			if recKey != sourceKey && !s.locks.tryLock(recKey) {
 				continue
 			}
@@ -200,7 +200,7 @@ func (w *UpdateWorker) groupRecords(ctx context.Context, records []Installation)
 
 	for _, rec := range records {
 		dep, ok := s.catalogFor(ctx).Get(rec.DependencyID)
-		if !ok || !upstreamCheckable(dep) || !isNativeTarget(rec.WorkspaceTargetID) {
+		if !ok || !upstreamCheckable(dep) {
 			continue
 		}
 		target, seen := targets[rec.BotID]
@@ -241,18 +241,18 @@ type resolvedNative struct {
 // when it is stopped or missing.
 func (w *UpdateWorker) resolveNative(ctx context.Context, botID string) (*resolvedNative, error) {
 	s := w.service
-	state, err := s.workspace.State(ctx, botID, TargetNative)
+	state, err := s.workspace.State(ctx, botID)
 	if err != nil {
 		return nil, fmt.Errorf("workspacedeps: workspace state of bot %s: %w", botID, err)
 	}
 	if state != WorkspaceRunning {
 		return nil, nil
 	}
-	client, dataRoot, err := s.target(ctx, botID, TargetNative)
+	client, dataRoot, err := s.target(ctx, botID)
 	if err != nil {
 		return nil, fmt.Errorf("workspacedeps: bot %s: %w", botID, err)
 	}
-	platform, err := s.platformFor(ctx, botID, TargetNative, client)
+	platform, err := s.platformFor(ctx, botID, client)
 	if err != nil {
 		return nil, fmt.Errorf("workspacedeps: probe platform of bot %s: %w", botID, err)
 	}

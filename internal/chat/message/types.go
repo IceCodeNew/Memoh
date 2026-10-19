@@ -7,9 +7,20 @@ import (
 )
 
 const (
-	AgentStepInterruptedMetadataKey     = "agent_step_interrupted"
-	HistoryErrorCodeMetadataKey         = "error_code"
+	AgentStepInterruptedMetadataKey = "agent_step_interrupted"
+	HistoryErrorCodeMetadataKey     = "error_code"
+	// HistoryErrorArgsMetadataKey holds the catalog args of the failure named
+	// by error_code: only the args its catalog entry allows, as strings.
+	HistoryErrorArgsMetadataKey         = "error_args"
+	HistoryFailureOriginMetadataKey     = "failure_origin"
+	HistoryFailureOriginUserMessageHook = "user_message_hook"
 	AgentStepInterruptedReasoningPrefix = "[Previous assistant response was interrupted during reasoning. Continue from this checkpoint:]\n"
+	// ToolCallDiffsMetadataKey carries UI-only edit/write diffs lifted out of
+	// assistant message content at persist time. Value shape:
+	// map[toolCallID]unifiedDiff. Keeping them on the row's metadata column —
+	// not inside content — keeps them out of the history byte budget, which
+	// measures octet_length(content) only.
+	ToolCallDiffsMetadataKey = "diffs"
 )
 
 // LatestInterruptedCheckpoint returns the last assistant entry only when it is
@@ -169,12 +180,10 @@ type TurnReplacement struct {
 	SessionMetadata         map[string]any
 }
 
-// AgentPublication moves the session's canonical runtime-checkpoint head to
-// the round's run inside the same transaction as the round's messages. A head
-// with CheckpointReset=true is canonical but not resumable.
+// AgentPublication advances the runtime's observed-round marker atomically
+// with the round's messages. It contains no native conversation state.
 type AgentPublication struct {
-	RunID           string
-	CheckpointReset bool
+	RunID string
 }
 
 type RoundPersistenceOptions struct {
@@ -202,6 +211,21 @@ type AgentStep struct {
 	Interrupted bool
 }
 
+// TurnSlot names a turn before any of its rows exist. Admission already draws
+// one for a run's request turn; an applied steer opens its own canonical turn
+// (SR-TURN-001) and needs the same treatment, so every subscriber learns the
+// turn's identity when the input is accepted rather than when the step commits.
+type TurnSlot struct {
+	TurnID   string
+	Position int64
+}
+
+// TurnSlotAllocator draws a slot from the session's turn counter without
+// writing a row.
+type TurnSlotAllocator interface {
+	AllocateTurnSlot(ctx context.Context, sessionID string) (TurnSlot, error)
+}
+
 type AgentStepPersister interface {
 	PersistAgentStep(ctx context.Context, step AgentStep) ([]Message, error)
 }
@@ -221,8 +245,10 @@ type Service interface {
 	ListActiveSince(ctx context.Context, botID string, since time.Time) ([]Message, error)
 	// ListActiveSinceWithinBytes is the byte-budgeted variant of
 	// ListActiveSince (CM-ADM-001): rows are admitted newest-first until
-	// their content byte total crosses maxBytes, so process memory is
-	// bounded by the budget regardless of total history size.
+	// their content byte total crosses maxBytes. Only content is budgeted,
+	// so metadata is returned undecoded in RawMetadata (Metadata stays nil):
+	// callers decode one row at a time instead of holding every row's
+	// decoded metadata, which legacy lifecycle audits can inflate.
 	ListActiveSinceWithinBytes(ctx context.Context, botID string, since time.Time, maxBytes int64) ([]Message, error)
 	ListLatest(ctx context.Context, botID string, limit int32) ([]Message, error)
 	ListBefore(ctx context.Context, botID string, before time.Time, limit int32) ([]Message, error)
@@ -230,9 +256,14 @@ type Service interface {
 	ListSinceBySession(ctx context.Context, sessionID string, since time.Time) ([]Message, error)
 	ListActiveSinceBySession(ctx context.Context, sessionID string, since time.Time) ([]Message, error)
 	// ListActiveSinceBySessionWithinBytes is the byte-budgeted variant of
-	// ListActiveSinceBySession (CM-ADM-001), same admission semantics as
-	// ListActiveSinceWithinBytes scoped to one session.
+	// ListActiveSinceBySession (CM-ADM-001), same admission semantics and
+	// undecoded metadata as ListActiveSinceWithinBytes, scoped to one session.
 	ListActiveSinceBySessionWithinBytes(ctx context.Context, sessionID string, since time.Time, maxBytes int64) ([]Message, error)
+	// ListTurnResponseSourcesSinceBySessionWithinBytes is the same window as
+	// ListActiveSinceBySessionWithinBytes projected to what turn-response
+	// composition reads: ID, role, content, created_at, and Metadata holding
+	// only AgentStepInterruptedMetadataKey. Nothing else is loaded.
+	ListTurnResponseSourcesSinceBySessionWithinBytes(ctx context.Context, sessionID string, since time.Time, maxBytes int64) ([]Message, error)
 	// MeasureActiveBySession aggregates message count and content bytes on
 	// the database side (CM-ADM-001): admission sizes a session's history
 	// without shipping any payload into the process.
@@ -250,4 +281,22 @@ type Service interface {
 	DeleteByBot(ctx context.Context, botID string) error
 	DeleteBySession(ctx context.Context, sessionID string) error
 	LinkAssets(ctx context.Context, messageID string, assets []AssetRef) error
+}
+
+// Message origin is independent of the LLM role. Internal feedback is stored
+// as user input for model replay but stays in the current conversation turn.
+const (
+	MessageSourceMetadataKey      = "message_source"
+	MessageSourceInternalFeedback = "internal_feedback"
+)
+
+func IsInternalFeedback(metadata map[string]any) bool {
+	return metadata[MessageSourceMetadataKey] == MessageSourceInternalFeedback
+}
+
+func historyBindingRole(role string, metadata map[string]any) string {
+	if role == "user" && IsInternalFeedback(metadata) {
+		return MessageSourceInternalFeedback
+	}
+	return role
 }

@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -37,7 +38,8 @@ const (
 
 type directLifecycleQueries struct {
 	modelSelectionFakeQueries
-	modelID pgtype.UUID
+	modelID           pgtype.UUID
+	compactionEnabled bool
 }
 
 func (q *directLifecycleQueries) GetSettingsByBotID(
@@ -45,10 +47,10 @@ func (q *directLifecycleQueries) GetSettingsByBotID(
 	botID pgtype.UUID,
 ) (sqlc.GetSettingsByBotIDRow, error) {
 	return sqlc.GetSettingsByBotIDRow{
-		BotID:           botID,
-		Language:        "auto",
-		ReasoningEffort: "medium",
-		ChatModelID:     q.modelID,
+		BotID:             botID,
+		ReasoningEffort:   "medium",
+		ChatModelID:       q.modelID,
+		CompactionEnabled: q.compactionEnabled,
 	}, nil
 }
 
@@ -72,6 +74,24 @@ type directLifecycleFixture struct {
 	messages   *recordingMessageService
 	runtime    *lifecycleTurnAdmitter
 	started    chan struct{}
+	requests   *capturedModelRequests
+}
+
+type capturedModelRequests struct {
+	mu     sync.Mutex
+	bodies [][]byte
+}
+
+func (c *capturedModelRequests) add(body []byte) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.bodies = append(c.bodies, body)
+}
+
+func (c *capturedModelRequests) all() [][]byte {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return append([][]byte(nil), c.bodies...)
 }
 
 type synchronizedLifecycleStore struct {
@@ -179,11 +199,17 @@ func newDirectLifecycleFixture(t *testing.T, mode directLifecycleModelMode) dire
 
 	started := make(chan struct{})
 	var startedOnce sync.Once
+	requests := &capturedModelRequests{}
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var request struct {
 			Stream bool `json:"stream"`
 		}
-		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+		body, err := io.ReadAll(r.Body)
+		if err == nil {
+			requests.add(body)
+			err = json.Unmarshal(body, &request)
+		}
+		if err != nil {
 			t.Errorf("decode model request: %v", err)
 			w.WriteHeader(http.StatusBadRequest)
 			return
@@ -289,6 +315,7 @@ func newDirectLifecycleFixture(t *testing.T, mode directLifecycleModelMode) dire
 		messages:   messages,
 		runtime:    runtime,
 		started:    started,
+		requests:   requests,
 	}
 }
 

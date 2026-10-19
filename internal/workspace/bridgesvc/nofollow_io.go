@@ -51,8 +51,6 @@ func noFollowOpenStatus(operation string, err error) error {
 		return status.Errorf(codes.Unimplemented, "%s: %v", operation, err)
 	case errors.Is(err, os.ErrNotExist):
 		return status.Errorf(codes.NotFound, "%s: %v", operation, err)
-	case errors.Is(err, os.ErrExist):
-		return status.Errorf(codes.AlreadyExists, "%s: target already exists", operation)
 	default:
 		// ELOOP, EXDEV, and rename-race failures intentionally remain a
 		// fail-closed precondition error instead of being disguised as absence.
@@ -86,61 +84,4 @@ func (s *Server) ReadRawNoFollow(req *pb.ReadRawNoFollowRequest, stream pb.Conta
 			return status.Errorf(codes.Internal, "read anchored file: %v", readErr)
 		}
 	}
-}
-
-func (s *Server) WriteRawNoFollow(stream pb.ContainerService_WriteRawNoFollowServer) error {
-	var (
-		f       *os.File
-		written int64
-	)
-	defer func() {
-		if f != nil {
-			_ = f.Close()
-		}
-	}()
-
-	for {
-		chunk, err := stream.Recv()
-		if errors.Is(err, io.EOF) {
-			break
-		}
-		if err != nil {
-			return err
-		}
-		if chunk.GetAbort() {
-			return status.Error(codes.Aborted, "anchored write aborted by sender")
-		}
-		if f == nil {
-			root, relativePath, validateErr := s.resolveNoFollowPath(chunk.GetRoot(), chunk.GetRelativePath())
-			if validateErr != nil {
-				return status.Errorf(codes.InvalidArgument, "invalid anchored write path: %v", validateErr)
-			}
-			f, err = createRegularNoFollow(root, relativePath)
-			if err != nil {
-				return noFollowOpenStatus("create anchored file", err)
-			}
-		} else if chunk.GetRoot() != "" || chunk.GetRelativePath() != "" {
-			return status.Error(codes.InvalidArgument, "root and relative_path may appear only in the first chunk")
-		}
-		if len(chunk.GetData()) == 0 {
-			continue
-		}
-		n, writeErr := f.Write(chunk.GetData())
-		written += int64(n)
-		if writeErr != nil {
-			return status.Errorf(codes.Internal, "write anchored file: %v", writeErr)
-		}
-	}
-	if f == nil {
-		return status.Error(codes.InvalidArgument, "first chunk must include root and relative_path")
-	}
-	if err := f.Close(); err != nil {
-		f = nil
-		return status.Errorf(codes.Internal, "close anchored file: %v", err)
-	}
-	f = nil
-	if err := contextStatusError(stream.Context()); err != nil {
-		return err
-	}
-	return stream.SendAndClose(&pb.WriteRawResponse{BytesWritten: written})
 }

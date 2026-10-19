@@ -13,11 +13,21 @@ import { RUNTIME_STEER_TURN_PREFIX } from './types'
 export interface RuntimeTranscriptSlice {
   runId: string
   turnId: string
+  // The sequence admission drew for turnId. Undefined only for frames from a
+  // server that predates the field; those turns stay unnumbered and fall back
+  // to the timestamp ordering, exactly as before.
+  turnPosition?: number
   // The originating send's client-issued id, echoed back by the server. Empty
   // for frames from before this field existed or from the rare pre-ledger run;
   // the transcript falls back to turnId-only matching for those.
   invocationId: string
   continuation?: boolean
+  // Turn ids in this frame that came from the queue's steer inputs. Callers
+  // used to recognise a steer by its `queue-steer:` turn id; naming a steer at
+  // claim time is precisely what removes that shape, so the frame names its
+  // steers rather than leaving them to be read off an id. Optional like the
+  // fields above: a frame without the key simply carries no steer.
+  steerTurnIds?: string[]
   status: RuntimeCurrentRunView['status'] | null
   operation: RuntimeRunOperation | null
   turns: UITurn[]
@@ -45,6 +55,47 @@ const activeRunStatuses = new Set<RuntimeCurrentRunView['status']>([
 
 export function isRuntimeRunActive(status?: string | null): boolean {
   return activeRunStatuses.has(status as RuntimeCurrentRunView['status'])
+}
+
+// Configuration saves still own the session execution slot, but are not an
+// assistant response. The server marks them from the first admitting frame.
+export function isRuntimeRunStreaming(run?: RuntimeCurrentRunView | null): boolean {
+  return !run?.configuration_only && isRuntimeRunActive(run?.status)
+}
+
+// Older snapshots carry a single request/replacement turn. Keep this wire
+// adaptation shared by full projection and incremental delta application.
+function userTurnsForRun(run: RuntimeCurrentRunView) {
+  if (run.user_turns?.length) return run.user_turns
+  const fallback = run.request_user_turn ?? run.operation?.replacement_user_turn
+  return fallback ? [{ ...fallback }] : []
+}
+
+// A run owns several turns, not one: an applied steer opens its own canonical
+// turn inside the same run, and the output after it is filed there
+// (SR-TURN-001, docs/design/session-input-queues.md). Comparing against
+// run.turn_id alone declares every post-steer turn foreign to the run that is
+// still producing it, which is what let a mid-run history refresh drop live
+// steer output off the screen.
+export function runOwnsTurn(
+  run: RuntimeCurrentRunView | null | undefined,
+  turnId: string,
+): boolean {
+  const target = turnId.trim()
+  if (!run || !target) return false
+  if (run.turn_id.trim() === target) return true
+  // userTurnsForRun owns the whole wire-shape chain — user_turns, the legacy
+  // request_user_turn, and an edit's replacement turn. Re-deriving it here
+  // duplicated two thirds of it and dropped the third, so a retry or edit whose
+  // replacement was the run's only user turn read as foreign to its own run.
+  if (userTurnsForRun(run).some(turn => turn.turn_id.trim() === target)) return true
+  return (run.steer_turns ?? []).some((steer) => {
+    if (steer.turn_id?.trim() === target) return true
+    // A steer that has not committed yet has no durable turn, so both its
+    // bubble and the segment under it carry an identity minted from this run's
+    // own queue item. The item is therefore the match.
+    return target === provisionalSteerTurnId(steer.item_id)
+  })
 }
 
 function cloneUIMessage(message: UIMessage): UIMessage {
@@ -110,8 +161,10 @@ function emptyTranscript(): RuntimeTranscriptSlice {
   return {
     runId: '',
     turnId: '',
+    turnPosition: undefined,
     invocationId: '',
     continuation: false,
+    steerTurnIds: [],
     status: null,
     operation: null,
     turns: [],
@@ -119,20 +172,26 @@ function emptyTranscript(): RuntimeTranscriptSlice {
   }
 }
 
-// Older snapshots carry a single request/replacement turn. Keep this wire
-// adaptation shared by full projection and incremental delta application.
-function userTurnsForRun(run: RuntimeCurrentRunView) {
-  if (run.user_turns?.length) return run.user_turns
-  const fallback = run.request_user_turn ?? run.operation?.replacement_user_turn
-  return fallback ? [{ ...fallback }] : []
-}
-
 function transcriptForRun(run: RuntimeCurrentRunView | null): RuntimeTranscriptSlice {
-  if (!run) return emptyTranscript()
+  if (!run || run.configuration_only) return emptyTranscript()
   const turnId = run.turn_id.trim()
   const turns: UITurn[] = []
   const userTurns = userTurnsForRun(run)
+  // A run spans several turns once a steer opens one (SR-TURN-001), so a
+  // segment is numbered by the turn it is filed under, not by the run. The
+  // run's own position covers its request turn; a steer's turn arrives
+  // numbered from history, and stays unnumbered until that commit lands.
+  const positionOf = (segmentTurnId: string): number | undefined => {
+    const id = segmentTurnId.trim()
+    if (!id) return undefined
+    const owner = userTurns.find(turn => turn.turn_id.trim() === id)
+    if (owner?.turn_position !== undefined) return owner.turn_position
+    if (id === turnId) return run.turn_position
+    // A claimed steer knows its slot before its row exists.
+    return (run.steer_turns ?? []).find(steer => steer.turn_id?.trim() === id)?.turn_position
+  }
   const active = isRuntimeRunActive(run.status)
+  const steerTurnIds: string[] = []
   const steerTurns = [...(run.steer_turns ?? [])]
     .filter(steer => steer.status === 'applied' || active)
     .sort((left, right) => left.after_message_id - right.after_message_id
@@ -144,6 +203,7 @@ function transcriptForRun(run: RuntimeCurrentRunView | null): RuntimeTranscriptS
     turns.push({
       ...userTurn,
       turn_id: userTurnId,
+      turn_position: userTurn.turn_position ?? positionOf(userTurnId),
       id: `runtime:${userTurnId}:user`,
     })
   }
@@ -153,18 +213,21 @@ function transcriptForRun(run: RuntimeCurrentRunView | null): RuntimeTranscriptS
   // database history is authoritative, and idle snapshots arrive with
   // messages:null (e.g. after a backend restart, whose ledger view carries no
   // streamed blocks).
+  // Runtime activity belongs to the current run, even when a steer splits its
+  // transcript. Keep it out of the historical segments defined by message IDs.
+  const runtimeStatus = active ? run.messages.find(message => message.type === 'status') : undefined
+  const assistantMessages = run.messages.filter(message => message.type !== 'status')
   const projectsAssistantContent = active
-    || run.messages.length > 0
+    || assistantMessages.length > 0
     || Boolean(run.error_code)
-    || Boolean(run.error)
   if (projectsAssistantContent) {
-    const assistantMessages = [...run.messages]
-    if ((run.error_code || run.error) && !assistantMessages.some(message => message.type === 'error')) {
+    // The block is rendered from the code; the run carries no error text.
+    if (run.error_code && !assistantMessages.some(message => message.type === 'error')) {
       assistantMessages.push({
-        id: nextMessageId(assistantMessages),
+        id: nextMessageId(run.messages),
         type: 'error',
         code: run.error_code,
-        content: run.error ?? '',
+        content: '',
       })
     }
     let segmentStart = 0
@@ -178,12 +241,20 @@ function transcriptForRun(run: RuntimeCurrentRunView | null): RuntimeTranscriptS
       }
       const segment = assistantMessages.slice(segmentStart, segmentEnd)
       if (segment.length > 0) {
-        turns.push(runtimeAssistantTurn(segmentTurnId, segmentTimestamp, segment))
+        turns.push(runtimeAssistantTurn(segmentTurnId, segmentTimestamp, segment, positionOf(segmentTurnId)))
       }
-      const durable = steer.turn_id
-        ? userTurns.find(turn => turn.turn_id.trim() === steer.turn_id?.trim())
+      // The server names a steer's turn when it claims the input, so the name
+      // is authoritative from the first frame — waiting for the persisted user
+      // turn to appear in user_turns left history and the projection disagreeing
+      // about one input for as long as the commit took to publish. The
+      // provisional identity only covers a server that does not send one.
+      const durableTurnId = steer.turn_id?.trim() ?? ''
+      const durable = durableTurnId
+        ? userTurns.find(turn => turn.turn_id.trim() === durableTurnId)
         : undefined
-      const steerTurnId = durable?.turn_id.trim() || `${RUNTIME_STEER_TURN_PREFIX}${steer.item_id}`
+      const steerTurnId = durableTurnId || provisionalSteerTurnId(steer.item_id)
+      const steerTurnPosition = durable?.turn_position ?? steer.turn_position
+      steerTurnIds.push(steerTurnId)
       turns.push({
         ...(durable ?? {
           turn_id: steerTurnId,
@@ -192,6 +263,7 @@ function transcriptForRun(run: RuntimeCurrentRunView | null): RuntimeTranscriptS
           timestamp: steer.timestamp,
         }),
         turn_id: steerTurnId,
+        turn_position: steerTurnPosition,
         id: `runtime:${RUNTIME_STEER_TURN_PREFIX}${steer.item_id}:user`,
       })
       segmentStart = segmentEnd
@@ -199,26 +271,31 @@ function transcriptForRun(run: RuntimeCurrentRunView | null): RuntimeTranscriptS
       // assistant output that follows it under that turn. Name the live
       // segment after the durable turn as soon as it is known, so the settled
       // page replaces this segment instead of rendering beside it. Until then
-      // the segment carries the provisional steer identity.
-      segmentTurnId = durable
-        ? steerTurnId
-        : `${RUNTIME_STEER_TURN_PREFIX}${steer.item_id}:assistant`
+      // both halves carry the same provisional identity: role already
+      // separates them (turnIdentityKey is turn id + role, render ids end in
+      // :user / :assistant), while a distinct id for the segment left the two
+      // with nothing in common for the sort to key on, and the reply rendered
+      // above the steer that asked for it.
+      segmentTurnId = steerTurnId
       segmentTimestamp = steer.timestamp
     }
     // The final segment is the only live assistant after a steer boundary. It
     // intentionally exists while empty so the running indicator stays below
     // the newly admitted user input until the next model delta arrives. Once
     // the run has settled an empty segment would only render a blank turn.
-    const finalSegment = assistantMessages.slice(segmentStart)
+    const finalSegment: UIMessage[] = assistantMessages.slice(segmentStart)
+    if (runtimeStatus) finalSegment.push(runtimeStatus)
     if (active || finalSegment.length > 0 || turns.every(turn => turn.role !== 'assistant')) {
-      turns.push(runtimeAssistantTurn(segmentTurnId, segmentTimestamp, finalSegment))
+      turns.push(runtimeAssistantTurn(segmentTurnId, segmentTimestamp, finalSegment, positionOf(segmentTurnId)))
     }
   }
   return {
     runId: run.run_id,
     turnId,
+    turnPosition: run.turn_position,
     invocationId: run.invocation_id?.trim() ?? '',
     continuation: false,
+    steerTurnIds,
     status: run.status,
     operation: run.operation ? { ...run.operation } : null,
     turns,
@@ -226,9 +303,21 @@ function transcriptForRun(run: RuntimeCurrentRunView | null): RuntimeTranscriptS
   }
 }
 
-function runtimeAssistantTurn(turnId: string, timestamp: string, messages: UIMessage[]): UITurn {
+// The identity a steer's turns carry until its step commit mints the durable
+// one. Minted from the queue item, so it is stable across frames.
+function provisionalSteerTurnId(itemID: string): string {
+  return `${RUNTIME_STEER_TURN_PREFIX}${itemID.trim()}`
+}
+
+function runtimeAssistantTurn(
+  turnId: string,
+  timestamp: string,
+  messages: UIMessage[],
+  turnPosition?: number,
+): UITurn {
   return {
     turn_id: turnId,
+    turn_position: turnPosition,
     role: 'assistant',
     id: `runtime:${turnId}:assistant`,
     timestamp,
@@ -263,11 +352,16 @@ function applyRunPatch(
       ...next,
       ...(patch.status !== undefined ? { status: patch.status } : {}),
       ...(patch.error_code !== undefined ? { error_code: patch.error_code } : {}),
-      ...(patch.error !== undefined ? { error: patch.error } : {}),
       ...(patch.updated_at !== undefined ? { updated_at: patch.updated_at } : {}),
       ...(patch.owner_lease_expires_at !== undefined
         ? { owner_lease_expires_at: patch.owner_lease_expires_at }
         : {}),
+    }
+    if (patch.clear_retry) {
+      const { retry: _cleared, ...rest } = next
+      next = rest
+    } else if (patch.retry !== undefined) {
+      next = { ...next, retry: { ...patch.retry } }
     }
   }
 

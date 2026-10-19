@@ -3,6 +3,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createPinia, setActivePinia } from 'pinia'
 import { useChatSelectionStore } from './chat-selection'
 import { useWorkspaceTabsStore } from './workspace-tabs'
+import { appKeyboardCommands, createKeyboardCommandRegistry } from '@/lib/keyboard-commands'
+import { registerWorkbenchCommands } from '@/pages/home/commands/workbench-commands'
+import { canDispatchKeyboardCommand } from '@/lib/keyboard-context'
+import { handleBrowserKeyboardShortcut } from '@/lib/browser-keyboard-shortcuts'
+import { selectWebBindings } from '@/lib/keyboard-bindings'
+import { useKeyboardShortcutsStore } from '@/store/keyboard-shortcuts'
 
 vi.hoisted(() => {
   class MemoryStorage implements Storage {
@@ -153,11 +159,10 @@ const chatStoreMock = vi.hoisted(() => ({
     wasDraft: boolean
     seq: number
   } | null>>,
-  guiToolUseRequested: undefined as unknown as ReturnType<typeof ref<{
+  draftPromoted: undefined as unknown as ReturnType<typeof ref<{
     botId: string
+    viewId: string
     sessionId: string
-    toolCallId: string
-    toolName: string
     seq: number
   } | null>>,
   focusChatView: vi.fn(),
@@ -204,8 +209,8 @@ vi.mock('@/store/chat-list', () => ({
     get userSentInSession() {
       return chatStoreMock.userSentInSession.value
     },
-    get guiToolUseRequested() {
-      return chatStoreMock.guiToolUseRequested.value
+    get draftPromoted() {
+      return chatStoreMock.draftPromoted.value
     },
     get pendingExternalAgentSessionInput() {
       return chatStoreMock.pendingExternalAgentSessionInput.value
@@ -228,8 +233,13 @@ vi.mock('@/store/chat-list', () => ({
         id: 'bot-without-layout',
         current_user_permissions: ['manage', 'workspace_exec', 'workspace_read'],
       },
+      {
+        id: 'bot-chat-only',
+        current_user_permissions: ['chat'],
+      },
     ],
     isSessionStreaming: vi.fn(() => false),
+    isSessionTentative: vi.fn(() => false),
     knownSessionSummary: chatStoreMock.knownSessionSummary,
     createNewSession: chatStoreMock.createNewSession,
     focusChatView: chatStoreMock.focusChatView,
@@ -656,13 +666,20 @@ describe('workspace layout store', () => {
     chatStoreMock.applyDraftViewRequest.mockClear()
     chatStoreMock.sessionId = null
     chatStoreMock.hasExplicitSessionSelection = false
-    chatStoreMock.loadingChats = false
+    // Reactive like the real store's ref: the workspace aligns its selection
+    // when initialize() finishes loading.
+    const loadingChats = ref(false)
+    Object.defineProperty(chatStoreMock, 'loadingChats', {
+      configurable: true,
+      get: () => loadingChats.value,
+      set: (value: boolean) => { loadingChats.value = value },
+    })
     chatStoreMock.deletedSession = ref(null)
     chatStoreMock.pendingExternalAgentSessionInput = ref(null)
     chatStoreMock.draftViewRequested = ref(null)
     chatStoreMock.forkedSessionRequested = ref(null)
     chatStoreMock.userSentInSession = ref(null)
-    chatStoreMock.guiToolUseRequested = ref(null)
+    chatStoreMock.draftPromoted = ref(null)
     chatStoreMock.sessions = reactive([]) as typeof chatStoreMock.sessions
     chatStoreMock.knownSessions = reactive([]) as typeof chatStoreMock.knownSessions
     chatStoreMock.knownSessionSummary.mockImplementation((sessionId: string) =>
@@ -714,16 +731,74 @@ describe('workspace layout store', () => {
     }
   }
 
-  function emitGuiToolUse(toolName = 'browser_action') {
-    const prevSeq = chatStoreMock.guiToolUseRequested.value?.seq ?? 0
-    chatStoreMock.guiToolUseRequested.value = {
-      botId: 'bot-1',
-      sessionId: 'session-1',
-      toolCallId: `call-${prevSeq + 1}`,
-      toolName,
-      seq: prevSeq + 1,
-    }
-  }
+  it('keeps a non-chat tab active when the session list changes during a running turn', async () => {
+    // Background session-list refreshes and initialize() re-runs must not pull
+    // the user back to the chat tab of the selected session.
+    const store = useWorkspaceTabsStore()
+    const dock = createFakeDock()
+    store.registerApi(dock as never)
+    chatStoreMock.sessions.push({ id: 's1', title: 'One' })
+    chatStoreMock.sessionId = 's1'
+    chatStoreMock.hasExplicitSessionSelection = true
+    useChatSelectionStore().setSession('s1', { explicitSelection: true })
+    store.openSessionChat({ sessionId: 's1' })
+    await nextTick()
+    expect(store.openBrowserAt('http://localhost:5173/app')).toBe(true)
+    expect(dock.activePanel?.component).toBe('browser')
+
+    chatStoreMock.sessions.push({ id: 's2', title: 'Spawned' })
+    await nextTick()
+    expect(dock.activePanel?.component).toBe('browser')
+
+    chatStoreMock.loadingChats = true
+    await nextTick()
+    chatStoreMock.loadingChats = false
+    await nextTick()
+    expect(dock.activePanel?.component).toBe('browser')
+  })
+
+  it('repoints a promoted draft tab before the send that created its session resumes', async () => {
+    // The pane matches its send against its own session param when it appends
+    // the optimistic turn; that happens right after session creation returns.
+    // The tab must already point at the new session by then, or the send's
+    // scroll pin and turn entrance are dropped.
+    const store = useWorkspaceTabsStore()
+    const dock = createFakeDock()
+    store.registerApi(dock as never)
+    store.openDraftChat({ title: 'Draft', explicitSelection: true })
+    const draft = dock.activePanel!
+    await nextTick()
+
+    chatStoreMock.sessions.push({ id: 'created-1', title: 'New' })
+    chatStoreMock.draftPromoted.value = { botId: 'bot-1', viewId: draft.id, sessionId: 'created-1', seq: 1 }
+    await Promise.resolve()
+
+    expect(draft.params.sessionId).toBe('created-1')
+    expect(dock.activePanel).toBe(draft)
+    expect(store.ephemeralPanels[draft.id]).toBe(true)
+  })
+
+  it('keeps a non-chat tab active when a first send promotes its draft to a session', async () => {
+    // Sending from a draft and switching to a file before the server creates
+    // the session: promotion repoints only the draft tab's content.
+    const store = useWorkspaceTabsStore()
+    const dock = createFakeDock()
+    store.registerApi(dock as never)
+    store.openDraftChat({ title: 'Draft', explicitSelection: true })
+    const draft = dock.activePanel!
+    await nextTick()
+    store.openFilePinned('/data/AGENTS.md')
+    expect(dock.activePanel?.component).toBe('file')
+
+    chatStoreMock.sessions.push({ id: 'created-1', title: 'New' })
+    emitUserSentInSession('created-1', draft.id, true)
+    await nextTick()
+    await nextTick()
+
+    expect(draft.params.sessionId).toBe('created-1')
+    expect(dock.panels.filter(panel => panel.component === 'chat')).toHaveLength(1)
+    expect(dock.activePanel?.component).toBe('file')
+  })
 
   it('opens browser panels and updates their address', () => {
     const store = useWorkspaceTabsStore()
@@ -740,6 +815,161 @@ describe('workspace layout store', () => {
     store.updateBrowserAddress('browser:1', 'localhost:3000/app')
     expect(panel?.params.address).toBe('localhost:3000/app')
     expect(panel?.title).toBe('localhost:3000/app')
+  })
+
+  it('cycles tabs within the focused group, wraps, and leaves other splits unchanged', () => {
+    const store = useWorkspaceTabsStore()
+    const dock = createFakeDock()
+    store.registerApi(dock as never)
+    store.openFilePinned('/a.txt')
+    store.openFilePinned('/b.txt')
+    const first = dock.getPanel('file:/a.txt')!
+    const second = dock.getPanel('file:/b.txt')!
+    store.openFileToSide('/right.txt')
+    const right = dock.getPanel('file:/right.txt')!
+    first.api.setActive()
+    expect(store.focusAdjacentTab(1)).toBe(true)
+    expect(store.activeId).toBe(second.id)
+    expect(store.focusAdjacentTab(-1)).toBe(true)
+    expect(store.activeId).toBe(first.id)
+    const groupIds = first.group!.panels.map(panel => panel.id)
+    store.focusAdjacentTab(-1)
+    expect(store.activeId).toBe(groupIds.at(-1))
+    store.focusAdjacentTab(1)
+    expect(store.activeId).toBe(groupIds[0])
+    expect(right.group!.activePanel?.id).toBe(right.id)
+  })
+
+  it('does not navigate without a workspace', () => {
+    expect(useWorkspaceTabsStore().focusAdjacentTab(1)).toBe(false)
+  })
+
+  it('keeps unavailable file navigation and execution commands behind existing permissions', () => {
+    useChatSelectionStore().setBot('bot-chat-only')
+    const store = useWorkspaceTabsStore()
+    const dock = createFakeDock()
+    store.registerApi(dock as never)
+    store.selectSidebarView('schedule')
+    const registry = createKeyboardCommandRegistry()
+    const unregister = registerWorkbenchCommands(registry, store)
+    registry.dispatch(appKeyboardCommands.showFiles)
+    expect(store.sidebarView).toBe('schedule')
+    registry.dispatch(appKeyboardCommands.newTerminal)
+    registry.dispatch(appKeyboardCommands.newBrowser)
+    expect(dock.panels.filter(panel => panel.component === 'terminal' || panel.component === 'browser')).toHaveLength(0)
+    unregister()
+  })
+
+  it('routes workbench commands through the existing sidebar, session, split and creation operations', () => {
+    const store = useWorkspaceTabsStore()
+    const dock = createFakeDock()
+    store.registerApi(dock as never)
+    const registry = createKeyboardCommandRegistry()
+    const unregister = registerWorkbenchCommands(registry, store)
+    const views = [
+      [appKeyboardCommands.showSessions, 'sessions'], [appKeyboardCommands.showFiles, 'files'],
+      [appKeyboardCommands.showSchedule, 'schedule'], [appKeyboardCommands.showSupermarket, 'supermarket'],
+    ] as const
+    for (const [command, view] of views) {
+      registry.dispatch(command)
+      expect(store.sidebarView).toBe(view)
+      expect(store.workbenchOpen).toBe(true)
+    }
+    registry.dispatch(appKeyboardCommands.newTerminal)
+    expect(dock.getPanel('terminal:1')?.component).toBe('terminal')
+    registry.dispatch(appKeyboardCommands.newBrowser)
+    expect(dock.getPanel('browser:1')?.component).toBe('browser')
+    registry.dispatch(appKeyboardCommands.newChatSession)
+    expect(dock.activePanel?.component).toBe('chat')
+    expect(dock.activePanel?.params.sessionId).toBeNull()
+    const groupCount = dock.groups.length
+    registry.dispatch(appKeyboardCommands.splitWorkspaceRight)
+    expect(dock.groups).toHaveLength(groupCount + 1)
+    registry.dispatch(appKeyboardCommands.splitWorkspaceBelow)
+    expect(dock.groups).toHaveLength(groupCount + 2)
+    unregister()
+    expect(registry.dispatch(appKeyboardCommands.newTerminal)).toBe(false)
+  })
+
+  it('retains focus intent for the selected chat until its composer mounts', async () => {
+    const store = useWorkspaceTabsStore()
+    const dock = createFakeDock()
+    store.registerApi(dock as never)
+    store.openTerminal()
+    const registry = createKeyboardCommandRegistry()
+    const unregister = registerWorkbenchCommands(registry, store)
+    registry.dispatch(appKeyboardCommands.focusChatInput)
+    await nextTick()
+    expect(store.pendingChatInputFocus?.panelId).toBe(store.activeId)
+    expect(dock.getPanel(store.pendingChatInputFocus!.panelId)?.component).toBe('chat')
+    store.openTerminal()
+    expect(store.pendingChatInputFocus).toBeNull()
+    unregister()
+  })
+
+  it('focuses the chat the user is in rather than the first chat of another group', async () => {
+    const store = useWorkspaceTabsStore()
+    const dock = createFakeDock()
+    store.registerApi(dock as never)
+    const registry = createKeyboardCommandRegistry()
+    const unregister = registerWorkbenchCommands(registry, store)
+    store.openDraftChat()
+    const first = store.activeId
+    store.openFileToSide('/right.txt')
+    registry.dispatch(appKeyboardCommands.newChatSession)
+    const second = store.activeId
+    expect(dock.getPanel(second!)?.component).toBe('chat')
+    expect(second).not.toBe(first)
+
+    registry.dispatch(appKeyboardCommands.focusChatInput)
+    await nextTick()
+    expect(store.activeId).toBe(second)
+    expect(store.pendingChatInputFocus?.panelId).toBe(second)
+    unregister()
+  })
+
+  it('opens a chat to focus when the dock is empty', async () => {
+    const store = useWorkspaceTabsStore()
+    const dock = createFakeDock()
+    store.registerApi(dock as never)
+    const registry = createKeyboardCommandRegistry()
+    const unregister = registerWorkbenchCommands(registry, store)
+    expect(dock.panels).toHaveLength(0)
+
+    registry.dispatch(appKeyboardCommands.focusChatInput)
+    await nextTick()
+    expect(dock.getPanel(store.activeId!)?.component).toBe('chat')
+    expect(store.pendingChatInputFocus?.panelId).toBe(store.activeId)
+    unregister()
+  })
+
+  it('creates once from a shortcut, suppresses repeat, blocks settings and accepts a live rebind', () => {
+    const store = useWorkspaceTabsStore()
+    const dock = createFakeDock()
+    store.registerApi(dock as never)
+    let path = '/'
+    const registry = createKeyboardCommandRegistry(command => canDispatchKeyboardCommand(command, { name: path === '/' ? 'home' : 'keyboard', path }, {
+      querySelectorAll: () => [],
+    } as unknown as Document))
+    const unregister = registerWorkbenchCommands(registry, store)
+    const shortcuts = useKeyboardShortcutsStore()
+    const press = (key: string, modifiers: { ctrlKey?: boolean, shiftKey?: boolean }, repeat = false) => handleBrowserKeyboardShortcut(
+      { key, ctrlKey: false, metaKey: false, altKey: true, shiftKey: false, ...modifiers, repeat, preventDefault: vi.fn() },
+      registry, selectWebBindings(shortcuts.effectiveBindings), 'linux',
+    )
+    expect(press('X', { shiftKey: true })).toBe(true)
+    press('X', { shiftKey: true }, true)
+    expect(dock.getPanel('terminal:1')).toBeTruthy()
+    expect(dock.getPanel('terminal:2')).toBeUndefined()
+    path = '/settings/keyboard'
+    press('X', { shiftKey: true })
+    expect(dock.getPanel('terminal:2')).toBeUndefined()
+    path = '/'
+    expect(shortcuts.setBinding(appKeyboardCommands.newTerminal, 'Mod+Alt+z').kind).toBe('none')
+    expect(press('X', { shiftKey: true })).toBe(false)
+    expect(press('z', { ctrlKey: true })).toBe(true)
+    expect(dock.getPanel('terminal:2')).toBeTruthy()
+    unregister()
   })
 
   it('opens a browser tab at an address and focuses the existing one on the same URL', () => {
@@ -763,67 +993,6 @@ describe('workspace layout store', () => {
     expect(dock.activePanel?.id).toBe('browser:1')
   })
 
-  it('opens Desktop in a new right region when a GUI tool starts from a single region', () => {
-    const store = useWorkspaceTabsStore()
-    const dock = createFakeDock()
-    store.registerApi(dock as never)
-    store.openDraftChat({ title: 'Session' })
-
-    emitGuiToolUse()
-
-    const display = dock.getPanel('display:1')
-    expect(display?.component).toBe('display')
-    expect(display?.group?.id).not.toBe('group-1')
-    expect(dock.activePanel?.id).toBe('display:1')
-  })
-
-  it('opens Desktop as a tab in the existing right region when a GUI tool starts', () => {
-    const store = useWorkspaceTabsStore()
-    const dock = createFakeDock()
-    store.registerApi(dock as never)
-    store.openDraftChat({ title: 'Session' })
-    store.splitGroup('group-1', 'right')
-    const rightGroup = dock.activePanel!.group!
-
-    emitGuiToolUse('computer_observe')
-
-    expect(dock.getPanel('display:1')?.group?.id).toBe(rightGroup.id)
-    expect(dock.groups).toHaveLength(2)
-  })
-
-  it('creates a right Desktop region when the existing second region is below', () => {
-    const store = useWorkspaceTabsStore()
-    const dock = createFakeDock()
-    store.registerApi(dock as never)
-    store.openDraftChat({ title: 'Session' })
-    store.splitGroup('group-1', 'below')
-    const belowGroup = dock.activePanel!.group!
-
-    emitGuiToolUse()
-
-    const display = dock.getPanel('display:1')!
-    expect(display.group?.id).not.toBe(belowGroup.id)
-    expect(dock.groups).toHaveLength(3)
-  })
-
-  it('focuses the existing Desktop tab in the right region when a GUI tool starts again', () => {
-    const store = useWorkspaceTabsStore()
-    const dock = createFakeDock()
-    store.registerApi(dock as never)
-    store.openDraftChat({ title: 'Session' })
-    store.splitGroup('group-1', 'right')
-    const rightChat = dock.activePanel!
-    emitGuiToolUse()
-    const display = dock.getPanel('display:1')!
-    rightChat.api.setActive()
-    expect(dock.activePanel?.id).toBe(rightChat.id)
-
-    emitGuiToolUse('computer_action')
-
-    expect(dock.activePanel?.id).toBe(display.id)
-    expect(display.group?.id).toBe(rightChat.group?.id)
-  })
-
   it('refuses to open a browser tab for a non-local address', () => {
     const store = useWorkspaceTabsStore()
     const dock = createFakeDock()
@@ -831,6 +1000,94 @@ describe('workspace layout store', () => {
 
     expect(store.openBrowserAt('https://example.com/')).toBe(false)
     expect(dock.panels.filter(p => p.component === 'browser')).toHaveLength(0)
+  })
+
+  it('opens terminals in the requested group without creating a bottom split', () => {
+    const store = useWorkspaceTabsStore()
+    const dock = createFakeDock()
+    store.registerApi(dock as never)
+    store.openDraftChat()
+    const left = dock.activePanel!.group!
+    store.splitGroup(left.id, 'right')
+    const right = dock.activePanel!.group!
+
+    store.openTerminal(left.id)
+    expect(dock.getPanel('terminal:1')?.group).toBe(left)
+    store.openTerminal(right.id)
+    expect(dock.getPanel('terminal:2')?.group).toBe(right)
+    store.openTerminal()
+    expect(dock.getPanel('terminal:3')?.group).toBe(right)
+    expect(dock.groups).toHaveLength(2)
+    expect(dock.getPanel('terminal:3')?.renderer).toBe('always')
+    expect(store.ephemeralPanels['terminal:3']).toBeUndefined()
+  })
+
+  it('opens ordinary tabs inside a terminal-only group and splits beside it', () => {
+    const store = useWorkspaceTabsStore()
+    const dock = createFakeDock()
+    store.registerApi(dock as never)
+    store.openTerminal()
+    const group = dock.activePanel!.group!
+
+    store.openDisplay(group.id)
+    expect(dock.activePanel?.group).toBe(group)
+    store.openFilePinned('/data/example.txt', group.id)
+    expect(dock.activePanel?.group).toBe(group)
+    store.openDraftChat({ groupId: group.id })
+    expect(dock.activePanel?.group).toBe(group)
+    expect(dock.groups).toHaveLength(1)
+    expect(dock.getPanel('terminal:1')).toBeTruthy()
+
+    store.openFileToSide('/data/other.txt', group.id)
+    expect(dock.activePanel?.group).toBe(dock.adjacentGroupInDirection(group, 'right'))
+  })
+
+  it.each(['center', 'left', 'right', 'top', 'bottom'])(
+    'allows ordinary panels and whole groups to drop on a terminal at %s', (position) => {
+      const store = useWorkspaceTabsStore()
+      const dock = createFakeDock()
+      store.registerApi(dock as never)
+      store.openTerminal()
+      for (const panelId of ['chat:1', 'file:/data/example.txt', null]) {
+        const event = {
+          position,
+          group: dock.activePanel!.group!,
+          getData: () => ({ panelId }),
+          preventDefault: vi.fn(),
+        }
+        dock.emitWillShowOverlay(event)
+        dock.emitWillDrop(event)
+        expect(event.preventDefault).not.toHaveBeenCalled()
+      }
+    },
+  )
+
+  it('restores legacy terminal layouts without bottom headers or custom tabs', () => {
+    const terminal = { id: 'terminal:4', contentComponent: 'terminal', title: 'python', tabComponent: 'terminalTab' }
+    const group = { id: 'legacy', views: [terminal.id], activeView: terminal.id }
+    const layout = {
+      grid: { root: { type: 'branch', data: [
+        { type: 'leaf', size: 240, data: { ...group, headerPosition: 'bottom', hideHeader: true, locked: 'no-drop-target' } },
+      ] } },
+      panels: { [terminal.id]: terminal },
+      activeGroup: group.id,
+    }
+    localStorage.setItem('workspace-layout', JSON.stringify({
+      'bot-1': { layout, terminalCounter: 4, ephemeralIds: [] },
+    }))
+    const store = useWorkspaceTabsStore()
+    const dock = createFakeDock()
+    const restore = vi.spyOn(dock, 'fromJSON')
+    store.registerApi(dock as never)
+
+    expect(restore).toHaveBeenCalledWith({
+      ...layout,
+      grid: { root: { type: 'branch', data: [{ type: 'leaf', size: 240, data: group }] } },
+      panels: { [terminal.id]: { id: terminal.id, contentComponent: 'terminal', title: 'python' } },
+    })
+    expect(dock.activePanel?.title).toBe('python')
+    store.openTerminal()
+    expect(dock.getPanel('terminal:5')?.group).toBe(dock.getPanel(terminal.id)?.group)
   })
 
   it('keeps terminal ids monotonic per bot', () => {
@@ -879,6 +1136,57 @@ describe('workspace layout store', () => {
 
     expect(dock.getPanel('terminal:1')?.title).toBe('Terminal 1')
     expect(dock.getPanel('terminal:2')?.title).toBe('Terminal 2')
+  })
+
+  it('re-derives system tab titles persisted under another language', async () => {
+    localStorage.setItem('workspace-layout', JSON.stringify({
+      'bot-1': {
+        layout: {
+          panels: {
+            // Persisted while the UI ran under another locale ("New Chat" was a
+            // previous English draft label); draft titles are never user content.
+            'chat:1': {
+              id: 'chat:1',
+              contentComponent: 'chat',
+              title: 'New Chat',
+              params: { sessionId: null },
+            },
+            // Session tabs keep their title — only drafts are system-titled.
+            'chat:2': {
+              id: 'chat:2',
+              contentComponent: 'chat',
+              title: 'Issue Triage',
+              params: { sessionId: 'session-1' },
+            },
+            'schedule:new:1': {
+              id: 'schedule:new:1',
+              contentComponent: 'schedule',
+              title: '',
+              params: {},
+            },
+            // Saved-schedule tabs carry the schedule name; never re-derived.
+            'schedule:job-1': {
+              id: 'schedule:job-1',
+              contentComponent: 'schedule',
+              title: 'Nightly sync',
+              params: { scheduleId: 'job-1' },
+            },
+          },
+        },
+        scheduleCounter: 1,
+        ephemeralIds: [],
+      },
+    }))
+
+    const store = useWorkspaceTabsStore()
+    const dock = createFakeDock()
+    store.registerApi(dock as never)
+    await nextTick()
+
+    expect(dock.getPanel('chat:1')?.title).toBe('New Session')
+    expect(dock.getPanel('chat:2')?.title).toBe('Issue Triage')
+    expect(dock.getPanel('schedule:new:1')?.title).toBe('Schedule')
+    expect(dock.getPanel('schedule:job-1')?.title).toBe('Nightly sync')
   })
 
   it('updates only the intended terminal title and ignores invalid or repeated events', () => {
@@ -996,25 +1304,28 @@ describe('workspace layout store', () => {
     expect(chatStoreMock.hasExplicitSessionSelection).toBe(false)
   })
 
-  it('opens an explicit draft from a stale active chat session', async () => {
+  it('keeps the focused chat tab when the selection changes in the background', async () => {
     const selection = useChatSelectionStore()
+    chatStoreMock.sessions.push({ id: 'a', title: 'A' }, { id: 'b', title: 'B' })
     const store = useWorkspaceTabsStore()
     const dock = createFakeDock()
     store.registerApi(dock as never)
 
-    store.openSessionChat({ sessionId: 's1', title: 'Session 1' })
-    expect(dock.activePanel?.params.sessionId).toBe('s1')
+    store.openSessionChatPinned({ sessionId: 'a', title: 'A' })
+    store.openSessionChat({ sessionId: 'b', title: 'B' })
+    const tabB = dock.activePanel!
+    expect(tabB.params.sessionId).toBe('b')
 
-    selection.setSession('s1', { explicitSelection: true })
+    chatStoreMock.sessionId = 'a'
+    chatStoreMock.hasExplicitSessionSelection = true
+    selection.setSession('a', { explicitSelection: true })
     await nextTick()
     chatStoreMock.sessionId = null
-    chatStoreMock.hasExplicitSessionSelection = true
     selection.setSession(null, { explicitSelection: true })
     await nextTick()
 
-    expect(dock.activePanel?.component).toBe('chat')
-    expect(dock.activePanel?.params).toMatchObject({ sessionId: null, explicitSelection: true })
-    expect(chatStoreMock.selectDraft).toHaveBeenLastCalledWith({ explicitSelection: true })
+    expect(dock.activePanel).toBe(tabB)
+    expect(tabB.params.sessionId).toBe('b')
   })
 
   it('does not let restored draft panel params clear an explicit empty composer', async () => {
@@ -1117,14 +1428,16 @@ describe('workspace layout store', () => {
 
     // initialize() auto-picks a newer Untitled while the dock still shows the
     // restored conversation — selection must snap back to the open panel.
+    chatStoreMock.loadingChats = true
+    await nextTick()
     chatStoreMock.sessionId = 'untitled-latest'
     chatStoreMock.hasExplicitSessionSelection = false
-    chatStoreMock.loadingChats = false
     chatStoreMock.sessions.push(
       { id: 'untitled-latest', title: '' },
       { id: 'restored-session', title: 'Restored' },
     )
     useChatSelectionStore().setSession('untitled-latest', { explicitSelection: false })
+    chatStoreMock.loadingChats = false
     await nextTick()
     await flushDraftChatFallback()
 
@@ -1172,11 +1485,13 @@ describe('workspace layout store', () => {
 
     // Simulate initialize() finishing: it writes the latest history item into
     // selection with explicitSelection=false (see bootstrap.ts).
+    chatStoreMock.loadingChats = true
+    await nextTick()
     chatStoreMock.sessionId = 'untitled-1'
     chatStoreMock.hasExplicitSessionSelection = false
-    chatStoreMock.loadingChats = false
     chatStoreMock.sessions.push({ id: 'untitled-1', title: '' })
     useChatSelectionStore().setSession('untitled-1', { explicitSelection: false })
+    chatStoreMock.loadingChats = false
     await nextTick()
     await flushDraftChatFallback()
 
@@ -1192,7 +1507,7 @@ describe('workspace layout store', () => {
     expect(chatStoreMock.selectDraft).not.toHaveBeenCalled()
   })
 
-  it('still opens a chat tab on explicit session selection after a file/preview restore', async () => {
+  it('does not open a chat tab for a selection written over a restored file workspace', async () => {
     localStorage.setItem('workspace-layout', JSON.stringify({
       'bot-1': {
         layout: {
@@ -1220,7 +1535,8 @@ describe('workspace layout store', () => {
     useChatSelectionStore().setSession('picked-1', { explicitSelection: true })
     await nextTick()
 
-    expect(dock.panels.some(panel => panel.component === 'chat' && panel.params.sessionId === 'picked-1')).toBe(true)
+    expect(dock.panels.some(panel => panel.component === 'chat')).toBe(false)
+    expect(dock.activePanel?.component).toBe('file')
   })
 
   it('does not promote a restored auto-selected native session into explicit selection while chats load', async () => {
@@ -1392,7 +1708,7 @@ describe('workspace layout store', () => {
     expect(chatStoreMock.selectDraft).not.toHaveBeenCalled()
   })
 
-  it('closes the active deleted chat tab and opens the newly selected session', async () => {
+  it('closes the active deleted chat tab without opening a replacement session', async () => {
     const selection = useChatSelectionStore()
     selection.setSession('s1')
     chatStoreMock.sessions.push(
@@ -1408,14 +1724,14 @@ describe('workspace layout store', () => {
 
     emitDeletedSession('s1')
     chatStoreMock.sessions.splice(0, chatStoreMock.sessions.length, { id: 's2', title: 'Next session' })
-    selection.setSession('s2')
-    await nextTick()
+    chatStoreMock.sessionId = null
+    selection.setSession(null)
+    await flushDraftChatFallback()
 
     expect(dock.getPanel(chatPanel.id)).toBeUndefined()
-    const nextChatPanel = dock.panels.find(panel => panel.component === 'chat')
-    expect(nextChatPanel?.params.sessionId).toBe('s2')
-    expect(nextChatPanel?.title).toBe('Next session')
-    expect(chatStoreMock.selectDraft).not.toHaveBeenCalled()
+    expect(dock.panels.some(panel => panel.params.sessionId === 's2')).toBe(false)
+    expect(dock.activePanel?.component).toBe('chat')
+    expect(dock.activePanel?.params.sessionId ?? null).toBeNull()
   })
 
   it('resets a failed deferred-session chat panel to draft when its composer scope matches', async () => {
@@ -1442,7 +1758,7 @@ describe('workspace layout store', () => {
     expect(chatStoreMock.selectDraft).toHaveBeenCalled()
   })
 
-  it('does not let deleted-tab auto-activation override the fallback session', async () => {
+  it('lets the neighbor tab take over when the focused session is deleted', async () => {
     const selection = useChatSelectionStore()
     selection.setSession('s1')
     chatStoreMock.sessions.push(
@@ -1467,17 +1783,74 @@ describe('workspace layout store', () => {
       { id: 's3', title: 'Neighbor session' },
     )
     emitDeletedSession('s1')
-    chatStoreMock.hasExplicitSessionSelection = false
-    selection.setSession('s2')
+    chatStoreMock.sessionId = null
+    selection.setSession(null)
     await nextTick()
     await nextTick()
 
     expect(dock.getPanel(deletedPanel.id)).toBeUndefined()
-    expect(selection.sessionId).toBe('s2')
-    expect(chatStoreMock.selectSession).not.toHaveBeenCalledWith('s3')
-    expect(dock.activePanel?.params.sessionId).toBe('s2')
-    expect(chatStoreMock.hasExplicitSessionSelection).toBe(false)
-    expect(chatStoreMock.selectDraft).not.toHaveBeenCalled()
+    expect(dock.activePanel?.params.sessionId).toBe('s3')
+    expect(selection.sessionId).toBe('s3')
+    expect(dock.panels.some(panel => panel.params.sessionId === 's2')).toBe(false)
+  })
+
+  it('drops the selection when its tab closes while a non-chat tab has focus', () => {
+    const selection = useChatSelectionStore()
+    chatStoreMock.sessions.push(
+      { id: 's1', title: 'Closed session' },
+      { id: 's2', title: 'Other session' },
+    )
+    const store = useWorkspaceTabsStore()
+    const dock = createFakeDock()
+    store.registerApi(dock as never)
+
+    store.openSessionChat({ sessionId: 's2', title: 'Other session' })
+    store.pinPanel(dock.activePanel!.id)
+    store.openSessionChat({ sessionId: 's1', title: 'Closed session' })
+    const closing = dock.activePanel!
+    store.pinPanel(closing.id)
+    expect(selection.sessionId).toBe('s1')
+    store.openFile('/data/a.md')
+    expect(dock.activePanel?.component).toBe('file')
+    expect(selection.sessionId).toBe('s1')
+
+    closing.api.close()
+
+    expect(dock.activePanel?.component).toBe('file')
+    expect(dock.panels.some(panel => panel.params.sessionId === 's2')).toBe(true)
+    expect(selection.sessionId).toBeNull()
+  })
+
+  it('never selects a deleted session while its split copies close', async () => {
+    const selection = useChatSelectionStore()
+    selection.setSession('s1')
+    chatStoreMock.sessions.push({ id: 's1', title: 'Deleted session' })
+    const store = useWorkspaceTabsStore()
+    const dock = createFakeDock()
+    store.registerApi(dock as never)
+
+    store.openSessionChat({ sessionId: 's1', title: 'Deleted session' })
+    const original = dock.panels.find(panel => panel.component === 'chat' && panel.params.sessionId === 's1')!
+    store.pinPanel(original.id)
+    store.splitGroup(original.group!.id, 'right')
+    const copy = dock.panels.find(panel => panel.component === 'chat' && panel.id !== original.id)!
+    expect(copy.params.sessionId).toBe('s1')
+    store.pinPanel(copy.id)
+    store.openFile('/data/a.md')
+    original.api.setActive()
+    chatStoreMock.selectSession.mockClear()
+
+    chatStoreMock.sessions.splice(0, chatStoreMock.sessions.length)
+    emitDeletedSession('s1')
+    chatStoreMock.sessionId = null
+    selection.setSession(null)
+    await nextTick()
+    await nextTick()
+
+    expect(dock.panels.some(panel => panel.params.sessionId === 's1')).toBe(false)
+    expect(chatStoreMock.selectSession).not.toHaveBeenCalledWith('s1', expect.anything())
+    expect(chatStoreMock.selectSession).not.toHaveBeenCalledWith('s1')
+    expect(selection.sessionId).toBeNull()
   })
 
   it('keeps open chat tabs when a paginated session list refresh drops their id', async () => {
@@ -1515,10 +1888,13 @@ describe('workspace layout store', () => {
     store.openSessionChat({ sessionId: 's1', title: 'Deleted session' })
     const deletedPanel = dock.panels.find(panel => panel.component === 'chat')!
 
+    // chat-list selectBot clears the previous bot's session.
+    selection.setSession(null)
+    chatStoreMock.sessionId = null
     selection.setBot('bot-without-layout')
     emitDeletedSession('s1', 'bot-1')
     await nextTick()
-    expect(dock.getPanel(deletedPanel.id)).toBeUndefined()
+    expect(dock.panels.some(panel => panel.params.sessionId === 's1')).toBe(false)
 
     selection.setBot('bot-1')
     await nextTick()
@@ -2226,6 +2602,25 @@ describe('workspace layout store', () => {
       expect(written['bot-1'].layout).toEqual(storedLayout)
     })
 
+    it('opens mobile navigation for sidebar shortcuts it can show and ignores Supermarket', async () => {
+      mobileBreakpoint.setMobile(true)
+      const store = useWorkspaceTabsStore()
+      const dock = createFakeDock()
+      store.registerApi(dock as never)
+      await flushDraftChatFallback()
+      const registry = createKeyboardCommandRegistry()
+      const unregister = registerWorkbenchCommands(registry, store)
+
+      registry.dispatch(appKeyboardCommands.showSchedule)
+      expect(store.sidebarView).toBe('schedule')
+      expect(store.mobileNavOpen).toBe(true)
+      store.closeMobileNav()
+      registry.dispatch(appKeyboardCommands.showSupermarket)
+      expect(store.sidebarView).toBe('schedule')
+      expect(store.mobileNavOpen).toBe(false)
+      unregister()
+    })
+
     it('keeps programmatic opens inside the single group instead of splitting', async () => {
       mobileBreakpoint.setMobile(true)
       const store = useWorkspaceTabsStore()
@@ -2370,6 +2765,119 @@ describe('workspace layout store', () => {
       expect(written['bot-1'].layout).toEqual(desktopPersistedLayout)
     })
 
+    it.each(['file', 'preview', 'terminal', 'browser'] as const)(
+      'returns to chat from a %s-only stack without replacing its panel',
+      async (component) => {
+        mobileBreakpoint.setMobile(true)
+        const store = useWorkspaceTabsStore()
+        const dock = createFakeDock()
+        store.registerApi(dock as never)
+        await flushDraftChatFallback()
+        store.openFile('/data/return.md') // Replaces the ephemeral draft chat.
+        const file = dock.getPanel('file:/data/return.md')!
+        if (component !== 'file') {
+          if (component === 'preview') store.openPreview('/data/return.md')
+          if (component === 'terminal') store.openTerminal()
+          if (component === 'browser') store.openBrowser()
+          file.api.close()
+        }
+        await flushDraftChatFallback()
+        expect(dock.panels).toHaveLength(1)
+        const original = dock.activePanel!
+        expect(original.component).toBe(component)
+        // Explicit navigation must not inherit the empty-dock restore guard.
+        store.activateChatPanel()
+        store.activateChatPanel()
+        await flushDraftChatFallback()
+        expect(dock.activePanel?.component).toBe('chat')
+        expect(dock.getPanel(original.id)).toBe(original)
+        expect(dock.panels.filter(panel => panel.component === 'chat')).toHaveLength(1)
+        // Opening another file must not immediately evict the recovered chat.
+        store.openFile('/data/another.md')
+        store.activateChatPanel()
+        expect(dock.activePanel?.component).toBe('chat')
+        expect(dock.panels.filter(panel => panel.component === 'chat')).toHaveLength(1)
+      },
+    )
+
+    it('returns to chat while retaining dirty files', async () => {
+      mobileBreakpoint.setMobile(true)
+      const store = useWorkspaceTabsStore()
+      const dock = createFakeDock()
+      store.registerApi(dock as never)
+      await flushDraftChatFallback()
+      store.openFile('/data/dirty.md')
+      store.setFileDirty('file:/data/dirty.md', true)
+      const file = dock.getPanel('file:/data/dirty.md')!
+      store.activateChatPanel()
+      await flushDraftChatFallback()
+      expect(dock.activePanel?.component).toBe('chat')
+      expect(dock.getPanel(file.id)).toBe(file)
+      expect(store.fileDirty[file.id]).toBe(true)
+      expect(store.pendingClose).toBeNull()
+    })
+
+    it('restores an explicit session selection without evicting a non-chat panel', async () => {
+      mobileBreakpoint.setMobile(true)
+      const store = useWorkspaceTabsStore()
+      const dock = createFakeDock()
+      store.registerApi(dock as never)
+      await flushDraftChatFallback()
+      store.openFile('/data/return.md')
+      const file = dock.getPanel('file:/data/return.md')!
+      useChatSelectionStore().setSession('s1', { explicitSelection: true })
+      chatStoreMock.sessionId = 's1'
+      chatStoreMock.hasExplicitSessionSelection = true
+      store.activateChatPanel()
+      store.activateChatPanel()
+      await flushDraftChatFallback()
+      expect(dock.activePanel?.params.sessionId).toBe('s1')
+      expect(dock.getPanel(file.id)).toBe(file)
+      expect(dock.panels.filter(panel => panel.component === 'chat')).toHaveLength(1)
+    })
+
+    it.each(['auto-selected', 'deleted'] as const)(
+      'does not revive an %s session when returning to chat',
+      async (kind) => {
+        mobileBreakpoint.setMobile(true)
+        const store = useWorkspaceTabsStore()
+        const dock = createFakeDock()
+        store.registerApi(dock as never)
+        await flushDraftChatFallback()
+        store.openFile('/data/return.md')
+        if (kind === 'deleted') {
+          emitDeletedSession('s1')
+          await nextTick()
+        }
+        useChatSelectionStore().setSession('s1', { explicitSelection: kind === 'deleted' })
+        chatStoreMock.sessionId = 's1'
+        chatStoreMock.hasExplicitSessionSelection = kind === 'deleted'
+        store.activateChatPanel()
+        await flushDraftChatFallback()
+        expect(dock.activePanel?.component).toBe('chat')
+        expect(dock.activePanel?.params.sessionId).toBeNull()
+        expect(dock.getPanel('file:/data/return.md')).toBeDefined()
+      },
+    )
+
+    it('waits for a bot switch instead of returning into the previous workspace', async () => {
+      mobileBreakpoint.setMobile(true)
+      const store = useWorkspaceTabsStore()
+      const dock = createFakeDock()
+      store.registerApi(dock as never)
+      await flushDraftChatFallback()
+      store.openFile('/data/previous-bot.md')
+      const original = dock.activePanel
+      useChatSelectionStore().setBot('bot-without-layout')
+      store.activateChatPanel()
+      expect(dock.activePanel).toBe(original)
+      expect(dock.panels.some(panel => panel.component === 'chat')).toBe(false)
+      await flushDraftChatFallback()
+      store.activateChatPanel()
+      expect(dock.activePanel?.component).toBe('chat')
+      expect(dock.getPanel('file:/data/previous-bot.md')).toBeUndefined()
+    })
+
     it('focuses the existing terminal instead of stacking unreachable new ones', async () => {
       mobileBreakpoint.setMobile(true)
       const store = useWorkspaceTabsStore()
@@ -2406,31 +2914,5 @@ describe('workspace layout store', () => {
       expect(dock.activePanel?.id).toBe('browser:1')
     })
 
-    it('never opens or focuses Desktop when a GUI tool starts on mobile', async () => {
-      mobileBreakpoint.setMobile(true)
-      const store = useWorkspaceTabsStore()
-      const dock = createFakeDock()
-      store.registerApi(dock as never)
-      await flushDraftChatFallback()
-
-      // The runtime fires one guiToolUseRequested per GUI tool CALL, so a turn
-      // with several calls used to re-open/re-focus the viewer every time —
-      // on the single stack each focus steals the whole screen from chat.
-      const chatPanelId = dock.activePanel?.id
-      emitGuiToolUse()
-      emitGuiToolUse('computer_observe')
-
-      expect(dock.getPanel('display:1')).toBeUndefined()
-      expect(dock.activePanel?.id).toBe(chatPanelId)
-
-      // Even a Desktop the user opened MANUALLY must not be re-focused by
-      // later tool calls: after going back to chat, chat stays on top.
-      store.openDisplay()
-      expect(dock.activePanel?.id).toBe('display:1')
-      store.activateChatPanel()
-      emitGuiToolUse()
-      expect(dock.activePanel?.id).not.toBe('display:1')
-      expect(dock.activePanel?.id).toBe(chatPanelId)
-    })
   })
 })

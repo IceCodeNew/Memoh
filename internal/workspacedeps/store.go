@@ -46,24 +46,28 @@ type Installation struct {
 	DefinitionRevision string
 	ID                 string
 	BotID              string
-	WorkspaceTargetID  string
-	DependencyID       string
-	Source             string
-	Status             Status
-	InstalledVersion   string
-	LatestVersion      string
-	LastCheckedAt      *time.Time
-	LastError          string
-	ManifestDigest     string
-	CreatedAt          time.Time
-	UpdatedAt          time.Time
+
+	DependencyID     string
+	Source           string
+	Status           Status
+	InstalledVersion string
+	LatestVersion    string
+	LastCheckedAt    *time.Time
+	// LastError is text written by earlier servers, and upstream output the
+	// scripts used to be recorded with. A failure recorded now carries
+	// LastErrorCode, the catalog code clients render as errors.<code>.
+	LastError      string
+	LastErrorCode  string
+	ManifestDigest string
+	CreatedAt      time.Time
+	UpdatedAt      time.Time
 }
 
-// InstallationKey identifies a record; the triple is unique per team.
+// InstallationKey identifies a record; the pair is unique per team.
 type InstallationKey struct {
-	BotID             string
-	WorkspaceTargetID string
-	DependencyID      string
+	BotID string
+
+	DependencyID string
 }
 
 // UpsertInstallation creates or replaces the intent portion of a record.
@@ -89,6 +93,7 @@ type ObservedUpdate struct {
 	LatestVersion      *string
 	LastCheckedAt      *time.Time
 	LastError          *string
+	LastErrorCode      *string
 	ManifestDigest     *string
 }
 
@@ -107,7 +112,6 @@ type Store interface {
 	// owned by operationID. A superseded operation returns ErrBusy.
 	FinishOperation(ctx context.Context, key InstallationKey, operationID string, terminal *Installation) (Installation, error)
 	Get(ctx context.Context, key InstallationKey) (Installation, error)
-	ListForTarget(ctx context.Context, botID, workspaceTargetID string) ([]Installation, error)
 	ListForBot(ctx context.Context, botID string) ([]Installation, error)
 	// ListByStatus returns every record in the given status across bots.
 	ListByStatus(ctx context.Context, status Status) ([]Installation, error)
@@ -115,7 +119,9 @@ type Store interface {
 	// least olderThan, so the reaper can mark them failed.
 	ListStaleOperations(ctx context.Context, olderThan time.Duration) ([]Installation, error)
 	Upsert(ctx context.Context, in UpsertInstallation) (Installation, error)
-	SetStatus(ctx context.Context, key InstallationKey, status Status, lastError string) (Installation, error)
+	// SetStatus writes the failure's catalog code; the column that used to
+	// hold text is left empty.
+	SetStatus(ctx context.Context, key InstallationKey, status Status, lastErrorCode string) (Installation, error)
 	UpdateObserved(ctx context.Context, key InstallationKey, upd ObservedUpdate) (Installation, error)
 	Delete(ctx context.Context, key InstallationKey) error
 }

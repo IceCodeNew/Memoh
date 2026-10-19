@@ -1,5 +1,6 @@
 import type { Component } from 'vue'
 import {
+  Slack,
   Anthropic,
   Azure,
   AzureColor,
@@ -55,6 +56,7 @@ import {
   NvidiaColor,
   Ollama,
   Openai,
+  OpencodeGo,
   Openrouter,
   Perplexity,
   PerplexityColor,
@@ -84,7 +86,9 @@ import {
  * The key is the SVG filename without extension (e.g. 'openai', 'deepseek-color').
  */
 export const iconMap: Record<string, Component> = {
+  'slack': Slack,
   'openai': Openai,
+  'opencode-go': OpencodeGo,
   'anthropic': Anthropic,
   'github-copilot': GithubCopilot,
   'google': Google,

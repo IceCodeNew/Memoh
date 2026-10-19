@@ -186,7 +186,7 @@ func (m *Manager) RemoveAdapter(ctx context.Context, channelType ChannelType) {
 		if entry != nil && entry.config.ChannelType == channelType {
 			if entry.connection != nil {
 				if err := entry.connection.Stop(ctx); err != nil && !errors.Is(err, ErrStopNotSupported) && m.logger != nil {
-					m.logger.Warn("adapter stop failed", slog.String("config_id", id), slog.Any("error", err))
+					m.logger.WarnContext(ctx, "adapter stop failed", slog.String("config_id", id), slog.Any("error", err))
 				}
 			}
 			delete(m.connections, id)
@@ -209,7 +209,7 @@ func (m *Manager) Refresh(ctx context.Context) {
 // Start begins the periodic config refresh loop and inbound worker pool.
 func (m *Manager) Start(ctx context.Context) {
 	if m.logger != nil {
-		m.logger.Info("manager start")
+		m.logger.InfoContext(ctx, "manager start")
 	}
 	m.startInboundWorkers() //nolint:contextcheck // The shared pool intentionally owns a request-independent lifecycle context.
 	go func() {
@@ -220,7 +220,7 @@ func (m *Manager) Start(ctx context.Context) {
 			select {
 			case <-ctx.Done():
 				if m.logger != nil {
-					m.logger.Info("manager stop")
+					m.logger.InfoContext(ctx, "manager stop")
 				}
 				m.stopAll(ctx)
 				return
@@ -230,6 +230,13 @@ func (m *Manager) Start(ctx context.Context) {
 		}
 	}()
 }
+
+var (
+	// ErrSendTargetRequired means a send named neither a target nor a channel identity.
+	ErrSendTargetRequired = errors.New("target or channel_identity_id is required")
+	// ErrChannelBindingRequired means the recipient identity has not linked this channel.
+	ErrChannelBindingRequired = errors.New("channel binding required")
+)
 
 // Send delivers an outbound message to the specified channel, resolving target and config automatically.
 func (m *Manager) Send(ctx context.Context, botID string, channelType ChannelType, req SendRequest) error {
@@ -248,14 +255,14 @@ func (m *Manager) Send(ctx context.Context, botID string, channelType ChannelTyp
 	if target == "" {
 		targetChannelIdentityID := strings.TrimSpace(req.ChannelIdentityID)
 		if targetChannelIdentityID == "" {
-			return errors.New("target or channel_identity_id is required")
+			return ErrSendTargetRequired
 		}
 		userCfg, err := m.service.GetChannelIdentityConfig(ctx, targetChannelIdentityID, channelType)
 		if err != nil {
 			if m.logger != nil {
-				m.logger.Warn("channel binding missing", slog.String("channel", channelType.String()), slog.String("channel_identity_id", targetChannelIdentityID))
+				m.logger.WarnContext(ctx, "channel binding missing", slog.String("channel", channelType.String()), slog.String("channel_identity_id", targetChannelIdentityID))
 			}
-			return errors.New("channel binding required")
+			return ErrChannelBindingRequired
 		}
 		target, err = m.registry.ResolveTargetFromUserConfig(channelType, userCfg.Config)
 		if err != nil {
@@ -279,7 +286,7 @@ func (m *Manager) Send(ctx context.Context, botID string, channelType ChannelTyp
 		return errors.New("message is required")
 	}
 	if m.logger != nil {
-		m.logger.Info("send outbound", slog.String("channel", channelType.String()), slog.String("bot_id", botID))
+		m.logger.InfoContext(ctx, "send outbound", slog.String("channel", channelType.String()), slog.String("bot_id", botID))
 	}
 	req.Message = resolveMarkdownMessage(ctx, m.attachmentStore, config, req.Message)
 	policy := m.resolveOutboundPolicy(channelType)
@@ -292,9 +299,6 @@ func (m *Manager) Send(ctx context.Context, botID string, channelType ChannelTyp
 		return err
 	}
 	if err := m.sendAllWithConfig(ctx, sender, config, outbound, policy); err != nil {
-		if m.logger != nil {
-			m.logger.Error("send outbound failed", slog.String("channel", channelType.String()), slog.String("bot_id", botID), slog.Any("error", err))
-		}
 		return err
 	}
 	for _, binding := range markdownmedia.Bindings(req.Message.Metadata) {
@@ -350,7 +354,7 @@ func (m *Manager) React(ctx context.Context, botID string, channelType ChannelTy
 		return errors.New("emoji is required when adding a reaction")
 	}
 	if m.logger != nil {
-		m.logger.Info("react outbound",
+		m.logger.InfoContext(ctx, "react outbound",
 			slog.String("channel", channelType.String()),
 			slog.String("bot_id", botID),
 			slog.String("message_id", messageID),

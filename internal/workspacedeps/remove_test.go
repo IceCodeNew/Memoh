@@ -40,7 +40,7 @@ func TestRemovalScriptDeletesWorkspaceCopies(t *testing.T) {
 			dep := catalog.Dependency{ID: tc.id, Provides: tc.commands}
 			// Recipes commonly exit explicitly; cleanup must still run.
 			body := removalScript(dep, "exit 0", toolkit)
-			if out, err := runRemovalFixture(t, body, home, TargetNative); err != nil {
+			if out, err := runRemovalFixture(t, body, home, "native"); err != nil {
 				t.Fatalf("remove: %v: %s", err, out)
 			}
 			for _, name := range append(append([]string{home}, removalFixturePaths(toolkit, "bin", tc.commands)...), removalFixturePaths(toolkit, "", tc.trees)...) {
@@ -52,7 +52,7 @@ func TestRemovalScriptDeletesWorkspaceCopies(t *testing.T) {
 				t.Fatalf("unrelated toolkit file removed: %v", err)
 			}
 			// Repeated removal is safe, including when no managed copy existed.
-			if out, err := runRemovalFixture(t, body, home, TargetNative); err != nil {
+			if out, err := runRemovalFixture(t, body, home, "native"); err != nil {
 				t.Fatalf("repeat remove: %v: %s", err, out)
 			}
 		})
@@ -64,7 +64,7 @@ func TestRemovalScriptFailureAndRemoteScope(t *testing.T) {
 		name, target, script string
 		failed               bool
 	}{
-		{"failed recipe", TargetNative, "exit 42", true},
+		{"failed recipe", "native", "exit 42", true},
 		{"remote target", "remote-test", "exit 0", false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -100,7 +100,7 @@ func TestRemovalScriptDoesNotFollowToolkitSymlinks(t *testing.T) {
 		t.Fatal(err)
 	}
 	body := removalScript(catalog.Dependency{ID: "uv", Provides: []string{"../keep", "uv"}}, ":", toolkit)
-	if out, err := runRemovalFixture(t, body, filepath.Join(root, "managed"), TargetNative); err == nil {
+	if out, err := runRemovalFixture(t, body, filepath.Join(root, "managed"), "native"); err == nil {
 		t.Fatalf("symlink ancestor must fail: %s", out)
 	}
 	if _, err := os.Stat(filepath.Join(outside, "keep")); err != nil {

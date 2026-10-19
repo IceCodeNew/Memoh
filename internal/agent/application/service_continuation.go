@@ -2,11 +2,29 @@ package application
 
 import (
 	"context"
+	"strings"
 
 	contextfrag "github.com/felinics/memoh/internal/agent/context/fragment"
 	historyfrag "github.com/felinics/memoh/internal/agent/context/history"
 	"github.com/felinics/memoh/internal/agent/runtime/native"
+	sessionruntime "github.com/felinics/memoh/internal/agent/runtime/session"
 )
+
+type continuationTurnRequestMessageResolver interface {
+	GetVisibleHistoryTurnRequestMessageIDByTurn(context.Context, string, string) (string, error)
+}
+
+func (s *Service) continuationTurnRequestMessageID(ctx context.Context, sessionID string, runHandle sessionruntime.RunHandle) (string, error) {
+	turnID := strings.TrimSpace(runHandle.TurnID)
+	if turnID == "" || s == nil || s.messageService == nil {
+		return "", nil
+	}
+	resolver, ok := s.messageService.(continuationTurnRequestMessageResolver)
+	if !ok {
+		return "", nil
+	}
+	return resolver.GetVisibleHistoryTurnRequestMessageIDByTurn(ctx, sessionID, turnID)
+}
 
 func (s *Service) prepareContinuationRunConfig(
 	ctx context.Context,
@@ -45,9 +63,6 @@ func (s *Service) prepareContinuationRunConfig(
 	base.Messages = modelMessagesToSDKMessages(repairToolCallClosures(nonNilModelMessages(messages), syntheticToolClosureError))
 	base.ContextCurrentUserMessageIndex = nil
 	base.ContextMemoryMessageIndex = nil
-	if base.ContextToolExchangePolicy == nil {
-		base.ContextToolExchangePolicy = defaultToolExchangePolicy()
-	}
 	base.Query = ""
 	base.LiveToolStream = eventCh != nil
 	base.CanRequestUserInput = s.canDeliverUserInputWS(eventCh)

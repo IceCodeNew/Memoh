@@ -1,3 +1,4 @@
+import { randomUUID } from '@/utils/uuid'
 import {
   getBots,
   getBotsByBotIdAcpRuntimesByRuntimeId,
@@ -63,6 +64,9 @@ export interface CreateSessionOptions {
 
 export interface CreateACPRuntimeOptions {
   agentId: string
+  // The Agent instance whose setup launches the runtime; only a session bound
+  // to the same instance adopts it.
+  botAgentId?: string
   projectPath?: string
 }
 
@@ -84,7 +88,7 @@ export function queueItemText(item: SessionQueueItem): string {
 
 const queuePath = (botId: string, sessionId: string) => ({ bot_id: botId.trim(), session_id: sessionId.trim() })
 
-export async function enqueueSteerQueue(botId: string, sessionId: string, text: string, invocationId = crypto.randomUUID()): Promise<SessionQueueItem> {
+export async function enqueueSteerQueue(botId: string, sessionId: string, text: string, invocationId = randomUUID()): Promise<SessionQueueItem> {
   const { data } = await postBotsByBotIdSessionsBySessionIdSteerQueue({
     path: queuePath(botId, sessionId),
     body: { invocation_id: invocationId, text },
@@ -98,7 +102,7 @@ export async function fetchSessionQueues(botId: string, sessionId: string): Prom
   return data ?? {}
 }
 
-export async function enqueueFollowUpQueue(botId: string, sessionId: string, text: string, invocationId = crypto.randomUUID()): Promise<SessionQueueItem> {
+export async function enqueueFollowUpQueue(botId: string, sessionId: string, text: string, invocationId = randomUUID()): Promise<SessionQueueItem> {
   const { data } = await postBotsByBotIdSessionsBySessionIdFollowUpQueue({
     path: queuePath(botId, sessionId),
     body: { invocation_id: invocationId, text },
@@ -185,6 +189,12 @@ export interface FetchSessionsResult {
 const DEFAULT_SESSION_TYPES = ['chat', 'discuss', 'acp_agent', 'schedule']
 const DEFAULT_SESSION_PAGE_SIZE = 50
 
+/**
+ * Pages the sidebar's session lists (Recents and workdir folders). Sessions
+ * that schedule runs created are left out: the Schedule panel lists them under
+ * their schedule. A schedule-created session that a schedule still runs in
+ * stays, since that schedule's card opens it as an ordinary conversation.
+ */
 export async function fetchSessions(botId: string, options?: FetchSessionsOptions): Promise<FetchSessionsResult> {
   const id = botId.trim()
   if (!id) return { items: [], nextCursor: null }
@@ -198,6 +208,7 @@ export async function fetchSessions(botId: string, options?: FetchSessionsOption
       types: types.join(','),
       ...(parentSessionId ? { parent_session_id: parentSessionId } : {}),
       ...(workdirId ? { workdir_id: workdirId } : {}),
+      hide_schedule_runs: true,
       limit: options?.limit ?? DEFAULT_SESSION_PAGE_SIZE,
       ...(cursor ? { cursor } : {}),
     },
@@ -374,6 +385,7 @@ export async function createACPRuntime(botId: string, options: CreateACPRuntimeO
     path: { bot_id: botId.trim() },
     body: {
       acp_agent_id: options.agentId.trim(),
+      bot_agent_id: options.botAgentId?.trim() || undefined,
       project_path: options.projectPath?.trim(),
     },
     throwOnError: true,

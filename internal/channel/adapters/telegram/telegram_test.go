@@ -1,11 +1,15 @@
 package telegram
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
+	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 	"time"
@@ -15,6 +19,7 @@ import (
 
 	"github.com/felinics/memoh/internal/channel"
 	"github.com/felinics/memoh/internal/command"
+	"github.com/felinics/memoh/internal/errs"
 )
 
 // newStubTelegramBot builds a telebot bot suitable for tests that need a
@@ -32,6 +37,24 @@ func newStubTelegramBot(t *testing.T) *tele.Bot {
 		t.Fatalf("create stub telegram bot: %v", err)
 	}
 	return bot
+}
+
+func TestTelegramInboundLogDoesNotIncludeMessageText(t *testing.T) {
+	const messageText = "private telegram message 82f0c"
+	var logs bytes.Buffer
+	adapter := NewTelegramAdapter(slog.New(slog.NewJSONHandler(&logs, nil)))
+	msg := channel.InboundMessage{
+		Message:      channel.Message{Text: messageText},
+		Conversation: channel.Conversation{ID: "chat-1", Type: channel.ConversationTypePrivate},
+		Sender:       channel.Identity{Attributes: map[string]string{"user_id": "user-1"}},
+	}
+	adapter.logTelegramInbound(context.Background(), "config-1", msg)
+	if !strings.Contains(logs.String(), `"msg":"inbound received"`) || !strings.Contains(logs.String(), `"chat_id":"chat-1"`) {
+		t.Fatal("inbound event or chat ID missing")
+	}
+	if strings.Contains(logs.String(), messageText) || strings.Contains(logs.String(), `"text":`) {
+		t.Fatal("telegram inbound log exposed message text")
+	}
 }
 
 func TestResolveTelegramSender(t *testing.T) {
@@ -1950,5 +1973,190 @@ func TestBuildTelegramPaginationCallbackKeepsEditInPlace(t *testing.T) {
 	}
 	if msg.Message.Reply == nil || !msg.Message.Reply.AttachmentsKnown {
 		t.Fatalf("reply = %+v, want AttachmentsKnown=true — the tapped card is the bot's own message", msg.Message.Reply)
+	}
+}
+
+func TestCollectTelegramStickerUsesReadableMedia(t *testing.T) {
+	thumb := &tele.Photo{File: tele.File{FileID: "thumb-file", FileSize: 4096}, Width: 320, Height: 320}
+	for _, tc := range []struct {
+		name            string
+		sticker         *tele.Sticker
+		wantPlatformKey string
+		wantMime        string
+		wantSize        [2]int
+	}{
+		{
+			name:            "静态贴纸保留原文件",
+			sticker:         &tele.Sticker{File: tele.File{FileID: "static-file", FileSize: 8192}, Width: 512, Height: 512, Emoji: "😀"},
+			wantPlatformKey: "static-file",
+			wantMime:        "image/webp",
+			wantSize:        [2]int{512, 512},
+		},
+		{
+			// 动画贴纸的动作就是它的内容，缩略图会把动作丢掉。保留 Lottie，
+			// 由 internal/media/lottie 渲染成帧。
+			name:            "动画贴纸保留原始 Lottie 而不是缩略图",
+			sticker:         &tele.Sticker{File: tele.File{FileID: "tgs-file", FileSize: 2048}, Animated: true, Width: 512, Height: 512, Thumbnail: thumb, Emoji: "🎬"},
+			wantPlatformKey: "tgs-file",
+			wantMime:        "application/x-tgsticker",
+			wantSize:        [2]int{512, 512},
+		},
+		{
+			// WebM 这里没有解码器，一张能读的静态图胜过一个读不了的文件。
+			name:            "视频贴纸改用静态缩略图",
+			sticker:         &tele.Sticker{File: tele.File{FileID: "video-file"}, Video: true, Width: 512, Height: 512, Thumbnail: thumb, Emoji: "😂"},
+			wantPlatformKey: "thumb-file",
+			wantMime:        "",
+			wantSize:        [2]int{320, 320},
+		},
+		{
+			name:            "视频贴纸无缩略图时标注真实 MIME",
+			sticker:         &tele.Sticker{File: tele.File{FileID: "video-file"}, Video: true, Width: 512, Height: 512},
+			wantPlatformKey: "video-file",
+			wantMime:        "video/webm",
+			wantSize:        [2]int{512, 512},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			adapter := &TelegramAdapter{}
+			atts := adapter.collectTelegramAttachments(nil, &tele.Message{Sticker: tc.sticker})
+			if len(atts) != 1 {
+				t.Fatalf("collectTelegramAttachments() = %d attachments, want 1", len(atts))
+			}
+			att := atts[0]
+			if att.Type != channel.AttachmentImage {
+				t.Fatalf("type = %q, want image", att.Type)
+			}
+			if att.PlatformKey != tc.wantPlatformKey {
+				t.Fatalf("platform key = %q, want %q", att.PlatformKey, tc.wantPlatformKey)
+			}
+			if att.Mime != tc.wantMime {
+				t.Fatalf("mime = %q, want %q", att.Mime, tc.wantMime)
+			}
+			if att.Width != tc.wantSize[0] || att.Height != tc.wantSize[1] {
+				t.Fatalf("size = %dx%d, want %dx%d", att.Width, att.Height, tc.wantSize[0], tc.wantSize[1])
+			}
+			// 只有真的把原件换成预览时，才需要留下原件的句柄。
+			_, recorded := att.Metadata["sticker_file_id"]
+			if want := tc.wantPlatformKey != tc.sticker.FileID; recorded != want {
+				t.Fatalf("sticker_file_id recorded = %v, want %v (metadata=%+v)", recorded, want, att.Metadata)
+			}
+		})
+	}
+}
+
+func TestCollectTelegramStickerCarriesEmojiInName(t *testing.T) {
+	adapter := &TelegramAdapter{}
+	atts := adapter.collectTelegramAttachments(nil, &tele.Message{
+		Sticker: &tele.Sticker{File: tele.File{FileID: "static-file"}, Width: 512, Height: 512, Emoji: "🎉"},
+	})
+	if len(atts) != 1 || atts[0].Name != "sticker-🎉" {
+		t.Fatalf("attachment = %+v, want the sticker emoji in the name", atts)
+	}
+
+	without := adapter.collectTelegramAttachments(nil, &tele.Message{
+		Sticker: &tele.Sticker{File: tele.File{FileID: "static-file"}, Width: 512, Height: 512},
+	})
+	if len(without) != 1 || without[0].Name != "sticker" {
+		t.Fatalf("attachment = %+v, want a plain sticker name", without)
+	}
+}
+
+func TestResolveAttachmentDownloadErrorOmitsBotToken(t *testing.T) {
+	const botToken = "123456:ABCDEFGHIJKLMNOPQRSTUVWXYZ_secret"
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	t.Cleanup(server.Close)
+
+	origGetBot := getOrCreateBotForTest
+	getOrCreateBotForTest = func(_ *TelegramAdapter, _, _ string) (*tele.Bot, error) {
+		return &tele.Bot{Token: botToken}, nil
+	}
+	t.Cleanup(func() { getOrCreateBotForTest = origGetBot })
+
+	adapter := NewTelegramAdapter(nil)
+	cfg := channel.ChannelConfig{ID: "config", Credentials: map[string]any{"bot_token": botToken}}
+	fileURL := server.URL + "/file/bot" + botToken + "/photos/file_1.jpg"
+
+	t.Run("request fails", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+
+		_, err := adapter.ResolveAttachment(ctx, cfg, channel.Attachment{URL: fileURL})
+		if err == nil {
+			t.Fatal("expected download error")
+		}
+		if strings.Contains(err.Error(), botToken) {
+			t.Fatalf("error text contains the bot token: %q", err.Error())
+		}
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("errors.Is(err, context.Canceled) = false: %v", err)
+		}
+		var urlErr *url.Error
+		if !errors.As(err, &urlErr) {
+			t.Fatalf("errors.As(err, *url.Error) = false: %v", err)
+		}
+		want := server.URL + "/[redacted]"
+		if urlErr.URL != want {
+			t.Fatalf("url.Error URL = %q, want %q", urlErr.URL, want)
+		}
+		// The recorded text renders the URL again; the placeholder must
+		// survive it unescaped.
+		if text := errs.Text(err); !strings.Contains(text, want) {
+			t.Fatalf("recorded text %q does not show %q", text, want)
+		}
+	})
+
+	t.Run("request cannot be built", func(t *testing.T) {
+		_, err := adapter.ResolveAttachment(context.Background(), cfg, channel.Attachment{URL: fileURL + "\x7f"})
+		if err == nil {
+			t.Fatal("expected request build error")
+		}
+		if strings.Contains(err.Error(), botToken) {
+			t.Fatalf("error text contains the bot token: %q", err.Error())
+		}
+		var urlErr *url.Error
+		if !errors.As(err, &urlErr) || urlErr.Op != "parse" {
+			t.Fatalf("errors.As(err, *url.Error) did not find the parse error: %v", err)
+		}
+	})
+}
+
+func TestTelegramAdapter_ProcessingRefreshSendsTypingToReplyTarget(t *testing.T) {
+	adapter := NewTelegramAdapter(nil)
+	var actions []map[string]any
+	bot := newTestTelegramBot(telegramRoundTripFunc(func(req *http.Request) (*http.Response, error) {
+		if !strings.HasSuffix(req.URL.Path, "/sendChatAction") {
+			t.Fatalf("unexpected Telegram request path %s", req.URL.Path)
+		}
+		body, _ := io.ReadAll(req.Body)
+		actions = append(actions, decodeTelegramBody(t, body))
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     http.Header{"Content-Type": []string{"application/json"}},
+			Body:       io.NopCloser(strings.NewReader(`{"ok":true,"result":true}`)),
+		}, nil
+	}))
+	origGetBot := getOrCreateBotForTest
+	getOrCreateBotForTest = func(_ *TelegramAdapter, _, _ string) (*tele.Bot, error) {
+		return bot, nil
+	}
+	defer func() { getOrCreateBotForTest = origGetBot }()
+
+	if got := adapter.ProcessingRefreshInterval(); got <= 0 || got >= 5*time.Second {
+		t.Fatalf("refresh interval = %s, want below Telegram's ~5s typing expiry", got)
+	}
+	cfg := channel.ChannelConfig{ID: "cfg", Credentials: map[string]any{"bot_token": "fake"}}
+	info := channel.ProcessingStatusInfo{ReplyTarget: "-100123"}
+	if err := adapter.ProcessingRefresh(context.Background(), cfg, channel.InboundMessage{}, info, channel.ProcessingStatusHandle{}); err != nil {
+		t.Fatalf("ProcessingRefresh: %v", err)
+	}
+	if len(actions) != 1 || fmt.Sprint(actions[0]["chat_id"]) != "-100123" || actions[0]["action"] != "typing" {
+		t.Fatalf("chat actions = %v, want one typing action to -100123", actions)
+	}
+	if err := adapter.ProcessingRefresh(context.Background(), cfg, channel.InboundMessage{}, channel.ProcessingStatusInfo{}, channel.ProcessingStatusHandle{}); err != nil || len(actions) != 1 {
+		t.Fatalf("refresh without a reply target sent %d actions, err %v; want none", len(actions)-1, err)
 	}
 }

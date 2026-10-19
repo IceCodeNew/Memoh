@@ -8,6 +8,7 @@ import (
 
 	sdk "github.com/felinics/twilight/sdk"
 
+	"github.com/felinics/memoh/internal/agent/toolexec"
 	"github.com/felinics/memoh/internal/mcp"
 )
 
@@ -31,17 +32,36 @@ func NewFederationProvider(log *slog.Logger, source mcp.ToolSource) *FederationP
 
 func (*FederationProvider) ProviderLabel() string { return "mcp" }
 
-func (f *FederationProvider) Tools(ctx context.Context, session SessionContext) ([]sdk.Tool, error) {
+// ToolNotice relays the source's own explanation of missing tools, so a
+// failed listing reaches the model instead of looking like an empty source.
+func (f *FederationProvider) ToolNotice(ctx context.Context, session SessionContext) string {
+	diagnostics, ok := f.source.(mcp.ToolSourceDiagnostics)
+	if !ok {
+		return ""
+	}
+	lines := diagnostics.ToolDiagnostics(ctx, toMCPSession(session))
+	kept := lines[:0]
+	for _, line := range lines {
+		if line = strings.TrimSpace(line); line != "" {
+			kept = append(kept, line)
+		}
+	}
+	return strings.Join(kept, "\n\n")
+}
+
+func (f *FederationProvider) Tools(ctx context.Context, session SessionContext) ([]toolexec.Tool, error) {
 	if f.source == nil {
 		return nil, nil
 	}
 	mcpSession := toMCPSession(session)
 	descriptors, err := f.source.ListTools(ctx, mcpSession)
 	if err != nil {
-		f.logger.Warn("federation list tools failed", slog.Any("error", err))
+		// Not fatal for the turn: the agent keeps its other tools. The gap is
+		// reported to the model through ToolNotice instead of being hidden.
+		f.logger.WarnContext(ctx, "federation list tools failed", slog.Any("error", err))
 		return nil, nil
 	}
-	tools := make([]sdk.Tool, 0, len(descriptors))
+	tools := make([]toolexec.Tool, 0, len(descriptors))
 	for _, desc := range descriptors {
 		name := strings.TrimSpace(desc.Name)
 		if name == "" || IsBuiltInToolName(name) {
@@ -50,17 +70,24 @@ func (f *FederationProvider) Tools(ctx context.Context, session SessionContext) 
 		desc := desc
 		src := f.source
 		sess := mcpSession
-		tools = append(tools, sdk.Tool{
+		schema, err := toolexec.ResolveSchema(desc.InputSchema)
+		if err != nil {
+			// A tool advertised without its parameters cannot be called
+			// correctly; leave it out of this turn rather than mislead the model.
+			f.logger.Warn("federation tool schema is not usable; tool skipped", slog.String("tool", desc.Name), slog.Any("error", err))
+			continue
+		}
+		tools = append(tools, toolexec.Tool{
 			Name:        desc.Name,
 			Description: desc.Description,
-			Parameters:  desc.InputSchema,
-			Execute: func(ctx *sdk.ToolExecContext, input any) (any, error) {
+			Parameters:  schema,
+			Execute: func(ctx *toolexec.ToolExecContext, input sdk.ToolArguments) (sdk.ToolOutput, error) {
 				args := inputAsMap(input)
 				result, err := src.CallTool(ctx.Context, sess, desc.Name, args)
 				if err != nil {
-					return nil, err
+					return sdk.ToolOutput{}, err
 				}
-				return normalizeMCPResult(result), nil
+				return toolexec.OutputFromValue(normalizeMCPResult(result)), nil
 			},
 		})
 	}

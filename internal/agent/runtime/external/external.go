@@ -18,7 +18,6 @@ import (
 
 	sdk "github.com/felinics/twilight/sdk"
 
-	contextfrag "github.com/felinics/memoh/internal/agent/context/fragment"
 	contextlimit "github.com/felinics/memoh/internal/agent/context/limit"
 	"github.com/felinics/memoh/internal/agent/event"
 )
@@ -46,8 +45,19 @@ type BotAgentAuthPurger interface {
 	PurgeBotAgentAuth(ctx context.Context, botID, botAgentID string) error
 }
 
+type ModelCatalogRequest struct {
+	BotID       string
+	BotAgentID  string
+	ProjectPath string
+	// ModelID selects the model whose defaults the picker is displaying.
+	ModelID string
+	// Preference validation needs only capabilities; resolved defaults are a
+	// separate, optional observation for display.
+	ResolveDefaults bool
+}
+
 type ModelCatalogProvider interface {
-	ModelCatalog(ctx context.Context, botID, botAgentID string) (ModelCatalog, error)
+	ModelCatalog(ctx context.Context, request ModelCatalogRequest) (ModelCatalog, error)
 }
 
 var ErrModelCatalogUnavailable = errors.New("external agent model catalog unavailable")
@@ -87,7 +97,7 @@ func (drivers Drivers) PurgeBotAgentAuth(ctx context.Context, runtimeType, botID
 	return nil
 }
 
-func (drivers Drivers) ModelCatalog(ctx context.Context, runtimeType, botID, botAgentID string) (ModelCatalog, error) {
+func (drivers Drivers) ModelCatalog(ctx context.Context, runtimeType string, request ModelCatalogRequest) (ModelCatalog, error) {
 	runtimeType = strings.TrimSpace(runtimeType)
 	for _, driver := range drivers {
 		if driver == nil || driver.RuntimeType() != runtimeType {
@@ -97,30 +107,10 @@ func (drivers Drivers) ModelCatalog(ctx context.Context, runtimeType, botID, bot
 		if !ok {
 			return ModelCatalog{}, ErrModelCatalogUnavailable
 		}
-		return provider.ModelCatalog(ctx, botID, botAgentID)
+		return provider.ModelCatalog(ctx, request)
 	}
 	return ModelCatalog{}, ErrModelCatalogUnavailable
 }
-
-// CheckpointOutcome reports what a driver did about its native session
-// checkpoint during the turn. Drivers that checkpoint stage the snapshot
-// themselves at turn end (the run is still active and the persistence fence
-// still holds); the application then publishes the matching head in the same
-// transaction as the round's messages.
-type CheckpointOutcome int
-
-const (
-	// CheckpointNone: the runtime does not checkpoint (or has no store); no
-	// publication head is written for the round.
-	CheckpointNone CheckpointOutcome = iota
-	// CheckpointStaged: the turn's native state is durably staged under the
-	// run; the round publishes a resumable checkpoint head.
-	CheckpointStaged
-	// CheckpointDeclined: the runtime checkpoints but this turn could not
-	// stage (nothing to snapshot, or the capture diverged); the round
-	// publishes an explicit reset head.
-	CheckpointDeclined
-)
 
 // RoundRollbackHandler is implemented by drivers that must repair runtime
 // state when a completed turn's round definitively rolled back (the runtime
@@ -152,13 +142,15 @@ type ModelCatalog struct {
 type ModelOption struct {
 	// ResolvedModelID preserves a runtime-advertised full model name for
 	// validation without duplicating its alias in the model picker.
-	ResolvedModelID        string                  `json:"-"`
+	ResolvedModelID        string                  `json:"resolved_model_id,omitempty"`
 	ID                     string                  `json:"id"`
 	Name                   string                  `json:"name"`
 	Description            string                  `json:"description,omitempty"`
 	Default                bool                    `json:"default,omitempty"`
 	DefaultReasoningEffort string                  `json:"default_reasoning_effort,omitempty"`
 	ReasoningEfforts       []ReasoningEffortOption `json:"reasoning_efforts"`
+	// IDs belong to this runtime's permission menu, not a shared preset enum.
+	UnavailablePermissionModes []string `json:"unavailable_permission_modes,omitempty"`
 }
 
 // ReasoningEffortOption is one runtime-defined reasoning level.
@@ -170,6 +162,7 @@ type ReasoningEffortOption struct {
 
 // PromptInput is one turn's worth of work for a Driver.
 type PromptInput struct {
+	Steering   Steering
 	BotID      string
 	BotAgentID string
 	ChatID     string
@@ -203,6 +196,8 @@ type PromptInput struct {
 	// runtime that advertises commands must re-validate it at dispatch.
 	// Runtimes without a command vocabulary ignore it.
 	Command string
+	// CommandArgs is the original user input after the runtime command selector.
+	CommandArgs string
 
 	// ForceFreshRuntime asks the driver to abandon any resumable runtime
 	// session and start this turn on a fresh one.
@@ -222,11 +217,10 @@ type PromptInput struct {
 	// persist their own keys through it (e.g. the codex thread id).
 	RuntimeMetadata map[string]any
 
-	// ContextURI names the Memoh-owned context document. The budget and tool
-	// exchange policy flow into runtime-hosted Memoh tools.
-	ContextURI                string
-	ContextBudgetMaxTokens    int
-	ContextToolExchangePolicy *contextfrag.ToolExchangePolicy
+	// ContextURI names the Memoh-owned context document. The budget flows into
+	// runtime-hosted Memoh tools.
+	ContextURI             string
+	ContextBudgetMaxTokens int
 
 	// RuntimeOwnerAccountID is the account whose workspace authority the
 	// runtime executes under.
@@ -266,6 +260,11 @@ func (f EventSinkFunc) EmitStreamEvent(ev event.StreamEvent) { f(ev) }
 
 // PromptResult is the durable outcome of one turn.
 type PromptResult struct {
+	// Notices are UI-only runtime facts collected across startup and execution.
+	// They are persisted with the round, independently of the model transcript.
+	Notices []event.Notice
+	// SteerInputIDs correspond to the user messages in Output, in arrival order.
+	SteerInputIDs []string
 	// Output is the transcript to persist, in provider-message form.
 	Output []sdk.Message
 	// Text is the final assistant message text (for surfaces that report a
@@ -279,12 +278,14 @@ type PromptResult struct {
 	// AgentTurnID is the runtime's own identifier for this turn (e.g. the
 	// codex turn id); it anchors turn-level operations such as forking.
 	AgentTurnID string
+	// FinalTurnAnchorOnly restricts a multi-turn transcript to its final fork boundary.
+	FinalTurnAnchorOnly bool
 	// TurnCompleted reports whether the runtime finished the turn (as opposed
 	// to an interrupt or failure part-way).
 	TurnCompleted bool
-	// Checkpoint reports the turn's native-state checkpoint outcome; the
-	// application publishes the matching head with the round.
-	Checkpoint CheckpointOutcome
+	// PublishHead asks the application to publish a completed round's run ID
+	// with its messages so warm runtimes can detect another process's progress.
+	PublishHead bool
 	// RoundMetadata carries driver-owned keys merged into the round's
 	// assistant-message metadata (provenance such as the ACP agent id).
 	RoundMetadata map[string]any

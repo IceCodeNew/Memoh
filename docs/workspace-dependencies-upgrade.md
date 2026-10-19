@@ -44,10 +44,10 @@ uses this image-level check; it validates a dependency at its point of use.
    An installed CLI outside the supported version range must be updated before
    the Agent can run.
 4. While the old image is still available, have a Manage-capable user open each
-   relevant workspace target's dependency settings and confirm installation of
+   Bot's Apps settings and confirm installation of
    the required Codex or Claude Code version. Wait for successful installation, verify the managed executable
    and its version, and start a fresh Agent session. Dependencies are stored per
-   workspace target; installation for one Bot or target does not prepare others.
+   isolated workspace; installation for one Bot does not prepare others.
 5. Only after those checks, select the new baseline image by immutable digest
    and recreate the workspace through the normal image-change flow, preserving
    its existing data volume. Verify a fresh Agent session, credentials, command

@@ -3,17 +3,19 @@ export interface RuntimeCommandCredential {
   team_id?: string
 }
 
+export type RuntimeConnectMode = 'connect' | 'replace'
+
 export function buildRuntimeConnectCommand(
   serverUrl: string,
   credential: RuntimeCommandCredential | null | undefined,
+  mode: RuntimeConnectMode = 'connect',
 ): string {
   const key = credential?.key?.trim()
   if (!key) return ''
 
   const args = [
-    'npx',
-    '--yes',
-    '@memohai/runtime',
+    'memoh-runtime',
+    'enroll',
     '--server',
     serverUrl,
     '--key',
@@ -26,7 +28,16 @@ export function buildRuntimeConnectCommand(
   if (isInsecureLocalhost(serverUrl)) {
     args.push('--insecure-localhost')
   }
-  return args.join(' ')
+  if (mode === 'replace') {
+    args.push('--replace')
+  }
+  // Stop on failure so a rejected enrollment cannot start a different saved connection.
+  return [
+    'npm install -g @memohai/runtime@latest',
+    args.join(' '),
+    'memoh-runtime service install',
+    'memoh-runtime service start',
+  ].join(' && ')
 }
 
 function isInsecureLocalhost(serverUrl: string): boolean {

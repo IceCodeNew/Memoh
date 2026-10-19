@@ -25,14 +25,19 @@ const (
 )
 
 var (
-	ErrWorkdirNotFound  = errors.New("workdir not found")
-	ErrWorkdirArchived  = errors.New("workdir is archived")
-	ErrNameRequired     = errors.New("workdir name is required")
-	ErrPathRequired     = errors.New("workdir path is required")
-	ErrInvalidPath      = errors.New("invalid workdir path")
-	ErrPathNotFound     = errors.New("workdir path does not exist")
-	ErrPathNotDirectory = errors.New("workdir path is not a directory")
-	ErrDuplicatePath    = errors.New("a workdir for this directory already exists")
+	ErrWorkdirNotFound      = errors.New("workdir not found")
+	ErrWorkdirArchived      = errors.New("workdir is archived")
+	ErrNameRequired         = errors.New("workdir name is required")
+	ErrPathRequired         = errors.New("workdir path is required")
+	ErrInvalidPath          = errors.New("invalid workdir path")
+	ErrPathNotFound         = errors.New("workdir path does not exist")
+	ErrPathNotDirectory     = errors.New("workdir path is not a directory")
+	ErrPathForbidden        = errors.New("workdir path is not readable")
+	ErrDuplicatePath        = errors.New("a workdir for this directory already exists")
+	ErrGitBusy              = errors.New("an agent is using this Git working directory")
+	ErrGitBranchUnavailable = errors.New("local Git branch is unavailable")
+	ErrGitSwitchFailed      = errors.New("git branch switch failed")
+	ErrGitUnavailable       = errors.New("git working directory is unavailable")
 )
 
 // Workdir is the API shape of a workdir. WorkspaceTargetID is the derived
@@ -71,6 +76,23 @@ type WorkdirsResponse struct {
 	Workdirs []Workdir `json:"workdirs"`
 }
 
+// Directory is one child directory offered while choosing a workdir path.
+// Path is absolute and already joined for the target's OS, so clients never
+// guess the separator.
+type Directory struct {
+	Name string `json:"name"`
+	Path string `json:"path"`
+}
+
+// DirectoriesResponse lists the child directories of Path on one workspace
+// target. Path is the normalized directory that was listed; with an empty
+// request path it is the target's default directory.
+type DirectoriesResponse struct {
+	WorkspaceTargetID string      `json:"workspace_target_id"`
+	Path              string      `json:"path"`
+	Directories       []Directory `json:"directories"`
+}
+
 // Resolved is the per-session resolution of a workdir binding: which target
 // the session is pinned to and the working directory tools and runtimes use.
 // It reads only stored state — target liveness stays with the turn path.
@@ -79,4 +101,15 @@ type Resolved struct {
 	TargetID  string
 	Kind      string
 	WorkDir   string
+}
+
+// GitBranchResponse contains a branch only when the directory has an attached Git HEAD.
+type GitBranchResponse struct {
+	Branch   string   `json:"branch,omitempty"`
+	Branches []string `json:"branches"`
+	Busy     bool     `json:"busy"`
+}
+
+type SwitchGitBranchRequest struct {
+	Branch string `json:"branch" validate:"required"`
 }

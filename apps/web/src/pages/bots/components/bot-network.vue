@@ -1,6 +1,5 @@
 <template>
-  <PageShell
-    variant="tab"
+  <SectionGroup
     :title="$t('bots.settings.networkPageTitle')"
   >
     <template
@@ -158,7 +157,6 @@
                     @update:model-value="(val: string) => updateValue(field.key, val)"
                   >
                     <SelectTrigger
-                      size="sm"
                       class="w-full"
                     >
                       <SelectValue :placeholder="placeholderOf(field)" />
@@ -195,18 +193,18 @@
                     </InputGroupAddon>
                   </InputGroup>
 
-                  <Input
+                  <NumberField
                     v-else-if="field.type === 'number'"
                     :id="`bot-network-config-primary-${field.key}`"
                     :model-value="numberValue(field)"
-                    type="number"
                     :placeholder="placeholderOf(field)"
                     :readonly="field.readonly"
                     :min="field.constraint?.min"
                     :max="field.constraint?.max"
                     :step="field.constraint?.step ?? 1"
-                    class="h-8 w-full tabular-nums"
-                    @update:model-value="(val: string) => updateNumber(field.key, val)"
+                    class="w-full"
+                    disable-wheel-change
+                    @update:model-value="(value) => updateNumber(field.key, value)"
                   />
 
                   <Input
@@ -357,7 +355,6 @@
                   @update:model-value="(val: string) => updateValue(field.key, val)"
                 >
                   <SelectTrigger
-                    size="sm"
                     class="w-full"
                   >
                     <SelectValue :placeholder="placeholderOf(field)" />
@@ -394,18 +391,18 @@
                   </InputGroupAddon>
                 </InputGroup>
 
-                <Input
+                <NumberField
                   v-else-if="field.type === 'number'"
                   :id="`bot-network-config-advanced-${field.key}`"
                   :model-value="numberValue(field)"
-                  type="number"
                   :placeholder="placeholderOf(field)"
                   :readonly="field.readonly"
                   :min="field.constraint?.min"
                   :max="field.constraint?.max"
                   :step="field.constraint?.step ?? 1"
-                  class="h-8 w-full tabular-nums"
-                  @update:model-value="(val: string) => updateNumber(field.key, val)"
+                  class="w-full"
+                  disable-wheel-change
+                  @update:model-value="(value) => updateNumber(field.key, value)"
                 />
 
                 <Input
@@ -546,7 +543,7 @@
         </DialogFooter>
       </DialogContent>
     </Dialog>
-  </PageShell>
+  </SectionGroup>
 </template>
 
 <script setup lang="ts">
@@ -558,6 +555,7 @@ import {
   InputGroupButton,
   InputGroupInput,
   Label,
+  NumberField,
   Switch,
   Input,
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
@@ -566,7 +564,7 @@ import {
 } from '@felinic/ui'
 import { SquarePen, Eye, EyeOff, RefreshCw, SlidersHorizontal } from 'lucide-vue-next'
 import { reactive, computed, watch, nextTick, onBeforeUnmount, ref } from 'vue'
-import { ConfirmPopover, InlineLoadingRow, PageShell, SettingsRow, SettingsSection, toast } from '@felinic/ui'
+import { ConfirmPopover, InlineLoadingRow, SectionGroup, SettingsRow, SettingsSection, toast } from '@felinic/ui'
 import { useI18n } from 'vue-i18n'
 import { useMutation, useQuery, useQueryCache } from '@pinia/colada'
 import { getBotsByBotIdSettings, putBotsByBotIdSettings } from '@memohai/sdk'
@@ -701,7 +699,7 @@ function stringValue(field: ConfigSchemaField) {
 
 function numberValue(field: ConfigSchemaField) {
   const value = getFieldValue(field)
-  return typeof value === 'number' ? String(value) : value == null ? '' : String(value)
+  return typeof value === 'number' ? value : undefined
 }
 
 function placeholderOf(field: ConfigSchemaField) {
@@ -741,9 +739,8 @@ function updateValue(path: string, value: unknown) {
   form.overlay_config = next
 }
 
-function updateNumber(path: string, value: string) {
-  const nextValue = value === '' ? undefined : Number(value)
-  updateValue(path, nextValue)
+function updateNumber(path: string, value: number | undefined) {
+  updateValue(path, value)
 }
 
 function isMultilineField(field: ConfigSchemaField) {

@@ -5,34 +5,34 @@ import (
 	"encoding/json"
 	"errors"
 	"log/slog"
-	"strings"
 	"testing"
 	"time"
 
+	"github.com/felinics/memoh/internal/apperror"
 	"github.com/felinics/memoh/internal/workspace/bridge"
 	"github.com/felinics/memoh/internal/workspacedeps/catalog"
 )
 
 const checkPayload = `{"installed":"1.0.0","latest":"1.2.0","update_available":true}`
 
-func seedInstalled(f *serviceFixture, botID, targetID, depID, version string) InstallationKey {
-	rec := Installation{BotID: botID, WorkspaceTargetID: targetID, DependencyID: depID, Source: InstallationSourceManaged, Status: StatusInstalled, InstalledVersion: version}
+func seedInstalled(f *serviceFixture, botID, depID, version string) InstallationKey {
+	rec := Installation{BotID: botID, DependencyID: depID, Source: InstallationSourceManaged, Status: StatusInstalled, InstalledVersion: version}
 	f.store.seed(rec)
 	return keyOf(rec)
 }
 
 func TestUpdateWorkerRunOnceDedupesAndFansOut(t *testing.T) {
 	f := newServiceFixture(t)
-	keyA := seedInstalled(f, "bot-a", TargetNative, "tool-y", "1.0.0")
-	keyB := seedInstalled(f, "bot-b", TargetNative, "tool-y", "1.0.1")
-	keyC := seedInstalled(f, "bot-c", TargetNative, "tool-y", "1.0.0")
-	keyD := seedInstalled(f, "bot-d", "remote-1", "tool-y", "1.0.0")
-	keyE := seedInstalled(f, "bot-e", TargetNative, "tool-y", "1.0.0")
-	keyAgent := seedInstalled(f, "bot-a", TargetNative, "agent-x", "1.9.0")
-	f.store.seed(Installation{BotID: "bot-f", WorkspaceTargetID: TargetNative, DependencyID: "tool-y", Status: StatusFailed})
-	f.ws.setState("bot-c", TargetNative, WorkspaceNotRunning)
+	keyA := seedInstalled(f, "bot-a", "tool-y", "1.0.0")
+	keyB := seedInstalled(f, "bot-b", "tool-y", "1.0.1")
+	keyC := seedInstalled(f, "bot-c", "tool-y", "1.0.0")
+	keyD := seedInstalled(f, "bot-d", "tool-y", "1.0.0")
+	keyE := seedInstalled(f, "bot-e", "tool-y", "1.0.0")
+	keyAgent := seedInstalled(f, "bot-a", "agent-x", "1.9.0")
+	f.store.seed(Installation{BotID: "bot-f", DependencyID: "tool-y", Status: StatusFailed})
+	f.ws.setState("bot-c", WorkspaceNotRunning)
 	// bot-e runs on another platform, so it forms its own group.
-	f.svc.cache.Put("bot-e", TargetNative, Snapshot{Platform: Platform{OS: "linux", Arch: "arm64", Libc: "musl", TmpDir: "/tmp"}})
+	f.svc.cache.Put("bot-e", Snapshot{Platform: Platform{OS: "linux", Arch: "arm64", Libc: "musl", TmpDir: "/tmp"}})
 	f.setRun(func(spec RunSpec) (Result, error) {
 		if spec.Action != catalog.ActionCheckUpdate {
 			t.Errorf("unexpected action %s", spec.Action)
@@ -71,19 +71,19 @@ func TestUpdateWorkerRunOnceDedupesAndFansOut(t *testing.T) {
 		t.Errorf("groups = %v", platforms)
 	}
 
-	for _, key := range []InstallationKey{keyA, keyB, keyE} {
+	for _, key := range []InstallationKey{keyA, keyB, keyD, keyE} {
 		rec, _ := f.store.get(key)
 		if rec.LatestVersion != "1.2.0" || rec.LastCheckedAt == nil || !rec.LastCheckedAt.Equal(f.now) || rec.LastError != "" || rec.Status != StatusInstalled {
 			t.Errorf("record %s/%s = %+v, want fanned-out result", key.BotID, key.DependencyID, rec)
 		}
 	}
-	for _, key := range []InstallationKey{keyC, keyD, keyAgent} {
+	for _, key := range []InstallationKey{keyC, keyAgent} {
 		rec, _ := f.store.get(key)
 		if rec.LatestVersion != "" || rec.LastCheckedAt != nil {
 			t.Errorf("record %s/%s = %+v, want untouched", key.BotID, key.DependencyID, rec)
 		}
 	}
-	if rec, _ := f.store.get(InstallationKey{BotID: "bot-f", WorkspaceTargetID: TargetNative, DependencyID: "tool-y"}); rec.LastCheckedAt != nil {
+	if rec, _ := f.store.get(InstallationKey{BotID: "bot-f", DependencyID: "tool-y"}); rec.LastCheckedAt != nil {
 		t.Errorf("failed record was checked: %+v", rec)
 	}
 
@@ -91,7 +91,7 @@ func TestUpdateWorkerRunOnceDedupesAndFansOut(t *testing.T) {
 	// A day later bot-e's cached snapshot has expired; probe it again so it
 	// still forms its own platform group.
 	f.now = f.now.Add(24 * time.Hour)
-	f.svc.cache.Put("bot-e", TargetNative, Snapshot{Platform: Platform{OS: "linux", Arch: "arm64", Libc: "musl", TmpDir: "/tmp"}})
+	f.svc.cache.Put("bot-e", Snapshot{Platform: Platform{OS: "linux", Arch: "arm64", Libc: "musl", TmpDir: "/tmp"}})
 	f.setRun(func(RunSpec) (Result, error) {
 		return Result{ExitCode: 1}, &ExitError{Code: 1, StderrTail: "npm view: ETIMEDOUT"}
 	})
@@ -102,9 +102,9 @@ func TestUpdateWorkerRunOnceDedupesAndFansOut(t *testing.T) {
 	if checks != 2 {
 		t.Errorf("checks = %d", checks)
 	}
-	for _, key := range []InstallationKey{keyA, keyB, keyE} {
+	for _, key := range []InstallationKey{keyA, keyB, keyD, keyE} {
 		rec, _ := f.store.get(key)
-		if rec.Status != StatusInstalled || rec.LatestVersion != "1.2.0" || !strings.Contains(rec.LastError, "ETIMEDOUT") || !rec.LastCheckedAt.Equal(f.now) {
+		if rec.Status != StatusInstalled || rec.LatestVersion != "1.2.0" || rec.LastErrorCode != string(apperror.CodeWorkspaceDependencyOperationFailed) || !rec.LastCheckedAt.Equal(f.now) {
 			t.Errorf("record after failed round = %+v", rec)
 		}
 	}
@@ -116,14 +116,14 @@ func TestUpdateWorkerRunOnceDedupesAndFansOut(t *testing.T) {
 	if _, err := worker.RunOnce(f.ctx()); err != nil {
 		t.Fatalf("RunOnce: %v", err)
 	}
-	if rec, _ := f.store.get(keyA); !strings.Contains(rec.LastError, "no latest version") {
+	if rec, _ := f.store.get(keyA); rec.LastErrorCode != string(apperror.CodeWorkspaceDependencyOperationFailed) {
 		t.Errorf("record after malformed payload = %+v", rec)
 	}
 }
 
 func TestUpdateWorkerStartAndStop(t *testing.T) {
 	f := newServiceFixture(t)
-	seedInstalled(f, "bot-a", TargetNative, "tool-y", "1.0.0")
+	seedInstalled(f, "bot-a", "tool-y", "1.0.0")
 	ran := make(chan struct{}, 8)
 	f.setRun(func(RunSpec) (Result, error) {
 		ran <- struct{}{}
@@ -161,8 +161,8 @@ func TestUpdateWorkerStartAndStop(t *testing.T) {
 
 func TestUpdateWorkerReportsListErrors(t *testing.T) {
 	f := newServiceFixture(t)
-	seedInstalled(f, "bot-a", TargetNative, "tool-y", "1.0.0")
-	f.ws.setState("bot-a", TargetNative, WorkspaceRunning)
+	seedInstalled(f, "bot-a", "tool-y", "1.0.0")
+	f.ws.setState("bot-a", WorkspaceRunning)
 	probeErr := errors.New("probe exploded")
 	f.svc.probe = func(context.Context, *bridge.Client) (Platform, error) { return Platform{}, probeErr }
 	worker := NewUpdateWorker(f.svc, time.Hour, nil)
@@ -174,7 +174,7 @@ func TestUpdateWorkerReportsListErrors(t *testing.T) {
 
 func TestUpdateWorkerSharesInstallLock(t *testing.T) {
 	f := newServiceFixture(t)
-	key := seedInstalled(f, testBot, TargetNative, "tool-y", "1.0.0")
+	key := seedInstalled(f, testBot, "tool-y", "1.0.0")
 	worker := NewUpdateWorker(f.svc, 0, slog.New(slog.DiscardHandler))
 	f.svc.locks.tryLock(key)
 	checks, err := worker.RunOnce(f.ctx())
@@ -183,7 +183,7 @@ func TestUpdateWorkerSharesInstallLock(t *testing.T) {
 		t.Fatalf("busy workspace was checked: checks=%d err=%v", checks, err)
 	}
 	f.setRun(func(RunSpec) (Result, error) {
-		if _, err := f.svc.Install(f.ctx(), testBot, TargetNative, "tool-y", "", nil); !errors.Is(err, ErrBusy) {
+		if _, err := f.svc.Install(f.ctx(), testBot, "tool-y", "", nil); !errors.Is(err, ErrBusy) {
 			t.Errorf("install during update check = %v", err)
 		}
 		return Result{Raw: json.RawMessage(checkPayload)}, nil

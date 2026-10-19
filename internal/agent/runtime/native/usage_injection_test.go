@@ -11,6 +11,7 @@ import (
 	contextfrag "github.com/felinics/memoh/internal/agent/context/fragment"
 	"github.com/felinics/memoh/internal/agent/sessionmode"
 	tools "github.com/felinics/memoh/internal/agent/tool"
+	"github.com/felinics/memoh/internal/agent/toolexec"
 )
 
 // usageTestProvider is a ToolProvider that also implements tools.ToolUsage. It
@@ -25,7 +26,7 @@ type usageTestProvider struct {
 	sessionSeen   *tools.SessionContext
 }
 
-func (p *usageTestProvider) Tools(_ context.Context, session tools.SessionContext) ([]sdk.Tool, error) {
+func (p *usageTestProvider) Tools(_ context.Context, session tools.SessionContext) ([]toolexec.Tool, error) {
 	if p.sessionSeen != nil {
 		*p.sessionSeen = session
 	}
@@ -36,7 +37,7 @@ func (p *usageTestProvider) Tools(_ context.Context, session tools.SessionContex
 	if name == "" {
 		name = "fake_tool"
 	}
-	return []sdk.Tool{{Name: name, Description: "fake"}}, nil
+	return []toolexec.Tool{{Name: name, Description: "fake"}}, nil
 }
 
 func (p *usageTestProvider) Usage(_ context.Context, _ tools.SessionContext, available tools.AvailableTools) string {
@@ -49,19 +50,36 @@ func (p *usageTestProvider) Usage(_ context.Context, _ tools.SessionContext, ava
 	return p.usage
 }
 
+// noticeTestProvider registers no tools but implements tools.ToolNotice, the
+// shape of a federated source whose upstream failed this turn.
+type noticeTestProvider struct {
+	label  string
+	notice string
+}
+
+func (p noticeTestProvider) ProviderLabel() string { return p.label }
+
+func (noticeTestProvider) Tools(_ context.Context, _ tools.SessionContext) ([]toolexec.Tool, error) {
+	return nil, nil
+}
+
+func (p noticeTestProvider) ToolNotice(_ context.Context, _ tools.SessionContext) string {
+	return p.notice
+}
+
 // plainTestProvider returns a tool but does NOT implement tools.ToolUsage.
 type plainTestProvider struct{}
 
-func (plainTestProvider) Tools(_ context.Context, _ tools.SessionContext) ([]sdk.Tool, error) {
-	return []sdk.Tool{{Name: tools.ToolRead().String(), Description: "plain"}}, nil
+func (plainTestProvider) Tools(_ context.Context, _ tools.SessionContext) ([]toolexec.Tool, error) {
+	return []toolexec.Tool{{Name: tools.ToolRead().String(), Description: "plain"}}, nil
 }
 
 type labeledTestProvider struct{ label string }
 
 func (p labeledTestProvider) ProviderLabel() string { return p.label }
 
-func (labeledTestProvider) Tools(_ context.Context, _ tools.SessionContext) ([]sdk.Tool, error) {
-	return []sdk.Tool{{Name: "remote_tool", Description: "remote"}}, nil
+func (labeledTestProvider) Tools(_ context.Context, _ tools.SessionContext) ([]toolexec.Tool, error) {
+	return []toolexec.Tool{{Name: "remote_tool", Description: "remote"}}, nil
 }
 
 func newTestAgent(providers ...tools.ToolProvider) *Agent {
@@ -74,37 +92,37 @@ const usageMarker = "USAGE_MARKER_xyz"
 
 type usageRecordingProvider struct {
 	mu     sync.Mutex
-	params []sdk.GenerateParams
+	params []sdk.Request
 }
 
 func (*usageRecordingProvider) Name() string { return "usage-recording" }
 
 func (*usageRecordingProvider) ListModels(context.Context) ([]sdk.Model, error) { return nil, nil }
 
-func (*usageRecordingProvider) Test(context.Context) *sdk.ProviderTestResult {
-	return &sdk.ProviderTestResult{Status: sdk.ProviderStatusOK}
+func (*usageRecordingProvider) Test(context.Context) error {
+	return nil
 }
 
 func (*usageRecordingProvider) TestModel(context.Context, string) (*sdk.ModelTestResult, error) {
 	return &sdk.ModelTestResult{Supported: true}, nil
 }
 
-func (p *usageRecordingProvider) DoGenerate(_ context.Context, params sdk.GenerateParams) (*sdk.GenerateResult, error) {
+func (p *usageRecordingProvider) DoGenerate(_ context.Context, params sdk.Request) (sdk.ModelResult, error) {
 	p.mu.Lock()
 	p.params = append(p.params, params)
 	p.mu.Unlock()
-	return &sdk.GenerateResult{Text: "ok", FinishReason: sdk.FinishReasonStop}, nil
+	return sdk.ModelResult{Text: "ok", FinishReason: sdk.FinishReasonStop}, nil
 }
 
-func (*usageRecordingProvider) DoStream(context.Context, sdk.GenerateParams) (*sdk.StreamResult, error) {
+func (*usageRecordingProvider) DoStream(context.Context, sdk.Request) (<-chan sdk.StreamPart, error) {
 	return nil, nil
 }
 
-func (p *usageRecordingProvider) lastParams() sdk.GenerateParams {
+func (p *usageRecordingProvider) lastParams() sdk.Request {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	if len(p.params) == 0 {
-		return sdk.GenerateParams{}
+		return sdk.Request{}
 	}
 	return p.params[len(p.params)-1]
 }
@@ -163,7 +181,7 @@ type usageStreamRecordingProvider struct {
 	usageRecordingProvider
 }
 
-func (p *usageStreamRecordingProvider) DoStream(_ context.Context, params sdk.GenerateParams) (*sdk.StreamResult, error) {
+func (p *usageStreamRecordingProvider) DoStream(_ context.Context, params sdk.Request) (<-chan sdk.StreamPart, error) {
 	p.mu.Lock()
 	p.params = append(p.params, params)
 	p.mu.Unlock()
@@ -176,7 +194,7 @@ func (p *usageStreamRecordingProvider) DoStream(_ context.Context, params sdk.Ge
 		ch <- &sdk.FinishStepPart{FinishReason: sdk.FinishReasonStop}
 		ch <- &sdk.FinishPart{FinishReason: sdk.FinishReasonStop}
 	}()
-	return &sdk.StreamResult{Stream: ch}, nil
+	return ch, nil
 }
 
 func TestStreamInjectsToolUsageIntoModelSystem(t *testing.T) {
@@ -326,24 +344,19 @@ func TestAssembleToolsInjectsUsageWhenProviderEmitsTools(t *testing.T) {
 	}
 }
 
-func TestAssembleToolsPassesContextBudgetAndToolExchangePolicyToSession(t *testing.T) {
+func TestAssembleToolsPassesContextBudgetToSession(t *testing.T) {
 	t.Parallel()
 	var captured tools.SessionContext
 	a := newTestAgent(&usageTestProvider{emitTool: true, sessionSeen: &captured})
-	policy := &contextfrag.ToolExchangePolicy{MinMessages: 10}
 
 	if _, _, _, _, err := a.assembleTools(context.Background(), RunConfig{
-		ContextBudgetMaxTokens:    128000,
-		ContextToolExchangePolicy: policy,
+		ContextBudgetMaxTokens: 128000,
 	}, tools.StreamEmitter(func(tools.ToolStreamEvent) {}), true); err != nil {
 		t.Fatalf("assembleTools error: %v", err)
 	}
 
 	if captured.ContextBudgetMaxTokens != 128000 {
 		t.Fatalf("ContextBudgetMaxTokens = %d, want 128000", captured.ContextBudgetMaxTokens)
-	}
-	if captured.ContextToolExchangePolicy != policy {
-		t.Fatalf("ContextToolExchangePolicy = %p, want same pointer %p", captured.ContextToolExchangePolicy, policy)
 	}
 }
 
@@ -521,5 +534,64 @@ func TestAssembleToolsPassesCompleteAvailableToolSetToUsage(t *testing.T) {
 	}
 	if strings.Contains(usage, markerMissing) {
 		t.Fatalf("expected complete available tool set, got missing marker in %q", usage)
+	}
+}
+
+func TestGenerateInjectsToolNoticeWithoutRegisteredTools(t *testing.T) {
+	t.Parallel()
+	modelProvider := &usageRecordingProvider{}
+	const notice = "Connector tools could not be loaded: Forbidden."
+	a := newTestAgent(
+		&usageTestProvider{emitTool: true, usage: usageMarker},
+		noticeTestProvider{label: "mcp", notice: "  " + notice + "  "},
+		noticeTestProvider{label: "quiet"},
+	)
+
+	if _, err := a.Generate(context.Background(), RunConfig{
+		Model: &sdk.Model{
+			ID:       "usage-model",
+			Provider: modelProvider,
+			Type:     sdk.ModelTypeChat,
+		},
+		System:           "base system",
+		Messages:         []sdk.Message{sdk.UserMessage("hi")},
+		SupportsToolCall: true,
+	}); err != nil {
+		t.Fatalf("Generate error: %v", err)
+	}
+
+	params := modelProvider.lastParams()
+	wantSystem := "base system\n\n## Tool usage\n\n" + usageMarker + "\n\n" + notice
+	if params.System != wantSystem {
+		t.Fatalf("expected model system %q, got %q", wantSystem, params.System)
+	}
+}
+
+func TestToolNoticeFragmentsSurviveCapabilityGate(t *testing.T) {
+	t.Parallel()
+	if got := toolNoticeSectionID(noticeTestProvider{label: " mcp "}, 3); got != "notice.mcp" {
+		t.Fatalf("got %q", got)
+	}
+	if got := toolNoticeSectionID(plainTestProvider{}, 3); got != "notice.3" {
+		t.Fatalf("got %q", got)
+	}
+	frags := structuredToolUsage([]toolUsageSection{
+		{capability: "fake_tool", text: "usage"},
+		{id: "notice.mcp", text: "notice"},
+	}, contextfrag.Scope{})
+	if len(frags) != 3 {
+		t.Fatalf("frags=%d", len(frags))
+	}
+	notice := frags[2]
+	if notice.ID != toolUsageGroupID+".notice.mcp" {
+		t.Fatalf("notice id = %q", notice.ID)
+	}
+	// A notice reports a missing tool, so it must not be gated on a tool
+	// being present: an empty required capability passes the capability gate.
+	if notice.RequiredCapability != "" {
+		t.Fatalf("notice must not require a capability, got %q", notice.RequiredCapability)
+	}
+	if frags[1].RequiredCapability != "fake_tool" {
+		t.Fatalf("usage guidance must keep its capability, got %q", frags[1].RequiredCapability)
 	}
 }

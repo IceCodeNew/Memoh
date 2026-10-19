@@ -23,6 +23,7 @@ import (
 	"github.com/felinics/memoh/internal/media"
 	"github.com/felinics/memoh/internal/runtimefence"
 	"github.com/felinics/memoh/internal/runtimekind"
+	"github.com/felinics/memoh/internal/textutil"
 )
 
 // DBService persists and reads bot history messages.
@@ -158,12 +159,7 @@ func isTurnSequenceUniqueViolation(err error) bool {
 		return false
 	}
 	var pgErr *pgconn.PgError
-	if errors.As(err, &pgErr) && pgErr.ConstraintName == "idx_bot_history_messages_turn_seq_unique" {
-		return true
-	}
-	text := err.Error()
-	return strings.Contains(text, "idx_bot_history_messages_turn_seq_unique") ||
-		strings.Contains(text, "bot_history_messages.turn_id, bot_history_messages.turn_message_seq")
+	return errors.As(err, &pgErr) && pgErr.ConstraintName == "idx_bot_history_messages_turn_seq_unique"
 }
 
 // PersistToolTailRound writes the common user -> assistant(tool-call) -> tool
@@ -347,7 +343,7 @@ func (s *DBService) PersistRound(ctx context.Context, inputs []PersistInput, opt
 				if err != nil {
 					return err
 				}
-				if strings.EqualFold(strings.TrimSpace(input.Role), "user") && !input.SkipHistoryTurn {
+				if strings.EqualFold(strings.TrimSpace(input.Role), "user") && !input.SkipHistoryTurn && !IsInternalFeedback(input.Metadata) {
 					turnRequestMessageID = message.ID
 				}
 				persisted = append(persisted, message)
@@ -393,10 +389,9 @@ func (s *DBService) PersistRound(ctx context.Context, inputs []PersistInput, opt
 					return fmt.Errorf("runtime publication requires run_id: %w", parseErr)
 				}
 				moved, upsertErr := queries.UpsertAgentSessionPublication(ctx, sqlc.UpsertAgentSessionPublicationParams{
-					SessionID:       pgSessionID,
-					BotID:           pgBotID,
-					RunID:           pgRunID,
-					CheckpointReset: options.AgentPublication.CheckpointReset,
+					SessionID: pgSessionID,
+					BotID:     pgBotID,
+					RunID:     pgRunID,
 				})
 				if upsertErr != nil {
 					return fmt.Errorf("publish runtime session head: %w", upsertErr)
@@ -530,6 +525,14 @@ func (s *DBService) preparePersistMessage(ctx context.Context, input PersistInpu
 	if len(content) == 0 {
 		content = []byte("{}")
 	}
+	content, err = textutil.StorageJSON(content)
+	if err != nil {
+		return preparedPersistMessage{}, fmt.Errorf("normalize message content: %w", err)
+	}
+	metaBytes, err = textutil.StorageJSON(metaBytes)
+	if err != nil {
+		return preparedPersistMessage{}, fmt.Errorf("normalize message metadata: %w", err)
+	}
 
 	sessionMode, runtimeType := resolveRuntimeSnapshotWithQueries(ctx, s.queries, pgSessionID, input.SessionMode, input.RuntimeType)
 	prepared := preparedPersistMessage{
@@ -548,7 +551,7 @@ func (s *DBService) preparePersistMessage(ctx context.Context, input PersistInpu
 			RuntimeType:             runtimeType,
 			ModelID:                 pgModelID,
 			EventID:                 pgEventID,
-			DisplayText:             toPgText(input.DisplayText),
+			DisplayText:             toPgText(textutil.StorageText(input.DisplayText)),
 			RunID:                   pgRunID,
 		},
 		metadata:     metadata,
@@ -562,6 +565,9 @@ func (s *DBService) preparePersistMessage(ctx context.Context, input PersistInpu
 		pgTurnRequestMessageID, err := parseOptionalUUID(input.TurnRequestMessageID)
 		if err != nil {
 			return preparedPersistMessage{}, fmt.Errorf("invalid turn request message id: %w", err)
+		}
+		if IsInternalFeedback(input.Metadata) && !pgTurnRequestMessageID.Valid {
+			return preparedPersistMessage{}, errors.New("internal feedback requires a turn request message")
 		}
 		prepared.turnRequestMessageID = pgTurnRequestMessageID
 	}
@@ -630,13 +636,30 @@ func (s *DBService) persist(ctx context.Context, input PersistInput) (Message, e
 
 	result := toMessageFromCreate(row)
 	if !input.SkipHistoryTurn {
-		if err := s.persistHistoryTurn(ctx, prepared.botID, prepared.sessionID, row.ID, input.Role, pgTurnRequestMessageID); err != nil {
+		if err := s.persistHistoryTurn(ctx, prepared.botID, prepared.sessionID, row.ID, historyBindingRole(input.Role, input.Metadata), pgTurnRequestMessageID); err != nil {
 			s.cleanupPersistedMessage(ctx, row.ID)
 			return Message{}, err
 		}
 	}
 
 	return s.finishPersistedMessage(ctx, result, row.ID, input.Assets)
+}
+
+// AllocateTurnSlot reserves the next turn slot for a session so a caller can
+// publish the turn's identity before the rows that belong to it are written.
+// The position is spent whether or not the turn ever persists: positions are
+// only ever compared, so a gap left by an input that was released costs
+// nothing, while reusing a slot would file two turns under one number.
+func (s *DBService) AllocateTurnSlot(ctx context.Context, sessionID string) (TurnSlot, error) {
+	pgSessionID, err := parseOptionalUUID(sessionID)
+	if err != nil || !pgSessionID.Valid {
+		return TurnSlot{}, fmt.Errorf("invalid session id: %w", err)
+	}
+	position, err := s.queries.AllocateSessionTurnPosition(ctx, pgSessionID)
+	if err != nil {
+		return TurnSlot{}, fmt.Errorf("allocate session turn position: %w", err)
+	}
+	return TurnSlot{TurnID: uuid.NewString(), Position: position}, nil
 }
 
 // turnIdentity is a turn decided before persistence, by admission. Both fields
@@ -655,7 +678,16 @@ func persistDirectHistoryMessage(
 	requestMessageID pgtype.UUID,
 	turn turnIdentity,
 ) (Message, pgtype.UUID, bool, error) {
-	switch strings.ToLower(strings.TrimSpace(role)) {
+	bindingRole := strings.ToLower(strings.TrimSpace(role))
+	if bindingRole == "user" && IsInternalFeedback(metadata) {
+		if !requestMessageID.Valid {
+			return Message{}, pgtype.UUID{}, true, errors.New("internal feedback requires a turn request message")
+		}
+		// Use the existing turn-binding writer while keeping createArg.Role
+		// unchanged for faithful replay of the model input.
+		bindingRole = MessageSourceInternalFeedback
+	}
+	switch bindingRole {
 	case "user":
 		messageID := newPGUUID()
 		// A run admitted through session_runs already drew this turn's id and
@@ -692,7 +724,7 @@ func persistDirectHistoryMessage(
 			return Message{}, pgtype.UUID{}, true, err
 		}
 		return toMessageFromCreateWithHistoryTurn(row, createArg, metadata), messageID, true, nil
-	case "assistant", "tool":
+	case "assistant", "tool", MessageSourceInternalFeedback:
 		if !requestMessageID.Valid {
 			return Message{}, pgtype.UUID{}, false, nil
 		}
@@ -735,7 +767,7 @@ func (s *DBService) finishPersistedMessage(ctx context.Context, result Message, 
 		}
 		contentHash := strings.TrimSpace(ref.ContentHash)
 		if contentHash == "" {
-			s.logger.Warn("skip asset ref without content_hash")
+			s.logger.WarnContext(ctx, "skip asset ref without content_hash")
 			continue
 		}
 		if ref.Ordinal < math.MinInt32 || ref.Ordinal > math.MaxInt32 {
@@ -794,7 +826,7 @@ func (s *DBService) cleanupPersistedMessage(ctx context.Context, messageID pgtyp
 		return
 	}
 	if err := cleanup.DeleteMessagesByIDs(ctx, []pgtype.UUID{messageID}); err != nil {
-		s.logger.Error("cleanup message after history turn failure failed", slog.String("message_id", messageID.String()), slog.Any("error", err))
+		s.logger.ErrorContext(ctx, "cleanup message after history turn failure failed", slog.String("message_id", messageID.String()), slog.Any("error", err))
 	}
 }
 
@@ -873,7 +905,7 @@ func (s *DBService) persistHistoryTurn(ctx context.Context, botID pgtype.UUID, s
 		}); err != nil {
 			return fmt.Errorf("link orphan assistant message to history turn: %w", err)
 		}
-	case "tool":
+	case "tool", MessageSourceInternalFeedback:
 		if requestMessageID.Valid {
 			if err := lockHistoryTurnAppendByRequest(ctx, writer, sessionID, requestMessageID); err != nil {
 				return fmt.Errorf("lock requested history turn append: %w", err)
@@ -1352,6 +1384,25 @@ func (s *DBService) ListVisibleFromBySession(ctx context.Context, sessionID stri
 	return msgs, nil
 }
 
+func (s *DBService) GetVisibleHistoryTurnRequestMessageIDByTurn(ctx context.Context, sessionID string, turnID string) (string, error) {
+	pgSessionID, err := dbpkg.ParseUUID(sessionID)
+	if err != nil {
+		return "", err
+	}
+	pgTurnID, err := dbpkg.ParseUUID(turnID)
+	if err != nil {
+		return "", err
+	}
+	turn, err := s.queries.GetHistoryTurnByID(ctx, sqlc.GetHistoryTurnByIDParams{
+		SessionID: pgSessionID,
+		OldTurnID: pgTurnID,
+	})
+	if err != nil {
+		return "", err
+	}
+	return uuidString(turn.RequestMessageID), nil
+}
+
 func (s *DBService) GetVisibleTurnByMessage(ctx context.Context, sessionID string, messageID string) (HistoryTurn, error) {
 	pgSessionID, err := dbpkg.ParseUUID(sessionID)
 	if err != nil {
@@ -1371,6 +1422,11 @@ func (s *DBService) GetVisibleTurnByMessage(ctx context.Context, sessionID strin
 	return toHistoryTurn(row), nil
 }
 
+// ErrNoVisibleTurn reports that a session holds no visible turn at all. It is
+// a sentinel rather than the driver's own no-rows error so callers can map it
+// onto a user-facing code instead of surfacing the driver's wording.
+var ErrNoVisibleTurn = errors.New("session has no visible turn")
+
 func (s *DBService) GetLatestVisibleTurnBySession(ctx context.Context, sessionID string) (HistoryTurn, error) {
 	pgSessionID, err := dbpkg.ParseUUID(sessionID)
 	if err != nil {
@@ -1378,6 +1434,9 @@ func (s *DBService) GetLatestVisibleTurnBySession(ctx context.Context, sessionID
 	}
 	row, err := s.queries.GetLatestVisibleHistoryTurnBySession(ctx, pgSessionID)
 	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return HistoryTurn{}, ErrNoVisibleTurn
+		}
 		return HistoryTurn{}, err
 	}
 	return toHistoryTurn(row), nil
@@ -1657,7 +1716,7 @@ func toMessageFromCreate(row sqlc.CreateMessageRow) Message {
 }
 
 func toMessageFromCreateWithHistoryTurn(row sqlc.CreateMessageWithHistoryTurnRow, createArg sqlc.CreateMessageParams, metadata map[string]any) Message {
-	return toMessageFieldsWithMetadata(
+	message := toMessageFieldsWithMetadata(
 		row.ID,
 		createArg.BotID,
 		createArg.SessionID,
@@ -1679,10 +1738,13 @@ func toMessageFromCreateWithHistoryTurn(row sqlc.CreateMessageWithHistoryTurnRow
 		row.CreatedAt,
 		metadata,
 	)
+	message.TurnID = uuidString(row.TurnID)
+	message.TurnPosition = int8Ptr(row.TurnPosition)
+	return message
 }
 
 func toMessageFromCreateInHistoryTurnByRequestAndBind(row sqlc.CreateMessageInHistoryTurnByRequestAndBindRow, createArg sqlc.CreateMessageParams, metadata map[string]any) Message {
-	return toMessageFieldsWithMetadata(
+	message := toMessageFieldsWithMetadata(
 		row.ID,
 		createArg.BotID,
 		createArg.SessionID,
@@ -1704,6 +1766,9 @@ func toMessageFromCreateInHistoryTurnByRequestAndBind(row sqlc.CreateMessageInHi
 		row.CreatedAt,
 		metadata,
 	)
+	message.TurnID = uuidString(row.TurnID)
+	message.TurnPosition = int8Ptr(row.TurnPosition)
+	return message
 }
 
 func toMessageFromToolTailRound(row sqlc.CreateToolTailRoundRow, createArg sqlc.CreateMessageParams, metadata map[string]any) Message {
@@ -2297,7 +2362,7 @@ func toMessagesFromActiveSinceBySession(rows []sqlc.ListActiveMessagesSinceBySes
 func toMessagesFromActiveSinceWithinBytes(rows []sqlc.ListActiveMessagesSinceWithinBytesRow) []Message {
 	messages := make([]Message, 0, len(rows))
 	for _, row := range rows {
-		messages = append(messages, toMessageFromActiveSinceBySessionRow(sqlc.ListActiveMessagesSinceBySessionRow(row)))
+		messages = append(messages, toAdmissionMessage(sqlc.ListActiveMessagesSinceBySessionRow(row)))
 	}
 	return messages
 }
@@ -2305,9 +2370,41 @@ func toMessagesFromActiveSinceWithinBytes(rows []sqlc.ListActiveMessagesSinceWit
 func toMessagesFromActiveSinceBySessionWithinBytes(rows []sqlc.ListActiveMessagesSinceBySessionWithinBytesRow) []Message {
 	messages := make([]Message, 0, len(rows))
 	for _, row := range rows {
-		messages = append(messages, toMessageFromActiveSinceBySessionRow(sqlc.ListActiveMessagesSinceBySessionRow(row)))
+		messages = append(messages, toAdmissionMessage(sqlc.ListActiveMessagesSinceBySessionRow(row)))
 	}
 	return messages
+}
+
+// toAdmissionMessage leaves metadata undecoded for the byte-budgeted loaders:
+// the budget only covers content, and decoding every row up front holds all
+// of their metadata, legacy lifecycle audits included, at once (CM-ADM-001).
+func toAdmissionMessage(row sqlc.ListActiveMessagesSinceBySessionRow) Message {
+	m := toMessageFieldsWithMetadata(
+		row.ID,
+		row.BotID,
+		row.SessionID,
+		row.SenderChannelIdentityID,
+		row.SenderUserID,
+		row.SenderDisplayName,
+		row.SenderAvatarUrl,
+		row.Platform,
+		row.ExternalMessageID,
+		row.SourceReplyToMessageID,
+		row.Role,
+		row.Content,
+		row.Metadata,
+		row.Usage,
+		row.SessionMode,
+		row.RuntimeType,
+		row.EventID,
+		row.DisplayText,
+		row.CreatedAt,
+		nil,
+	)
+	if row.CompactID.Valid {
+		m.CompactID = row.CompactID.String()
+	}
+	return m
 }
 
 func toMessagesFromLatest(rows []sqlc.ListMessagesLatestRow) []Message {
@@ -2551,7 +2648,7 @@ func (s *DBService) enrichAssets(ctx context.Context, messages []Message) {
 	}
 	rows, err := s.queries.ListMessageAssetsBatch(ctx, ids)
 	if err != nil {
-		s.logger.Warn("enrich assets failed, returning messages without assets", slog.Any("error", err))
+		s.logger.WarnContext(ctx, "enrich assets failed, returning messages without assets", slog.Any("error", err))
 		ensureAssetsSlice(messages)
 		return
 	}

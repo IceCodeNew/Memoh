@@ -22,9 +22,9 @@ func (s compactionActivityStub) ActiveSessions(string) []string { return s }
 func TestCompactionActivityFiltersUnreadableSessions(t *testing.T) {
 	t.Parallel()
 	cache := newSessionCache(nil, nil)
-	cache.rows["mine"] = session.Thread{ID: "mine", BotID: "bot", Type: session.TypeChat, CreatedByUserID: "me"}
-	cache.rows["private"] = session.Thread{ID: "private", BotID: "bot", Type: session.TypeChat, CreatedByUserID: "other"}
-	cache.rows["internal"] = session.Thread{ID: "internal", BotID: "bot", Type: session.TypeSubagent, CreatedByUserID: "me"}
+	cache.rows["mine"] = session.Thread{ID: "mine", BotID: "bot", Type: session.TypeChat, Visibility: session.VisibilityUser, CreatedByUserID: "me"}
+	cache.rows["private"] = session.Thread{ID: "private", BotID: "bot", Type: session.TypeChat, Visibility: session.VisibilityUser, CreatedByUserID: "other"}
+	cache.rows["internal"] = session.Thread{ID: "internal", BotID: "bot", Type: session.TypeSubagent, Visibility: session.VisibilityInternal, CreatedByUserID: "me"}
 	h := &MessageHandler{compactionActivity: compactionActivityStub{"mine", "private", "internal", "missing"}}
 	ids := h.visibleCompactingSessions(context.Background(), "me", "bot", []string{bots.PermissionChat}, cache)
 	if len(ids) != 1 || ids[0] != "mine" {
@@ -32,6 +32,48 @@ func TestCompactionActivityFiltersUnreadableSessions(t *testing.T) {
 	}
 	if ids := h.visibleCompactingSessions(context.Background(), "me", "bot", nil, cache); len(ids) != 0 {
 		t.Fatalf("no permission must expose no compactions: %v", ids)
+	}
+}
+
+func TestSessionInvalidationActivityFiltersUnreadableSessions(t *testing.T) {
+	t.Parallel()
+	cache := newSessionCache(nil, nil)
+	cache.rows["mine"] = session.Thread{ID: "mine", BotID: "bot", Type: session.TypeChat, Visibility: session.VisibilityUser, CreatedByUserID: "me"}
+	cache.rows["private"] = session.Thread{ID: "private", BotID: "bot", Type: session.TypeChat, Visibility: session.VisibilityUser, CreatedByUserID: "other"}
+	cache.rows["internal"] = session.Thread{ID: "internal", BotID: "bot", Type: session.TypeSubagent, Visibility: session.VisibilityInternal, CreatedByUserID: "me"}
+	for _, sid := range []string{"mine", "private", "internal", ""} {
+		data, err := json.Marshal(messageevent.SessionInvalidation{SessionID: sid})
+		if err != nil {
+			t.Fatal(err)
+		}
+		activity := sessionInvalidationActivity(context.Background(), "me", "bot", []string{bots.PermissionChat}, cache, data)
+		if sid == "private" || sid == "internal" {
+			if activity != nil {
+				t.Fatalf("invalidation leaked unreadable session %q", sid)
+			}
+			continue
+		}
+		if len(activity) != 2 || activity["type"] != "session_invalidated" || activity["session_id"] != sid {
+			t.Fatalf("unexpected invalidation for %q: %+v", sid, activity)
+		}
+	}
+}
+
+func TestCanDeliverUserVisibleScheduleActivity(t *testing.T) {
+	t.Parallel()
+	cache := newSessionCache(nil, nil)
+	cache.rows["schedule"] = session.Thread{
+		ID: "schedule", BotID: "bot", Type: session.TypeSchedule, Visibility: session.VisibilityUser,
+	}
+	cache.rows["internal"] = session.Thread{
+		ID: "internal", BotID: "bot", Type: session.TypeSchedule, Visibility: session.VisibilityInternal,
+	}
+	perms := []string{bots.PermissionManage}
+	if !canDeliverSessionActivity(context.Background(), "me", "bot", perms, cache, "schedule") {
+		t.Fatal("user-visible schedule session was filtered from activity")
+	}
+	if canDeliverSessionActivity(context.Background(), "me", "bot", perms, cache, "internal") {
+		t.Fatal("internal schedule session leaked into activity")
 	}
 }
 

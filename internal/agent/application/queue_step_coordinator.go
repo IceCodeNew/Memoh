@@ -3,11 +3,13 @@ package application
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"strings"
 
 	sdk "github.com/felinics/twilight/sdk"
 
 	sessionruntime "github.com/felinics/memoh/internal/agent/runtime/session"
+	"github.com/felinics/memoh/internal/agent/step"
 	messagepkg "github.com/felinics/memoh/internal/chat/message"
 )
 
@@ -23,6 +25,11 @@ type queueStepCoordinator struct {
 	run                  sessionruntime.RunHandle
 	steerEnabled         bool
 	pendingSteer         *sessionruntime.SteerClaimRef
+	// pendingSteerTurn is the slot drawn for pendingSteer. The step that
+	// consumes the input files its user row under this turn instead of minting
+	// one at commit, so the name the client was shown at claim time is the name
+	// history ends up using.
+	pendingSteerTurn *messagepkg.TurnSlot
 }
 
 type queueStepOutcome struct {
@@ -30,7 +37,7 @@ type queueStepOutcome struct {
 	persisted            []messagepkg.Message
 	appliedSteerItemID   string
 	claimedSteer         *sessionruntime.SteerItem
-	continueAfterFinal   bool
+	claimedSteerTurn     *messagepkg.TurnSlot
 	replacementFinalized bool
 }
 
@@ -68,11 +75,43 @@ func (q *queueStepCoordinator) persistHistory(ctx context.Context, step messagep
 	return q.persister.PersistAgentStep(ctx, step)
 }
 
+// allocateSteerTurn names the claimed input before it is persisted, mirroring
+// what admission does for a run's request turn. A failure is not fatal: the
+// step commit still mints a turn, and the client falls back to the provisional
+// identity it used before this existed.
+func (q *queueStepCoordinator) allocateSteerTurn(ctx context.Context) *messagepkg.TurnSlot {
+	allocator, ok := q.service.messageService.(messagepkg.TurnSlotAllocator)
+	if !ok {
+		return nil
+	}
+	slot, err := allocator.AllocateTurnSlot(context.WithoutCancel(ctx), q.run.SessionID)
+	if err != nil {
+		if q.service.logger != nil {
+			q.service.logger.WarnContext(ctx, "allocate steer turn slot failed",
+				slog.String("session_id", q.run.SessionID), slog.Any("error", err))
+		}
+		return nil
+	}
+	return &slot
+}
+
+// steerTurnForStep is the slot the step about to be persisted must file its
+// injected user row under, or nil when this step carries no claimed steer.
+func (q *queueStepCoordinator) steerTurnForStep() *messagepkg.TurnSlot {
+	if q == nil || q.pendingSteer == nil {
+		return nil
+	}
+	return q.pendingSteerTurn
+}
+
 func (q *queueStepCoordinator) releaseSteerClaim(ctx context.Context) {
 	if q == nil || q.pendingSteer == nil || q.service == nil || q.service.sessionManager == nil {
 		return
 	}
 	_ = q.service.sessionManager.ReleaseSteer(ctx, sessionruntime.Key{BotID: q.run.BotID, SessionID: q.run.SessionID}, *q.pendingSteer)
+	// The slot drawn for this input is spent. A later claim draws its own; the
+	// gap is harmless because positions are only ever compared.
+	q.pendingSteerTurn = nil
 }
 
 func (q *queueStepCoordinator) commit(
@@ -101,13 +140,14 @@ func (q *queueStepCoordinator) commit(
 		}
 		outcome.appliedSteerItemID = string(q.pendingSteer.ItemID)
 		q.pendingSteer = nil
+		q.pendingSteerTurn = nil
 	}
 	if kind == queueStepDeferredDecision {
-		// The loop parks after this step and its inject channel is never read
-		// again. A claim taken here would sit unapplied across the decision, and
-		// across any owner change while the run waits. The resumed execution
-		// claims at its next complete step or model-interruption checkpoint,
-		// keeping the approved tool result ahead of the new input.
+		// The loop parks after this step. A claim taken here would sit
+		// unapplied across the decision, and across any owner change while
+		// the run waits. The resumed execution claims at its next complete
+		// step or model-interruption checkpoint, keeping the approved tool
+		// result ahead of the new input.
 		return outcome, nil
 	}
 
@@ -122,10 +162,9 @@ func (q *queueStepCoordinator) commit(
 	}
 	if claimed {
 		q.pendingSteer = &claim
+		q.pendingSteerTurn = q.allocateSteerTurn(ctx)
 		outcome.claimedSteer = &item
-		if kind == queueStepFinal || kind == queueStepSteered {
-			outcome.continueAfterFinal = true
-		}
+		outcome.claimedSteerTurn = q.pendingSteerTurn
 	} else if q.req.TurnReplacement != nil && kind == queueStepFinal {
 		allPersisted := append([]messagepkg.Message(nil), previouslyPersisted...)
 		allPersisted = append(allPersisted, persisted...)
@@ -155,11 +194,11 @@ const (
 	queueStepSteered          queueStepKind = "steered"
 )
 
-func classifyQueueStep(step *sdk.StepResult) queueStepKind {
-	if step == nil || step.DeferredToolApproval != nil {
+func classifyQueueStep(record *step.Record) queueStepKind {
+	if record == nil || record.Deferred != nil {
 		return queueStepDeferredDecision
 	}
-	if step.FinishReason == sdk.FinishReasonToolCalls && len(step.ToolCalls) > 0 {
+	if record.Result.FinishReason == sdk.FinishReasonToolCalls && len(record.Result.ToolCalls) > 0 {
 		return queueStepToolLoop
 	}
 	return queueStepFinal

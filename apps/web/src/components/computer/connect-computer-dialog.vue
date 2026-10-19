@@ -3,44 +3,47 @@
     :open="open"
     @update:open="onOpenChange"
   >
-    <DialogContent>
-      <!-- Step 1: the command. One action — copy and run it. -->
+    <DialogScrollContent>
+      <!-- Step 1: copy and run the command; replacing a binding is opt-in. -->
       <template v-if="step === 'command'">
         <DialogHeader class="pr-8">
-          <DialogTitle>{{ t('computerConnect.title') }}</DialogTitle>
+          <DialogTitle>{{ existing ? t('computerConnect.restore') : t('computerConnect.title') }}</DialogTitle>
+          <DialogDescription>
+            {{ existing
+              ? t('computerConnect.existingDescription', { name: credential?.name })
+              : t('computerConnect.commandDescription') }}
+          </DialogDescription>
         </DialogHeader>
 
-        <div>
-          <p class="text-sm text-foreground">
-            {{ t('computerConnect.commandDescription') }}
-          </p>
-          <!-- Same surface as the chat code block: white card + one hairline,
-               not the beige muted-soft fill. -->
-          <div class="relative mt-2.5 min-w-0 overflow-hidden rounded-lg border border-border-soft bg-card">
-            <pre
-              class="max-h-40 min-w-0 overflow-auto whitespace-pre-wrap break-all py-2 pl-3 pr-12 font-mono text-xs leading-relaxed text-foreground"
-              :aria-label="t('computerConnect.commandLabel')"
-            ><code>{{ command }}</code></pre>
-            <Button
-              type="button"
-              variant="ghost"
-              size="icon-sm"
-              class="absolute right-1.5 top-1.5"
-              :aria-label="t('common.copy')"
-              @click="copyCommand"
-            >
-              <Copy class="size-4" />
-            </Button>
-          </div>
-        </div>
+        <SettingsSection bordered>
+          <SettingsRow
+            :label="t('computerConnect.replaceAction')"
+            :description="t('computerConnect.replaceDescription')"
+          >
+            <Switch
+              v-model="replaceBinding"
+              :aria-label="t('computerConnect.replaceAction')"
+            />
+          </SettingsRow>
+        </SettingsSection>
 
-        <!-- The waiting banner is a static card — no spinner chrome. -->
-        <div class="flex items-center gap-2 rounded-lg border border-border-soft px-3 py-2.5">
-          <span class="size-1.5 shrink-0 rounded-full bg-accent-gray-border" />
-          <p class="text-xs text-muted-foreground">
-            {{ t('computerConnect.waiting') }}
-          </p>
-        </div>
+        <!-- wrap: the command is one long line with an unbroken key; it must
+             be readable in full without widening the dialog. -->
+        <CodePanel
+          wrap
+          bordered
+          :code="command"
+          :copy-label="t('common.copy')"
+          :copied-label="t('common.copied')"
+          :copy-failed-message="t('common.copyFailed')"
+          :aria-label="t('computerConnect.commandLabel')"
+        />
+
+        <CalloutBanner
+          tone="neutral"
+          size="sm"
+          :description="t('computerConnect.waiting')"
+        />
 
         <DialogFooter>
           <Button
@@ -73,7 +76,7 @@
           </Button>
         </DialogFooter>
       </template>
-    </DialogContent>
+    </DialogScrollContent>
   </Dialog>
 </template>
 
@@ -85,16 +88,19 @@ import { deleteUsersMeRuntimesById, type UserruntimeRuntime } from '@memohai/sdk
 import { getBotsQuery } from '@memohai/sdk/colada'
 import {
   Button,
+  CalloutBanner,
+  CodePanel,
   Dialog,
-  DialogContent,
+  DialogScrollContent,
   DialogDescription,
   DialogFooter,
   DialogHeader,
   DialogTitle,
+  SettingsRow,
+  SettingsSection,
+  Switch,
   toast,
-  useClipboard,
 } from '@felinic/ui'
-import { Copy } from 'lucide-vue-next'
 import { sdkApiBaseUrl } from '@/lib/api-client'
 import { resolveApiErrorMessage } from '@/utils/api-error'
 import { buildRuntimeConnectCommand } from '@/pages/runtimes/command'
@@ -102,55 +108,86 @@ import ComputerAccessList from './computer-access-list.vue'
 import { useAccountRuntimes, useComputerAccessActions } from './use-computer-access'
 
 // The connect stepper, one continuous dialog: command (+ waiting) → connected
-// → bot permissions. Closing at the command step revokes the credential so
-// abandoned attempts leave nothing behind.
+// → bot permissions. Only new credentials are revoked on cancellation;
+// reconnecting a historical computer keeps its identity and permissions.
 const props = defineProps<{
   credential: UserruntimeRuntime | null
+  existing?: boolean
 }>()
 
 const open = defineModel<boolean>('open', { default: false })
 
 const { t } = useI18n()
-const { copyText } = useClipboard()
 
 const step = ref<'command' | 'access'>('command')
+const replaceBinding = ref(false)
 const runtimeId = computed(() => props.credential?.id ?? '')
-const command = computed(() => buildRuntimeConnectCommand(sdkApiBaseUrl(), props.credential))
+const command = computed(() => buildRuntimeConnectCommand(
+  sdkApiBaseUrl(), props.credential, replaceBinding.value ? 'replace' : 'connect',
+))
 
 const { runtimes, refetch: refetchRuntimes } = useAccountRuntimes()
 const { data: botsData } = useQuery(getBotsQuery())
-const { grantAccess } = useComputerAccessActions()
+const { grantBots } = useComputerAccessActions()
 
 const adoptedName = ref('')
 
-// Auto-advance the moment the machine shows up online: grant every bot by
-// default and land straight on the permissions step.
+// Every attempt starts without replacement, including reopening the same computer.
+watch([runtimeId, open], ([id, isOpen]) => {
+  if (!id || !isOpen) return
+  step.value = 'command'
+  replaceBinding.value = false
+  adoptedName.value = ''
+}, { immediate: true })
+
+// New computers proceed to permissions; restored computers return to the list
+// without changing their grants.
 const connectedRuntime = computed(() => (
   (runtimes.value ?? []).find(runtime => runtime.id === runtimeId.value && runtime.online)
 ))
-watch(connectedRuntime, async (runtime) => {
-  if (!runtime || step.value !== 'command') return
-  adoptedName.value = runtime.name || runtime.hostname || runtimeId.value
-  toast.success(t('runtimes.computerOnline', { name: adoptedName.value }))
-  await grantAllBots()
-  step.value = 'access'
-})
+// Own connection refresh here rather than relying on polling in the caller.
+// Refetch resolves with Colada's error state on failure, so the next tick can
+// recover without overlapping requests or depending on browser focus events.
+watch([open, runtimeId, step, () => !!connectedRuntime.value], ([isOpen, id, currentStep, online], _previous, onCleanup) => {
+  if (!isOpen || !id || currentStep !== 'command' || online) return
+  let stopped = false
+  let timer: ReturnType<typeof setTimeout> | undefined
+  onCleanup(() => {
+    stopped = true
+    clearTimeout(timer)
+  })
+  async function poll(): Promise<void> {
+    await refetchRuntimes()
+    if (!stopped) timer = setTimeout(() => { void poll() }, 1000)
+  }
+  void poll()
+}, { immediate: true })
 
 const granting = ref(false)
-async function grantAllBots(): Promise<void> {
-  if (granting.value) return
-  granting.value = true
-  let failed = 0
-  for (const bot of botsData.value?.items ?? []) {
-    if (!bot.id) continue
-    try {
-      await grantAccess({ botId: bot.id, runtimeId: runtimeId.value })
-    } catch {
-      failed += 1
-    }
+// A newly opened connection may become online while the previous grant is
+// still running. Re-check it when that grant releases the shared busy state.
+watch([connectedRuntime, granting, open], async ([runtime]) => {
+  if (!open.value || !runtime || step.value !== 'command' || granting.value) return
+  adoptedName.value = runtime.name || runtime.hostname || runtimeId.value
+  toast.success(t('runtimes.computerOnline', { name: adoptedName.value }))
+  if (props.existing) {
+    close()
+    return
   }
-  granting.value = false
-  if (failed > 0) {
+  const connectedId = runtimeId.value
+  granting.value = true
+  try {
+    await grantAllBots(connectedId)
+    if (open.value && runtimeId.value === connectedId) step.value = 'access'
+  } finally {
+    granting.value = false
+  }
+})
+
+async function grantAllBots(connectedId: string): Promise<void> {
+  const botIds = (botsData.value?.items ?? []).flatMap(bot => (bot.id ? [bot.id] : []))
+  const failures = await grantBots(connectedId, botIds)
+  if (failures.length > 0) {
     toast.error(t('computerAccess.updateFailed'))
   }
 }
@@ -161,7 +198,7 @@ function close(): void {
   // the computers list — left alone it would be an active credential the user
   // can neither see nor revoke. Capture the id BEFORE open=false: the parent
   // clears the credential on close and runtimeId would recompute to ''.
-  const abandonedId = step.value === 'command' ? runtimeId.value : ''
+  const abandonedId = step.value === 'command' && !props.existing ? runtimeId.value : ''
   open.value = false
   if (abandonedId) void revokeAbandonedCredential(abandonedId)
 }
@@ -189,20 +226,4 @@ async function revokeAbandonedCredential(abandonedId: string): Promise<void> {
 function onOpenChange(next: boolean): void {
   if (!next) close()
 }
-
-async function copyCommand(): Promise<void> {
-  const copied = await copyText(command.value)
-  if (copied) {
-    toast.success(t('common.copied'))
-  } else {
-    toast.error(t('common.copyFailed'))
-  }
-}
-
-// A fresh credential starts the flow from the top.
-watch(() => props.credential?.id, (id) => {
-  if (!id) return
-  step.value = 'command'
-  adoptedName.value = ''
-})
 </script>

@@ -8,9 +8,12 @@ import (
 	"strings"
 	"unicode"
 
+	"github.com/felinics/memoh/internal/agent/event"
 	"github.com/felinics/memoh/internal/agent/turn"
 	messagepkg "github.com/felinics/memoh/internal/chat/message"
 	"github.com/felinics/memoh/internal/markdownmedia"
+	"github.com/felinics/memoh/internal/messageconv"
+	"github.com/felinics/memoh/internal/runtimekind"
 	"github.com/felinics/memoh/internal/textutil"
 )
 
@@ -23,6 +26,9 @@ var (
 	uiTaskNotificationRe         = regexp.MustCompile(`(?s)<task-notification>\s*(.*?)\s*</task-notification>`)
 	uiMetadataParseKeys          = [][]byte{
 		[]byte(`"markdown_media"`),
+		[]byte(`"runtime_notices"`),
+		[]byte(`"agent_turn_id"`),
+		[]byte(`"message_source"`),
 		[]byte(`"forward"`),
 		[]byte(`"model_requested_skills"`),
 		[]byte(`"platform"`),
@@ -31,6 +37,8 @@ var (
 		[]byte(`"skill_activation"`),
 		[]byte(`"user_message_kind"`),
 		[]byte(`"error_code"`),
+		[]byte(`"diff"`),
+		[]byte(`"diffs"`),
 	}
 )
 
@@ -44,6 +52,7 @@ type uiContentPart struct {
 	Input            any            `json:"input,omitempty"`
 	Output           any            `json:"output,omitempty"`
 	Result           any            `json:"result,omitempty"`
+	IsError          bool           `json:"isError,omitempty"`
 	ProviderMetadata map[string]any `json:"providerMetadata,omitempty"`
 }
 
@@ -54,6 +63,7 @@ type uiExtractedToolCall struct {
 	Approval          *UIToolApproval
 	ExecutionLocation *UIExecutionLocation
 	UserInput         *UIUserInput
+	Diff              string
 }
 
 type uiExtractedToolResult struct {
@@ -85,13 +95,18 @@ type uiDecodedModelMessage struct {
 
 // ConvertRawModelMessagesToUIAssistantMessages converts terminal stream payload
 // messages into frontend-friendly assistant UI messages.
+// ConvertRawModelMessagesToUIAssistantMessages converts the Messages payload
+// of a step or terminal stream event. That payload is a serialized
+// []sdk.Message, whose tool input and provider metadata are shaped for the
+// SDK, so it goes through the stored-shape codec before the extraction below
+// reads it the way it reads persisted rows.
 func ConvertRawModelMessagesToUIAssistantMessages(raw json.RawMessage) []UIMessage {
 	if len(raw) == 0 {
 		return nil
 	}
 
-	var messages []turn.ModelMessage
-	if err := json.Unmarshal(raw, &messages); err != nil {
+	messages, err := messageconv.SDKMessagesJSONToModelMessages(raw)
+	if err != nil {
 		return nil
 	}
 	return ConvertModelMessagesToUIAssistantMessages(messages)
@@ -108,6 +123,9 @@ func ConvertModelMessagesToUIAssistantMessages(messages []turn.ModelMessage) []U
 		decoded := decodeUIModelMessage(modelMessage)
 		switch strings.ToLower(strings.TrimSpace(decoded.Role)) {
 		case "assistant":
+			for _, command := range extractCommandOutputs(&decoded) {
+				appendPendingAssistantMessage(pending, command)
+			}
 			for _, reasoning := range extractPersistedReasoning(&decoded) {
 				appendPendingAssistantMessage(pending, UIMessage{
 					Type:    UIMessageReasoning,
@@ -132,6 +150,7 @@ func ConvertModelMessagesToUIAssistantMessages(messages []turn.ModelMessage) []U
 					Approval:          call.Approval,
 					ExecutionLocation: call.ExecutionLocation,
 					UserInput:         call.UserInput,
+					Diff:              call.Diff,
 				})
 				if call.ID != "" {
 					pending.ToolIndexes[call.ID] = len(pending.Turn.Messages) - 1
@@ -164,6 +183,7 @@ func ConvertModelMessagesToUIAssistantMessages(messages []turn.ModelMessage) []U
 // ConvertMessagesToUITurns converts persisted message rows into frontend-friendly turns.
 func ConvertMessagesToUITurns(messages []messagepkg.Message) []UITurn {
 	result := make([]UITurn, 0, len(messages))
+	runtimeForkable := make(map[string]bool)
 	var pending *uiPendingAssistantTurn
 	var backgroundToolRefs map[string]uiBackgroundToolRef
 
@@ -228,6 +248,10 @@ func ConvertMessagesToUITurns(messages []messagepkg.Message) []UITurn {
 
 	for i := range messages {
 		raw := messages[i]
+		ensurePersistedMetadata(&raw)
+		if raw.Role == "user" && messagepkg.IsInternalFeedback(raw.Metadata) {
+			continue
+		}
 		rawTurnID := strings.TrimSpace(raw.TurnID)
 		if rawTurnID == "" {
 			continue
@@ -306,8 +330,21 @@ func ConvertMessagesToUITurns(messages []messagepkg.Message) []UITurn {
 
 		case "assistant":
 			ensurePersistedMetadata(&raw)
+			if anchor, _ := raw.Metadata["agent_turn_id"].(string); strings.TrimSpace(anchor) != "" {
+				runtimeForkable[rawTurnID] = true
+			}
 			modelMessage := decodePersistedModelMessage(raw)
 			toolCalls := extractPersistedToolCalls(&modelMessage)
+			// New rows carry diffs on the row's metadata (lifted out of
+			// content at persist time so they don't count against the history
+			// byte budget); older rows still have them in providerMetadata.
+			if rowDiffs := extractDiffsByToolCallID(raw.Metadata); len(rowDiffs) > 0 {
+				for i := range toolCalls {
+					if toolCalls[i].Diff == "" {
+						toolCalls[i].Diff = rowDiffs[toolCalls[i].ID]
+					}
+				}
+			}
 			text := extractPersistedMessageText(raw, &modelMessage)
 			bindings := markdownmedia.Bindings(raw.Metadata)
 			if len(bindings) > 0 {
@@ -333,20 +370,16 @@ func ConvertMessagesToUITurns(messages []messagepkg.Message) []UITurn {
 			text = strings.TrimSpace(stripPersistedAgentTags(text))
 			reasonings := extractPersistedReasoning(&modelMessage)
 			attachments := uiAttachmentsFromMessageAssets(raw)
+			commands := extractCommandOutputs(&modelMessage)
+			notices := event.NoticesFromMetadata(raw.Metadata)
 
 			// A persisted turn_id is the only grouping key. Plain-text assistant
 			// messages and tool calls with that same id remain one reply.
-			if len(toolCalls) == 0 && text == "" && len(reasonings) == 0 && len(attachments) == 0 {
-				if code := persistedHistoryErrorCode(raw.Metadata); code != "" {
-					if pending == nil {
-						pending = newPendingAssistantTurn(raw)
-					}
-					appendPendingAssistantMessage(pending, UIMessage{
-						Type:    UIMessageError,
-						Code:    code,
-						Content: persistedHistoryErrorDetail(raw.Metadata),
-					})
-				}
+			// A row that recorded a failure keeps its error block after whatever
+			// output it already had, so a partially answered turn still shows why
+			// it stopped once history is reloaded.
+			errorCode := persistedHistoryErrorCode(raw.Metadata)
+			if len(toolCalls) == 0 && text == "" && len(reasonings) == 0 && len(attachments) == 0 && len(commands) == 0 && len(notices) == 0 && errorCode == "" {
 				continue
 			}
 
@@ -355,6 +388,12 @@ func ConvertMessagesToUITurns(messages []messagepkg.Message) []UITurn {
 			}
 
 			reasoningTimings := uiReasoningTimingsByOrdinal(raw.Metadata)
+			for _, notice := range notices {
+				appendPendingAssistantMessage(pending, noticeUIMessage(notice))
+			}
+			for _, command := range commands {
+				appendPendingAssistantMessage(pending, command)
+			}
 			for ordinal, reasoning := range reasonings {
 				appendPendingAssistantMessage(pending, UIMessage{
 					ID:              pending.NextID,
@@ -380,12 +419,21 @@ func ConvertMessagesToUITurns(messages []messagepkg.Message) []UITurn {
 					Attachments: attachments,
 				})
 			}
+			if errorCode != "" {
+				appendPendingAssistantMessage(pending, UIMessage{
+					Type:    UIMessageError,
+					Code:    errorCode,
+					Content: persistedHistoryErrorDetail(raw.Metadata),
+					Args:    persistedHistoryErrorArgs(raw.Metadata),
+				})
+			}
 
 		case "tool":
 			if pending == nil {
 				continue
 			}
 
+			ensurePersistedMetadata(&raw)
 			modelMessage := decodePersistedModelMessage(raw)
 			for _, toolResult := range extractPersistedToolResults(&modelMessage) {
 				idx, ok := pending.ToolIndexes[toolResult.ToolCallID]
@@ -394,11 +442,22 @@ func ConvertMessagesToUITurns(messages []messagepkg.Message) []UITurn {
 				}
 
 				applyToolResultToUIMessage(&pending.Turn.Messages[idx], toolResult.Output)
+				// The deferred-approval path persists the diff as row-level
+				// metadata on the tool message (the immediate path stores it
+				// under "diffs" on the assistant row instead).
+				if diff := extractDiffMetadata(raw.Metadata); diff != "" {
+					pending.Turn.Messages[idx].Diff = diff
+				}
 			}
 		}
 	}
 
 	flushPending()
+	for i := range result {
+		if result[i].Role == "assistant" {
+			result[i].RuntimeForkable = runtimeForkable[result[i].TurnID]
+		}
+	}
 	return result
 }
 
@@ -447,6 +506,9 @@ func upsertPendingToolCall(pending *uiPendingAssistantTurn, call uiExtractedTool
 			if call.UserInput != nil {
 				msg.UserInput = call.UserInput
 			}
+			if call.Diff != "" {
+				msg.Diff = call.Diff
+			}
 			msg.Running = uiBoolPtr(true)
 			return
 		}
@@ -460,6 +522,7 @@ func upsertPendingToolCall(pending *uiPendingAssistantTurn, call uiExtractedTool
 		Approval:          call.Approval,
 		ExecutionLocation: call.ExecutionLocation,
 		UserInput:         call.UserInput,
+		Diff:              call.Diff,
 	}
 	appendPendingAssistantMessage(pending, block)
 	if call.ID != "" {
@@ -499,6 +562,25 @@ func persistedHistoryErrorCode(meta map[string]any) string {
 	}
 	code, _ := meta[messagepkg.HistoryErrorCodeMetadataKey].(string)
 	return strings.TrimSpace(code)
+}
+
+// persistedHistoryErrorArgs are the string args stored beside a failure's
+// code. A row written before args were stored has none.
+func persistedHistoryErrorArgs(meta map[string]any) map[string]string {
+	stored, _ := meta[messagepkg.HistoryErrorArgsMetadataKey].(map[string]any)
+	if len(stored) == 0 {
+		return nil
+	}
+	args := make(map[string]string, len(stored))
+	for key, value := range stored {
+		if text, ok := value.(string); ok {
+			args[key] = text
+		}
+	}
+	if len(args) == 0 {
+		return nil
+	}
+	return args
 }
 
 func persistedHistoryErrorDetail(meta map[string]any) string {
@@ -724,6 +806,9 @@ func (message *uiDecodedModelMessage) textContent() string {
 func textFromUIParts(parts []uiContentPart) string {
 	var builder strings.Builder
 	for _, part := range parts {
+		if _, command := part.ProviderMetadata["runtime_command"]; command {
+			continue
+		}
 		partType := strings.TrimSpace(part.Type)
 		if strings.EqualFold(partType, "reasoning") {
 			continue
@@ -769,6 +854,16 @@ func extractPersistedReasoning(message *uiDecodedModelMessage) []string {
 	return reasonings
 }
 
+func extractCommandOutputs(message *uiDecodedModelMessage) []UIMessage {
+	var commands []UIMessage
+	for _, part := range message.parts() {
+		if name, ok := part.ProviderMetadata["runtime_command"].(string); ok && part.Text != "" {
+			commands = append(commands, UIMessage{Type: UIMessageCommand, Name: name, Content: part.Text})
+		}
+	}
+	return commands
+}
+
 func uiReasoningTimingsByOrdinal(metadata map[string]any) map[int]*UIReasoningTiming {
 	segments := messagepkg.ReasoningTimingFromMetadata(metadata)
 	if len(segments) == 0 {
@@ -800,6 +895,7 @@ func extractPersistedToolCalls(message *uiDecodedModelMessage) []uiExtractedTool
 			Approval:          extractApprovalMetadata(part.ProviderMetadata),
 			ExecutionLocation: extractExecutionLocationMetadata(part.ProviderMetadata),
 			UserInput:         extractUserInputMetadata(part.ProviderMetadata),
+			Diff:              extractDiffMetadata(part.ProviderMetadata),
 		})
 	}
 	if len(calls) > 0 {
@@ -909,6 +1005,39 @@ func extractExecutionLocationMetadata(metadata map[string]any) *UIExecutionLocat
 	return location
 }
 
+// extractDiffMetadata reads the UI-only unified diff the runtime attached to
+// the tool call's ProviderMetadata at execution time (edit/write tools). It
+// lives beside the tool result, never inside it, so the model never sees it.
+func extractDiffMetadata(metadata map[string]any) string {
+	if metadata == nil {
+		return ""
+	}
+	diff, _ := metadata["diff"].(string)
+	return diff
+}
+
+// extractDiffsByToolCallID reads the row-level map the persist path stores
+// under ToolCallDiffsMetadataKey after lifting diffs out of content.
+func extractDiffsByToolCallID(metadata map[string]any) map[string]string {
+	if metadata == nil {
+		return nil
+	}
+	raw, ok := metadata[messagepkg.ToolCallDiffsMetadataKey].(map[string]any)
+	if !ok {
+		return nil
+	}
+	diffs := make(map[string]string, len(raw))
+	for callID, value := range raw {
+		if diff, ok := value.(string); ok && diff != "" {
+			diffs[callID] = diff
+		}
+	}
+	if len(diffs) == 0 {
+		return nil
+	}
+	return diffs
+}
+
 func extractUserInputMetadata(metadata map[string]any) *UIUserInput {
 	if metadata == nil {
 		return nil
@@ -981,6 +1110,9 @@ func extractPersistedToolResults(message *uiDecodedModelMessage) []uiExtractedTo
 		output := part.Output
 		if output == nil {
 			output = part.Result
+		}
+		if part.IsError {
+			output = failedToolOutput(output)
 		}
 		results = append(results, uiExtractedToolResult{
 			ToolCallID: strings.TrimSpace(part.ToolCallID),
@@ -1335,6 +1467,36 @@ func stripPersistedAgentTags(text string) string {
 	return strings.TrimSpace(uiMessageCollapsedNewlinesRe.ReplaceAllString(stripped, "\n\n"))
 }
 
+// failedToolOutput gives a failed tool result the shape the web client reads
+// failure from: an object carrying isError plus text content, as MCP results
+// already are. A native tool that returns a Go error is recorded as plain text
+// with the flag on the tool-result part (and streams only an error string),
+// so without this the client cannot tell the call failed and renders the
+// tool's success detail for it.
+func failedToolOutput(output any) any {
+	if payload, ok := output.(map[string]any); ok {
+		if failed, _ := payload["isError"].(bool); failed {
+			return payload
+		}
+		marked := make(map[string]any, len(payload)+1)
+		for key, value := range payload {
+			marked[key] = value
+		}
+		marked["isError"] = true
+		return marked
+	}
+	text, ok := output.(string)
+	if !ok && output != nil {
+		if encoded, err := json.Marshal(output); err == nil {
+			text = string(encoded)
+		}
+	}
+	return map[string]any{
+		"isError": true,
+		"content": []any{map[string]any{"type": "text", "text": text}},
+	}
+}
+
 func applyToolResultToUIMessage(message *UIMessage, output any) {
 	if message == nil {
 		return
@@ -1607,4 +1769,32 @@ func isBackgroundTerminalStatus(status string) bool {
 	default:
 		return false
 	}
+}
+
+// ConvertSessionMessagesToUITurns applies the session's native fork boundary.
+// The durable anchor, rather than the last row in this page, is authoritative
+// so an older history page never offers a fork from its own final reply.
+func ConvertSessionMessagesToUITurns(messages []messagepkg.Message, runtimeType string, metadata map[string]any) []UITurn {
+	turns := ConvertMessagesToUITurns(messages)
+	key := runtimekind.LatestForkAnchorKey(runtimeType)
+	if key == "" {
+		return turns
+	}
+	latest, _ := metadata[key].(string)
+	latest = strings.TrimSpace(latest)
+	allowed := map[string]bool{}
+	for _, raw := range messages {
+		if raw.Role != "assistant" {
+			continue
+		}
+		ensurePersistedMetadata(&raw)
+		anchor, _ := raw.Metadata["agent_turn_id"].(string)
+		if latest != "" && strings.TrimSpace(anchor) == latest {
+			allowed[strings.TrimSpace(raw.TurnID)] = true
+		}
+	}
+	for i := range turns {
+		turns[i].RuntimeForkable = turns[i].RuntimeForkable && allowed[turns[i].TurnID]
+	}
+	return turns
 }

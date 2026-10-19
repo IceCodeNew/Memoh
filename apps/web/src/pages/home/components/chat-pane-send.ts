@@ -30,7 +30,7 @@ export function matchesChatPaneSendContext(
 // it lives here rather than inline in the pane: the two call sites must agree,
 // and this is the only piece of that decision worth testing on its own.
 //
-// Only a native composer can be model-less in a way that blocks sending. An ACP
+// Only a native composer can be model-less in a way that blocks sending. An external
 // agent supplies its own default model, so an empty selection there is normal.
 export function composerHasNoModel(
   activeUsesExternalAgentComposer: boolean,
@@ -65,7 +65,7 @@ const ACP_STALE_CONFIG_CODES = new Set([
   // Feedback-family code (underscore form): the runtime dropped or replaced
   // the command set between admission and prompt; refresh the registry so the
   // picker stops offering the stale command.
-  'acp_agent_command_stale',
+  'runtime_agent_command_stale',
 ])
 
 export function shouldRefreshACPComposerConfig(
@@ -76,6 +76,24 @@ export function shouldRefreshACPComposerConfig(
     && activeUsesExternalAgentComposer
     && typeof result.errorCode === 'string'
     && ACP_STALE_CONFIG_CODES.has(result.errorCode)
+}
+
+// What a failed send hands back to the composer: the draft and the error shown
+// above it. Only a failure before the server accepted the message returns
+// anything. An accepted message stays in the transcript with its failure, so
+// the composer keeps its cleared draft and shows no error. An empty error is a
+// canceled send, which restores the draft without an error; fallbackError is
+// for a failure that gave no error at all.
+export function composerRestoreForSendResult(
+  result: SendMessageResult,
+  sentText: string,
+  fallbackError: string,
+): { input: string, error: string } | null {
+  if (result.ok || result.stage !== 'startup') return null
+  return {
+    input: result.restoreInput ?? sentText,
+    error: result.error ?? fallbackError,
+  }
 }
 
 // ── Composer (model, effort) pair draft (issue #879) ─────────────────────

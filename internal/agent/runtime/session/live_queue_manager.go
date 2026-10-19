@@ -22,6 +22,14 @@ func (m *Manager) liveQueueBackend() (LiveQueueBackend, error) {
 // EnableSteer advertises an actual execution consumer, not just an allocated
 // channel. Other instances therefore reject queues aimed at old/unsupported owners.
 func (m *Manager) EnableSteer(ctx context.Context, handle RunHandle) error {
+	return m.setSteerEnabled(ctx, handle, true)
+}
+
+func (m *Manager) DisableSteer(ctx context.Context, handle RunHandle) error {
+	return m.setSteerEnabled(ctx, handle, false)
+}
+
+func (m *Manager) setSteerEnabled(ctx context.Context, handle RunHandle, enabled bool) error {
 	if m.SteerWake(handle) == nil {
 		return ErrRunOwnershipLost
 	}
@@ -31,10 +39,10 @@ func (m *Manager) EnableSteer(ctx context.Context, handle RunHandle) error {
 			(run.Status != RunStatusRunning && run.Status != RunStatusWaitingDecision) {
 			return snapshot, false, ErrRunOwnershipLost
 		}
-		if run.SteerSupported {
+		if run.SteerSupported == enabled {
 			return snapshot, false, nil
 		}
-		run.SteerSupported = true
+		run.SteerSupported = enabled
 		run.UpdatedAt = now
 		snapshot.Seq++
 		snapshot.UpdatedAt = now
@@ -183,7 +191,7 @@ func (m *Manager) notifySteer(ctx context.Context, key Key, runID string) {
 		err = m.dispatchRemoteCommand(ctx, run.OwnerID, cmd)
 	}
 	if err != nil {
-		m.logger.Warn("notify accepted steer failed", slog.String("run_id", runID), slog.Any("error", err))
+		m.logger.WarnContext(ctx, "notify accepted steer failed", slog.String("run_id", runID), slog.Any("error", err))
 	}
 }
 
@@ -241,4 +249,12 @@ func (m *Manager) ReleaseFollowUp(ctx context.Context, key Key, ref FollowUpClai
 		return err
 	}
 	return queue.ReleaseFollowUp(ctx, key, ref)
+}
+
+func (m *Manager) RejectFollowUp(ctx context.Context, key Key, ref FollowUpClaimRef, errorCode string) error {
+	queue, err := m.liveQueueBackend()
+	if err != nil {
+		return err
+	}
+	return queue.RejectFollowUp(ctx, key, ref, errorCode)
 }

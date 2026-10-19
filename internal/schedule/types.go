@@ -29,6 +29,8 @@ const (
 // means "new session with all bot defaults" — exactly the pre-parameter
 // behavior.
 type ExecutionConfig struct {
+	// MaxRunSeconds is the execution budget (300-86400 seconds); zero uses one hour.
+	MaxRunSeconds int `json:"max_run_seconds,omitempty"`
 	// RunTarget is new_session (default) or existing_session.
 	RunTarget string `json:"run_target,omitempty"`
 	// TargetSessionID names the session reused by existing_session mode.
@@ -129,13 +131,16 @@ type ListResponse struct {
 }
 
 type Log struct {
-	ID           string     `json:"id"`
-	ScheduleID   string     `json:"schedule_id"`
-	BotID        string     `json:"bot_id"`
-	SessionID    string     `json:"session_id,omitempty"`
-	Status       string     `json:"status"`
-	ResultText   string     `json:"result_text"`
+	ID         string `json:"id"`
+	ScheduleID string `json:"schedule_id"`
+	BotID      string `json:"bot_id"`
+	SessionID  string `json:"session_id,omitempty"`
+	Status     string `json:"status"`
+	ResultText string `json:"result_text"`
+	// ErrorMessage is the text an earlier server stored; new failures set
+	// ErrorCode and leave it empty.
 	ErrorMessage string     `json:"error_message"`
+	ErrorCode    string     `json:"error_code,omitempty"`
 	Usage        any        `json:"usage,omitempty"`
 	StartedAt    time.Time  `json:"started_at"`
 	CompletedAt  *time.Time `json:"completed_at,omitempty"`
@@ -144,4 +149,35 @@ type Log struct {
 type ListLogsResponse struct {
 	Items      []Log `json:"items"`
 	TotalCount int64 `json:"total_count"`
+}
+
+// Run statuses a RunSession reports. RunStatusRunning is derived from a log
+// row with no completed_at; the other two are the stored outcome.
+const (
+	RunStatusRunning = "running"
+	RunStatusOK      = "ok"
+	RunStatusError   = "error"
+)
+
+// RunSession is one fire of a schedule together with the session it ran in.
+type RunSession struct {
+	// LogID identifies the fire (schedule_logs.id).
+	LogID string `json:"log_id"`
+	// SessionID is empty when the fire failed before any session existed.
+	SessionID string `json:"session_id"`
+	// Title is the session title, empty when there is no session.
+	Title string `json:"title"`
+	// Status is running while the fire has not completed, then ok or error.
+	Status    string    `json:"status" enums:"running,ok,error"`
+	ErrorCode string    `json:"error_code"`
+	StartedAt time.Time `json:"started_at"`
+	// CompletedAt is null while the fire is still running.
+	CompletedAt *time.Time `json:"completed_at" extensions:"x-nullable"`
+}
+
+// ListRunSessionsResponse carries one page of a schedule's runs, newest
+// first. NextCursor is empty exactly when there are no older runs.
+type ListRunSessionsResponse struct {
+	Items      []RunSession `json:"items"`
+	NextCursor string       `json:"next_cursor"`
 }

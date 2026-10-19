@@ -60,7 +60,7 @@
           v-if="showError"
           class="text-xs text-destructive"
         >
-          {{ testResult?.message }}
+          {{ testError }}
         </span>
       </div>
       <p
@@ -137,7 +137,8 @@ import {
   Switch,
   toast,
 } from '@felinic/ui'
-import { Zap, Settings, Trash2, Binary } from 'lucide-vue-next'
+import { Zap, Trash2, Binary } from 'lucide-vue-next'
+import { SettingsIcon as Settings } from '@memohai/icon/ui'
 import { ConfirmPopover } from '@felinic/ui'
 import ModelDescriptionTooltip from '@/components/model-description-tooltip/index.vue'
 import { postModelsByIdTest, putModelsById } from '@memohai/sdk'
@@ -146,6 +147,7 @@ import { useQueryCache } from '@pinia/colada'
 import { ref, computed } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { getModelDescription } from '@/utils/model-description'
+import { resolveApiErrorMessage } from '@/utils/api-error'
 
 const props = withDefaults(defineProps<{
   model: ModelsGetResponse
@@ -164,10 +166,11 @@ defineEmits<{
   delete: [id: string]
 }>()
 
-const { t } = useI18n()
+const { t, te } = useI18n()
 const queryCache = useQueryCache()
 const testLoading = ref(false)
 const testResult = ref<ModelsTestResponse | null>(null)
+const testError = ref('')
 const enableLoading = ref(false)
 const enableOverride = ref<boolean | null>(null)
 
@@ -180,9 +183,7 @@ const showModelId = computed(() => {
   return !!name && !!props.model.model_id && name !== props.model.model_id
 })
 
-const showError = computed(
-  () => !!(testResult.value && testResult.value.status !== 'ok' && testResult.value.message),
-)
+const showError = computed(() => !!testError.value)
 
 const statusDotClass = computed(() => {
   switch (testResult.value?.status) {
@@ -193,18 +194,33 @@ const statusDotClass = computed(() => {
   }
 })
 
+// A failed probe names its reason by catalog code, except model_not_supported:
+// the provider answered but does not recognize the model, and that status
+// carries no code. A code this client has no copy for falls back to the
+// generic failure copy.
+function testFailureText(result: ModelsTestResponse): string {
+  if (result.status === 'model_not_supported') return t('models.testModelNotSupported')
+  const key = result.code ? `errors.${result.code}` : ''
+  return key && te(key) ? t(key) : t('models.testFailed')
+}
+
 async function runTest() {
   if (!props.model.id) return
   testLoading.value = true
   testResult.value = null
+  testError.value = ''
   try {
     const { data } = await postModelsByIdTest({
       path: { id: props.model.id },
       throwOnError: true,
     })
     testResult.value = data ?? null
-  } catch {
+    if (data && data.status !== 'ok') {
+      testError.value = testFailureText(data)
+    }
+  } catch (err: unknown) {
     testResult.value = { status: 'error' }
+    testError.value = resolveApiErrorMessage(err, t('models.testFailed'))
   } finally {
     testLoading.value = false
   }

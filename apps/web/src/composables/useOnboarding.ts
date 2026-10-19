@@ -8,8 +8,8 @@ import { ONBOARDING_KEYS } from '@/pages/onboarding/constants'
 import { readOnboardingBotResult, resetOnboardingSession } from '@/pages/onboarding/session'
 import { safeLocalGet, safeLocalRemove, safeLocalSet } from '@/utils/safe-storage'
 
-export const LAST_STEP_INDEX = 4
-export const STEP_COUNT = 5
+export const LAST_STEP_INDEX = 5
+export const STEP_COUNT = 6
 
 const currentStep = ref(0)
 const completing = ref(false)
@@ -19,6 +19,19 @@ export function resetOnboardingState() {
   currentStep.value = 0
   completing.value = false
   introTextVisible.value = false
+}
+
+// Onboarding counts as done once it has produced a Bot. The final step only
+// presents next steps, so a user who leaves before it must not be sent back
+// through the wizard — and its Bot creation — on the next sign-in.
+export async function markOnboardingCompleted(): Promise<void> {
+  const userStore = useUserStore()
+  if (userStore.onboardingCompleted) return
+  await putUsersMe({
+    body: { metadata: { onboarding_completed: true } },
+    throwOnError: true,
+  })
+  userStore.onboardingCompleted = true
 }
 
 export function useOnboarding() {
@@ -54,12 +67,7 @@ export function useOnboarding() {
     completing.value = true
     const minWait = new Promise<void>((resolve) => setTimeout(resolve, minTransitionMs))
     try {
-      await putUsersMe({
-        body: { metadata: { onboarding_completed: true } },
-        throwOnError: true,
-      })
-      const userStore = useUserStore()
-      userStore.onboardingCompleted = true
+      await markOnboardingCompleted()
     } catch {
       toast.error(t('onboarding.complete.saveFailed'))
       completing.value = false

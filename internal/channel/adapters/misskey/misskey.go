@@ -13,18 +13,19 @@ import (
 	"github.com/gorilla/websocket"
 
 	"github.com/felinics/memoh/internal/channel"
-	"github.com/felinics/memoh/internal/channel/common"
+	"github.com/felinics/memoh/internal/errs"
 	"github.com/felinics/memoh/internal/redact"
 	"github.com/felinics/memoh/internal/textutil"
 )
 
 const (
-	misskeyMaxNoteLength   = 3000
-	misskeyReconnectDelay  = 5 * time.Second
-	misskeyPingInterval    = 30 * time.Second
-	misskeyWriteTimeout    = 10 * time.Second
-	misskeyReadBufferSize  = 1 << 16
-	misskeyWriteBufferSize = 1 << 16
+	misskeyMaxNoteLength       = 3000
+	misskeyReconnectDelay      = 5 * time.Second
+	misskeyPingInterval        = 30 * time.Second
+	misskeyWriteTimeout        = 10 * time.Second
+	misskeyReadBufferSize      = 1 << 16
+	misskeyWriteBufferSize     = 1 << 16
+	misskeyVerificationTimeout = 15 * time.Second
 )
 
 // MisskeyAdapter implements the channel.Adapter interfaces for Misskey.
@@ -104,6 +105,16 @@ func (*MisskeyAdapter) Descriptor() channel.Descriptor {
 	}
 }
 
+func (*MisskeyAdapter) SelfIdentityPolicy() channel.SelfIdentityPolicy {
+	return channel.SelfIdentityPolicy{
+		RefreshOnCredentialsChange: true,
+		RequireDiscoveryOnEnable:   true,
+		RequiredSelfIdentityKey:    "user_id",
+		DiscoveryErrorMessage:      "misskey identity discovery failed",
+		MissingIdentityMessage:     "misskey identity discovery returned no user id",
+	}
+}
+
 // --- ConfigNormalizer ---
 
 // NormalizeConfig validates and normalizes a Misskey channel configuration map.
@@ -148,7 +159,9 @@ func (*MisskeyAdapter) DiscoverSelf(ctx context.Context, credentials map[string]
 	if err != nil {
 		return nil, "", err
 	}
-	me, err := getMe(ctx, cfg)
+	callCtx, cancel := context.WithTimeout(ctx, misskeyVerificationTimeout)
+	defer cancel()
+	me, err := getMe(callCtx, cfg)
 	if err != nil {
 		return nil, "", fmt.Errorf("misskey discover self: %w", err)
 	}
@@ -170,7 +183,7 @@ func (*MisskeyAdapter) DiscoverSelf(ctx context.Context, credentials map[string]
 // Connect starts a WebSocket streaming connection to receive Misskey mentions.
 func (a *MisskeyAdapter) Connect(ctx context.Context, cfg channel.ChannelConfig, handler channel.InboundHandler) (channel.Connection, error) {
 	if a.logger != nil {
-		a.logger.Info("start", slog.String("config_id", cfg.ID))
+		a.logger.InfoContext(ctx, "start", slog.String("config_id", cfg.ID))
 	}
 	mkCfg, err := parseConfig(cfg.Credentials)
 	if err != nil {
@@ -192,7 +205,7 @@ func (a *MisskeyAdapter) Connect(ctx context.Context, cfg channel.ChannelConfig,
 
 	stop := func(_ context.Context) error {
 		if a.logger != nil {
-			a.logger.Info("stop", slog.String("config_id", cfg.ID))
+			a.logger.InfoContext(ctx, "stop", slog.String("config_id", cfg.ID))
 		}
 		cancel()
 		return nil
@@ -209,7 +222,7 @@ func (a *MisskeyAdapter) runStreamLoop(ctx context.Context, cfg channel.ChannelC
 		}
 		if err := a.runStream(ctx, cfg, mkCfg, me, handler); err != nil {
 			if a.logger != nil {
-				a.logger.Warn("stream disconnected", slog.String("config_id", cfg.ID), slog.Any("error", err))
+				a.logger.WarnContext(ctx, "stream disconnected", slog.String("config_id", cfg.ID), slog.Any("error", err))
 			}
 		}
 		select {
@@ -235,7 +248,7 @@ func (a *MisskeyAdapter) runStream(ctx context.Context, cfg channel.ChannelConfi
 	defer func() { _ = conn.Close() }()
 
 	if a.logger != nil {
-		a.logger.Info("stream connected", slog.String("config_id", cfg.ID))
+		a.logger.InfoContext(ctx, "stream connected", slog.String("config_id", cfg.ID))
 	}
 
 	// Subscribe to main channel to receive mentions.
@@ -340,7 +353,7 @@ func (a *MisskeyAdapter) handleChannelEvent(ctx context.Context, cfg channel.Cha
 		var note misskeyNote
 		if err := json.Unmarshal(body.Body, &note); err != nil {
 			if a.logger != nil {
-				a.logger.Warn("parse note failed", slog.String("config_id", cfg.ID), slog.Any("error", err))
+				a.logger.WarnContext(ctx, "parse note failed", slog.String("config_id", cfg.ID), slog.Any("error", err))
 			}
 			return
 		}
@@ -354,9 +367,8 @@ func (a *MisskeyAdapter) handleChannelEvent(ctx context.Context, cfg channel.Cha
 		}
 		a.logInbound(cfg.ID, inbound)
 		go func() {
-			if err := handler(ctx, cfg, inbound); err != nil && a.logger != nil {
-				a.logger.Error("handle inbound failed", slog.String("config_id", cfg.ID), slog.Any("error", err))
-			}
+			// The inbound unit writes the result line of the message.
+			_ = handler(ctx, cfg, inbound)
 		}()
 
 	case "notification":
@@ -380,9 +392,8 @@ func (a *MisskeyAdapter) handleChannelEvent(ctx context.Context, cfg channel.Cha
 		}
 		a.logInbound(cfg.ID, inbound)
 		go func() {
-			if err := handler(ctx, cfg, inbound); err != nil && a.logger != nil {
-				a.logger.Error("handle inbound failed", slog.String("config_id", cfg.ID), slog.Any("error", err))
-			}
+			// The inbound unit writes the result line of the message.
+			_ = handler(ctx, cfg, inbound)
 		}()
 	}
 }
@@ -533,14 +544,13 @@ func (a *MisskeyAdapter) logInbound(configID string, msg channel.InboundMessage)
 		slog.String("config_id", configID),
 		slog.String("user_id", msg.Sender.Attribute("user_id")),
 		slog.String("username", msg.Sender.Attribute("username")),
-		slog.String("text", common.SummarizeText(msg.Message.Text)),
 	)
 }
 
 // --- Sender ---
 
 // Send delivers an outbound message to Misskey by creating a note.
-func (a *MisskeyAdapter) Send(ctx context.Context, cfg channel.ChannelConfig, msg channel.PreparedOutboundMessage) error {
+func (*MisskeyAdapter) Send(ctx context.Context, cfg channel.ChannelConfig, msg channel.PreparedOutboundMessage) error {
 	mkCfg, err := parseConfig(cfg.Credentials)
 	if err != nil {
 		return err
@@ -556,10 +566,7 @@ func (a *MisskeyAdapter) Send(ctx context.Context, cfg channel.ChannelConfig, ms
 
 	_, err = createNote(ctx, mkCfg, text, replyID, visibility)
 	if err != nil {
-		if a.logger != nil {
-			a.logger.Error("send note failed", slog.String("config_id", cfg.ID), slog.Any("error", err))
-		}
-		return err
+		return errs.Wrap(err, "send misskey note", slog.String("config_id", cfg.ID))
 	}
 	return nil
 }
@@ -633,15 +640,32 @@ type misskeyBlockStream struct {
 	closed      bool
 }
 
-func (s *misskeyBlockStream) Push(_ context.Context, event channel.PreparedStreamEvent) error {
+func (s *misskeyBlockStream) Push(ctx context.Context, event channel.PreparedStreamEvent) error {
 	if s.closed {
 		return nil
 	}
 	switch event.Type {
+	case channel.StreamEventError:
+		errText := redact.Text(strings.TrimSpace(event.Error))
+		s.textBuilder.Reset()
+		s.attachments = nil
+		s.final = nil
+		if errText == "" {
+			return nil
+		}
+		return s.adapter.Send(ctx, s.cfg, channel.PreparedOutboundMessage{
+			Target: s.target,
+			Message: channel.PreparedMessage{Message: channel.Message{
+				Format: channel.MessageFormatPlain,
+				Text:   channel.ErrorReplyText(event.ErrorCode, errText),
+			}},
+		})
 	case channel.StreamEventDelta:
 		if strings.TrimSpace(event.Delta) != "" && event.Phase != channel.StreamPhaseReasoning {
 			s.textBuilder.WriteString(event.Delta)
 		}
+	case channel.StreamEventReset:
+		s.textBuilder.Reset()
 	case channel.StreamEventAttachment:
 		s.attachments = append(s.attachments, event.Attachments...)
 	case channel.StreamEventFinal:

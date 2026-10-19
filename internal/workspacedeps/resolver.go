@@ -2,7 +2,6 @@ package workspacedeps
 
 import (
 	"context"
-	"log/slog"
 	"strings"
 
 	"github.com/felinics/memoh/internal/agent/runtime/external"
@@ -18,7 +17,7 @@ var (
 // BuiltinLauncherCommands is the command binding of the built-in direct runtimes.
 // It contains no recipes and remains available when the remote catalog is empty.
 func BuiltinLauncherCommands() map[string]string {
-	return map[string]string{"codex": "codex", "claude-code": "claude"}
+	return map[string]string{"codex": "codex", "claude-code": "claude", "grok": "grok"}
 }
 
 // ResolveLauncher is read-only. Missing dependencies require an administrator
@@ -48,16 +47,12 @@ func (s *Service) ResolveLauncher(ctx context.Context, botID, depID string) (ext
 		ctx = context.WithValue(ctx, catalogContextKey{}, CatalogResult{Catalog: fallback})
 		dep = fallback.MustGet(depID)
 	}
-	targetID, err := s.workspace.CurrentTargetID(ctx, botID)
+
+	snap, err := s.snapshot(ctx, botID, false)
 	if err != nil {
 		return external.Launcher{}, err
 	}
-	targetID = normalizeTargetID(targetID)
-	snap, err := s.snapshot(ctx, botID, targetID, false)
-	if err != nil {
-		return external.Launcher{}, err
-	}
-	key := InstallationKey{BotID: botID, WorkspaceTargetID: targetID, DependencyID: dep.ID}
+	key := InstallationKey{BotID: botID, DependencyID: dep.ID}
 	candidate, ok := selectLauncherCandidate(snap.Observed[dep.ID].Candidates)
 	if !ok {
 		s.forgetLaunched(key)
@@ -75,34 +70,25 @@ func (s *Service) ResolveLauncher(ctx context.Context, botID, depID string) (ext
 
 // ObserveLauncherVersion feeds the version a runtime reported during its
 // handshake back into the discovery cache. The version is written to the copy
-// ResolveLauncher last handed out for the bot's current target, falling back
+// ResolveLauncher last handed out for the bot's isolated workspace, falling back
 // to the default winning copy when none was recorded. Errors are logged only;
 // the correction is best effort.
-func (s *Service) ObserveLauncherVersion(ctx context.Context, botID, depID, version string) {
+func (s *Service) ObserveLauncherVersion(_ context.Context, botID, depID, version string) {
 	depID = strings.TrimSpace(depID)
 	version = strings.TrimSpace(version)
 	if depID == "" || version == "" {
 		return
 	}
-	targetID, err := s.workspace.CurrentTargetID(ctx, botID)
-	if err != nil {
-		s.logger.Warn("observe launcher version: resolve workspace target",
-			slog.String("bot_id", botID),
-			slog.String("dependency_id", depID),
-			slog.Any("error", err),
-		)
-		return
-	}
-	targetID = normalizeTargetID(targetID)
-	key := InstallationKey{BotID: botID, WorkspaceTargetID: targetID, DependencyID: depID}
+
+	key := InstallationKey{BotID: botID, DependencyID: depID}
 	s.resolverMu.Lock()
 	path := s.launched[key]
 	s.resolverMu.Unlock()
 	if path != "" {
-		s.cache.ObserveVersionAt(botID, targetID, depID, path, version)
+		s.cache.ObserveVersionAt(botID, depID, path, version)
 		return
 	}
-	s.cache.ObserveVersion(botID, targetID, depID, version)
+	s.cache.ObserveVersion(botID, depID, version)
 }
 
 func (s *Service) rememberLaunched(key InstallationKey, path string) {

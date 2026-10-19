@@ -20,29 +20,29 @@ const triggerTestContextWindow = 128000
 
 type triggerCaptureProvider struct {
 	mu     sync.Mutex
-	params sdk.GenerateParams
+	params sdk.Request
 }
 
 func (*triggerCaptureProvider) Name() string { return "trigger-capture" }
 
 func (*triggerCaptureProvider) ListModels(context.Context) ([]sdk.Model, error) { return nil, nil }
 
-func (*triggerCaptureProvider) Test(context.Context) *sdk.ProviderTestResult {
-	return &sdk.ProviderTestResult{Status: sdk.ProviderStatusOK}
+func (*triggerCaptureProvider) Test(context.Context) error {
+	return nil
 }
 
 func (*triggerCaptureProvider) TestModel(context.Context, string) (*sdk.ModelTestResult, error) {
 	return &sdk.ModelTestResult{Supported: true}, nil
 }
 
-func (p *triggerCaptureProvider) DoGenerate(_ context.Context, params sdk.GenerateParams) (*sdk.GenerateResult, error) {
+func (p *triggerCaptureProvider) DoGenerate(_ context.Context, params sdk.Request) (sdk.ModelResult, error) {
 	p.mu.Lock()
 	p.params = params
 	p.mu.Unlock()
-	return &sdk.GenerateResult{Text: "done", FinishReason: sdk.FinishReasonStop}, nil
+	return sdk.ModelResult{Text: "done", FinishReason: sdk.FinishReasonStop}, nil
 }
 
-func (p *triggerCaptureProvider) DoStream(ctx context.Context, params sdk.GenerateParams) (*sdk.StreamResult, error) {
+func (p *triggerCaptureProvider) DoStream(ctx context.Context, params sdk.Request) (<-chan sdk.StreamPart, error) {
 	result, err := p.DoGenerate(ctx, params)
 	if err != nil {
 		return nil, err
@@ -55,10 +55,10 @@ func (p *triggerCaptureProvider) DoStream(ctx context.Context, params sdk.Genera
 		ch <- &sdk.FinishStepPart{FinishReason: result.FinishReason}
 		ch <- &sdk.FinishPart{FinishReason: result.FinishReason}
 	}()
-	return &sdk.StreamResult{Stream: ch}, nil
+	return ch, nil
 }
 
-func (p *triggerCaptureProvider) lastParams() sdk.GenerateParams {
+func (p *triggerCaptureProvider) lastParams() sdk.Request {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	return p.params
@@ -89,17 +89,16 @@ func triggerResolvedRunConfig(provider sdk.Provider, rawQuery string, now time.T
 		Time:        now,
 	}, rawQuery)
 	return agentpkg.RunConfig{
-		Model:                     &sdk.Model{ID: "trigger-model", Provider: provider, Type: sdk.ModelTypeChat},
-		Query:                     headerified,
-		ContextScope:              contextfrag.Scope{BotID: "bot-1", ChatID: "bot-1"},
-		ContextToolExchangePolicy: &contextfrag.ToolExchangePolicy{MinMessages: 10},
-		ContextLifecycle:          contextfrag.NewLifecycleHolder(),
-		ContextBudgetMaxTokens:    triggerTestContextWindow,
-		SessionType:               sessionType,
+		Model:                  &sdk.Model{ID: "trigger-model", Provider: provider, Type: sdk.ModelTypeChat},
+		Query:                  headerified,
+		ContextScope:           contextfrag.Scope{BotID: "bot-1", ChatID: "bot-1"},
+		ContextLifecycle:       contextfrag.NewLifecycleHolder(),
+		ContextBudgetMaxTokens: triggerTestContextWindow,
+		SessionType:            sessionType,
 	}
 }
 
-func runTriggerPromptPipeline(t *testing.T, cfg agentpkg.RunConfig, provider *triggerCaptureProvider) (agentpkg.RunConfig, sdk.GenerateParams) {
+func runTriggerPromptPipeline(t *testing.T, cfg agentpkg.RunConfig, provider *triggerCaptureProvider) (agentpkg.RunConfig, sdk.Request) {
 	t.Helper()
 	ctx := context.Background()
 	service := &Service{logger: slog.Default()}
@@ -122,7 +121,7 @@ func triggerMessageText(message sdk.Message) string {
 	return ""
 }
 
-func assertTriggerCurrentRequest(t *testing.T, seen agentpkg.RunConfig, params sdk.GenerateParams, prompt string) {
+func assertTriggerCurrentRequest(t *testing.T, seen agentpkg.RunConfig, params sdk.Request, prompt string) {
 	t.Helper()
 
 	current := 0

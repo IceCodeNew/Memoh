@@ -7,6 +7,7 @@ import type {
 import {
   createEmptyRuntimeProjection,
   isRuntimeRunActive,
+  isRuntimeRunStreaming,
   reduceRuntimeProjection,
 } from './runtime-projection'
 
@@ -187,7 +188,7 @@ describe('runtime projection', () => {
       ['user', 'turn-1'],
       ['assistant', 'turn-1'],
       ['user', 'queue-steer:steer-item-1'],
-      ['assistant', 'queue-steer:steer-item-1:assistant'],
+      ['assistant', 'queue-steer:steer-item-1'],
     ])
     expect(claimed.transcript.turns[2]).toMatchObject({ text: 'change direction' })
     expect(claimed.transcript.turns[3]).toMatchObject({ messages: [] })
@@ -195,16 +196,20 @@ describe('runtime projection', () => {
 
   it('replaces a claimed steer with its durable turn without adding another user', () => {
     const claimed = reduceRuntimeProjection(createEmptyRuntimeProjection(), snapshot(runView({
-      messages: [{ id: 0, type: 'text', content: 'before' }],
+      messages: [
+        { id: 0, type: 'text', content: 'before' },
+        { id: 1, type: 'status', name: 'compacting' },
+      ],
       steer_turns: [{
         item_id: 'steer-item-1',
         status: 'claimed',
         text: 'change direction',
-        after_message_id: 0,
+        after_message_id: 1,
         timestamp: '2026-07-27T08:00:01.000Z',
       }],
     })))
     const applied = reduceRuntimeProjection(claimed, delta(5, {
+      message_upserts: [{ id: 1, type: 'status', name: 'api_retry' }],
       user_turn_upserts: [{
         turn_id: 'turn-steer-1',
         turn_position: 2,
@@ -217,7 +222,7 @@ describe('runtime projection', () => {
         status: 'applied',
         text: 'change direction',
         turn_id: 'turn-steer-1',
-        after_message_id: 0,
+        after_message_id: 1,
         timestamp: '2026-07-27T08:00:02.000Z',
       }],
     }))
@@ -234,6 +239,51 @@ describe('runtime projection', () => {
       ['user', 'turn-steer-1'],
       ['assistant', 'turn-steer-1'],
     ])
+    expect(applied.transcript.turns[1]).toMatchObject({ messages: [{ id: 0, type: 'text', content: 'before' }] })
+    expect(applied.transcript.turns[3]).toMatchObject({ messages: [{ id: 1, type: 'status', name: 'api_retry' }] })
+    const failed = reduceRuntimeProjection(applied, delta(6, {
+      run: { run_id: 'run-1', error_code: 'agent.response_timeout' },
+    }))
+    expect(failed.transcript.turns[3]).toMatchObject({ messages: [{ id: 2, type: 'error' }, { id: 1, type: 'status' }] })
+    const cleared = reduceRuntimeProjection(applied, delta(6, {
+      message_upserts: [{ id: 1, type: 'status' }],
+    }))
+    expect(cleared.transcript.turns[3]).toMatchObject({ messages: [{ id: 1, type: 'status' }] })
+    const completed = reduceRuntimeProjection(cleared, delta(7, {
+      run: { run_id: 'run-1', status: 'completed' },
+    }))
+    expect(completed.transcript.turns.flatMap(turn => turn.role === 'assistant' ? turn.messages : []).some(message => message.type === 'status')).toBe(false)
+  })
+
+  it('merges the retry state from a run patch and clears it explicitly', () => {
+    const retry = {
+      attempt: 2,
+      max_attempt: 4,
+      delay_ms: 1500,
+      reason: 'rate_limited' as const,
+      retry_at: '2026-07-27T08:00:03.500Z',
+    }
+    const base = reduceRuntimeProjection(createEmptyRuntimeProjection(), snapshot())
+    const waiting = reduceRuntimeProjection(base, delta(5, {
+      run: { run_id: 'run-1', retry },
+      reset_messages: true,
+    }))
+    expect(waiting.currentRunView?.retry).toEqual(retry)
+
+    // A patch with neither field leaves the retry state alone.
+    const unrelated = reduceRuntimeProjection(waiting, delta(6, {
+      run: { run_id: 'run-1', updated_at: '2026-07-27T08:00:02.000Z' },
+    }))
+    expect(unrelated.currentRunView?.retry).toEqual(retry)
+
+    const cleared = reduceRuntimeProjection(unrelated, delta(7, {
+      run: { run_id: 'run-1', clear_retry: true },
+    }))
+    expect(cleared.currentRunView).not.toHaveProperty('retry')
+
+    // A snapshot carries the retry state for reconnects.
+    const hydrated = reduceRuntimeProjection(createEmptyRuntimeProjection(), snapshot(runView({ retry })))
+    expect(hydrated.currentRunView?.retry).toEqual(retry)
   })
 
   it('drops the empty trailing assistant segment once the run has settled', () => {
@@ -339,7 +389,6 @@ describe('runtime projection', () => {
         run_id: 'run-1',
         status: 'lost',
         error_code: 'agent.response_timeout',
-        error: 'The model did not respond in time. Please try again.',
       },
     }))
 
@@ -351,7 +400,7 @@ describe('runtime projection', () => {
         id: 0,
         type: 'error',
         code: 'agent.response_timeout',
-        content: 'The model did not respond in time. Please try again.',
+        content: '',
       }],
     })
   })
@@ -361,7 +410,6 @@ describe('runtime projection', () => {
       status: 'errored',
       request_user_turn: undefined,
       error_code: 'agent.response_interrupted',
-      error: undefined,
       messages: [],
     })))
 
@@ -472,12 +520,17 @@ describe('runtime projection', () => {
 
 describe('idle settled run projection', () => {
   it('emits no assistant turn for a settled run without streamed content', () => {
-    const state = reduceRuntimeProjection(createEmptyRuntimeProjection(), snapshot(runView({
-      status: 'completed',
-      messages: null as unknown as RuntimeCurrentRunView['messages'],
-    })))
+    for (const messages of [
+      null as unknown as RuntimeCurrentRunView['messages'],
+      [{ id: 0, type: 'status', name: 'api_retry' }] as RuntimeCurrentRunView['messages'],
+    ]) {
+      const state = reduceRuntimeProjection(createEmptyRuntimeProjection(), snapshot(runView({
+        status: 'completed',
+        messages,
+      })))
 
-    expect(state.transcript.turns.map(turn => turn.role)).toEqual(['user'])
+      expect(state.transcript.turns.map(turn => turn.role)).toEqual(['user'])
+    }
   })
 
   it('emits an empty slice when the settled run also lacks a user turn', () => {
@@ -498,4 +551,17 @@ describe('idle settled run projection', () => {
 
     expect(state.transcript.turns.map(turn => turn.role)).toEqual(['user', 'assistant'])
   })
+})
+
+
+it('配置切换从 admitting 到完成都不显示生成状态或空助手消息', () => {
+  for (const status of ['admitting', 'running', 'finishing', 'completed'] as const) {
+    const run = runView({ configuration_only: true, status, request_user_turn: undefined })
+    const state = reduceRuntimeProjection(createEmptyRuntimeProjection(), snapshot(run))
+    expect(isRuntimeRunStreaming(state.currentRunView)).toBe(false)
+    expect(state.transcript.streaming).toBe(false)
+    expect(state.transcript.turns).toEqual([])
+  }
+  expect(isRuntimeRunStreaming(runView())).toBe(true)
+  expect(isRuntimeRunActive('running')).toBe(true)
 })

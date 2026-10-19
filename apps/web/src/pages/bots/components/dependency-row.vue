@@ -8,7 +8,7 @@
 // streaming.
 import { computed, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { ChevronRight, Download, FileCode, MoreHorizontal, Package, RotateCw, Trash2, Undo2 } from 'lucide-vue-next'
+import { ChevronRight, Download, FileCode, MoreHorizontal, Package, RotateCw, Undo2 } from 'lucide-vue-next'
 import {
   Badge,
   Button,
@@ -31,6 +31,7 @@ import {
 import type { DependencyItem, DependencyWorkspaceState } from '@/composables/api/useWorkspaceDependencies'
 import { useWorkspaceDependencyText } from '@/composables/useWorkspaceDependencyText'
 import {
+  dependencyLastError,
   dependencyMenuActions,
   dependencyPlatformUnsupported,
   dependencyPrimaryAction,
@@ -48,10 +49,13 @@ const props = withDefaults(defineProps<{
   busy?: boolean
   /** This client holds the row's stream, so it can show the log. */
   ownsStream?: boolean
+  /** Another installed App references the same dependency. */
+  shared?: boolean
 }>(), {
   workspaceState: undefined,
   busy: false,
   ownsStream: false,
+  shared: false,
 })
 
 const emit = defineEmits<{
@@ -69,7 +73,7 @@ const iconUrl = computed(() => dependencyIconUrl(props.item))
 const badge = computed(() => dependencyStatusBadge(props.item))
 const unsupported = computed(() => dependencyPlatformUnsupported(props.item))
 const failed = computed(() => props.item.status === 'failed')
-const lastError = computed(() => props.item.last_error?.trim() || (props.item.last_error_code ? t(`errors.${props.item.last_error_code}`) : ''))
+const lastError = computed(() => dependencyLastError(props.item, key => t(key)))
 const errorOpen = ref(false)
 
 const primary = computed(() => dependencyPrimaryAction(props.item, props.workspaceState, { ownsStream: props.ownsStream }))
@@ -90,8 +94,6 @@ function menuIcon(kind: DependencyMenuActionKind) {
       return RotateCw
     case 'rollback':
       return Undo2
-    case 'remove':
-      return Trash2
     default:
       return FileCode
   }
@@ -165,6 +167,13 @@ const dimClass = computed(() => (unsupported.value ? 'opacity-40' : ''))
             size="sm"
           >
             {{ t('bots.dependencies.status.retired') }}
+          </Badge>
+          <Badge
+            v-if="shared"
+            variant="outline"
+            size="sm"
+          >
+            {{ t('apps.dependency.shared') }}
           </Badge>
         </div>
 

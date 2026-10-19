@@ -9,11 +9,18 @@ import (
 	sdk "github.com/felinics/twilight/sdk"
 
 	contextlimit "github.com/felinics/memoh/internal/agent/context/limit"
+	"github.com/felinics/memoh/internal/agent/decision"
 	toolapproval "github.com/felinics/memoh/internal/agent/decision/approval"
 	"github.com/felinics/memoh/internal/agent/runtime/native"
 	sessionruntime "github.com/felinics/memoh/internal/agent/runtime/session"
+	agenttools "github.com/felinics/memoh/internal/agent/tool"
+	"github.com/felinics/memoh/internal/agent/toolexec"
 	"github.com/felinics/memoh/internal/bots"
 	sessionpkg "github.com/felinics/memoh/internal/chat/thread"
+	"github.com/felinics/memoh/internal/db"
+	"github.com/felinics/memoh/internal/db/postgres/sqlc"
+	dbstore "github.com/felinics/memoh/internal/db/store"
+	"github.com/felinics/memoh/internal/runtimefence"
 	"github.com/felinics/memoh/internal/workspace"
 )
 
@@ -36,13 +43,13 @@ type ToolApprovalResponseInput struct {
 }
 
 type CommittedToolApprovalResponse struct {
-	request         toolapproval.Request
-	input           ToolApprovalResponseInput
-	runID           string
-	runHandle       sessionruntime.RunHandle
-	isExternalAgent bool
-	activePrompt    *externalAgentActivePromptSubscription
-	ackOnly         bool
+	request            toolapproval.Request
+	input              ToolApprovalResponseInput
+	runID              string
+	runHandle          sessionruntime.RunHandle
+	usesDecisionWaiter bool
+	activePrompt       *externalAgentActivePromptSubscription
+	ackOnly            bool
 }
 
 func (s *Service) respondToolApproval(ctx context.Context, input ToolApprovalResponseInput, eventCh chan<- WSStreamEvent) error {
@@ -70,6 +77,10 @@ func (s *Service) CommitToolApprovalResponse(ctx context.Context, input ToolAppr
 	if err != nil {
 		return CommittedToolApprovalResponse{}, err
 	}
+	// Management tools retain their prepared operation inside the active call.
+	// A response wakes that waiter; replaying the tool would prepare and execute
+	// a second operation instead of the exact change the user approved.
+	usesDecisionWaiter := isExternalAgent || isCapabilityManagementApproval(target)
 	ctx = workspace.WithWorkspaceTarget(ctx, target.WorkspaceTargetID)
 	if isExternalAgent {
 		if err := s.authorizeExternalAgentToolApprovalResponse(ctx, target, input); err != nil {
@@ -78,11 +89,14 @@ func (s *Service) CommitToolApprovalResponse(ctx context.Context, input ToolAppr
 	} else if err := s.authorizeToolApprovalResponse(ctx, target, input); err != nil {
 		return CommittedToolApprovalResponse{}, err
 	}
-	if isExternalAgent && !s.toolApproval.CanRespond(target) {
+	if usesDecisionWaiter && !s.toolApproval.CanRespond(target) {
 		if _, err := s.toolApproval.Reject(ctx, target.ID, "", "tool approval expired: the requesting tool call is no longer waiting"); err != nil && !errors.Is(err, toolapproval.ErrAlreadyDecided) {
 			return CommittedToolApprovalResponse{}, err
 		}
-		return CommittedToolApprovalResponse{request: target, input: input, isExternalAgent: true, ackOnly: true}, nil
+		return CommittedToolApprovalResponse{request: target, input: input, usesDecisionWaiter: true, ackOnly: true}, nil
+	}
+	if !usesDecisionWaiter {
+		ctx = decision.WithNativeContinuation(ctx)
 	}
 	decision := strings.ToLower(strings.TrimSpace(input.Decision))
 	optionID := input.OptionID
@@ -141,10 +155,10 @@ func (s *Service) CommitToolApprovalResponse(ctx context.Context, input ToolAppr
 		return CommittedToolApprovalResponse{}, err
 	}
 	return CommittedToolApprovalResponse{
-		request:         target,
-		input:           input,
-		isExternalAgent: isExternalAgent,
-		activePrompt:    activePrompt,
+		request:            target,
+		input:              input,
+		usesDecisionWaiter: usesDecisionWaiter,
+		activePrompt:       activePrompt,
 	}, nil
 }
 
@@ -209,7 +223,7 @@ func (s *Service) continueCommittedToolApprovalResponse(
 	if committed.ackOnly {
 		return emitApprovalAck(ctx, eventCh)
 	}
-	if committed.isExternalAgent {
+	if committed.usesDecisionWaiter {
 		if committed.activePrompt != nil {
 			return forwardExternalAgentActivePrompt(ctx, committed.activePrompt, eventCh, externalAgentActivePromptForwardOptions{
 				SkipToolCallID: target.ToolCallID,
@@ -222,24 +236,26 @@ func (s *Service) continueCommittedToolApprovalResponse(
 	ctx = workspace.WithWorkspaceTarget(ctx, target.WorkspaceTargetID)
 	runID := runIDForChatRequest(committed.runID)
 	var toolResult sdk.ToolResultPart
+	var toolUIMetadata map[string]any
 	switch target.Status {
 	case toolapproval.StatusApproved:
-		result, err := s.executeApprovedTool(ctx, target, committed.input, runID)
+		result, uiMetadata, err := s.executeApprovedTool(ctx, target, committed.input, runID)
 		if err != nil {
 			return err
 		}
 		toolResult = result
+		toolUIMetadata = uiMetadata
 	case toolapproval.StatusRejected:
 		toolResult = sdk.ToolResultPart{
 			ToolCallID: target.ToolCallID,
 			ToolName:   target.ToolName,
-			Result:     s.limitToolResultText(rejectedToolResultText(committed.input.Reason), target.ToolName),
+			Result:     toolexec.OutputFromValue(s.limitToolResultText(rejectedToolResultText(committed.input.Reason), target.ToolName)),
 			IsError:    true,
 		}
 	default:
 		return fmt.Errorf("committed tool approval has unexpected status %q", target.Status)
 	}
-	return s.storeToolResultAndContinue(ctx, target, committed.input, toolResult, runID, committed.runHandle, lifecycle, eventCh)
+	return s.storeToolResultAndContinue(ctx, target, committed.input, toolResult, toolUIMetadata, runID, committed.runHandle, lifecycle, eventCh)
 }
 
 func (s *Service) toolOutputLimit() contextlimit.ToolOutputLimit {
@@ -259,8 +275,8 @@ func (s *Service) limitToolResultValue(value any, toolName string) any {
 	return contextlimit.LimitToolOutput(value, "tool result ("+toolName+")", s.toolOutputLimit())
 }
 
-func (s *Service) limitToolApprovalResult(result sdk.ToolApprovalResult, toolName string) sdk.ToolApprovalResult {
-	if result.Decision == sdk.ToolApprovalDecisionRejected {
+func (s *Service) limitToolApprovalResult(result toolexec.ToolApprovalResult, toolName string) toolexec.ToolApprovalResult {
+	if result.Decision == toolexec.ToolApprovalDecisionRejected {
 		result.Reason = s.limitToolResultText(result.Reason, toolName)
 	}
 	return result
@@ -321,6 +337,9 @@ func (s *Service) authorizeToolApprovalResponse(ctx context.Context, target tool
 	// authorization subject (base behavior).
 	actorID := firstNonEmpty(input.ActorUserID, input.ActorChannelIdentityID)
 	permission, ok := toolApprovalPermission(target.Operation)
+	if isCapabilityManagementApproval(target) {
+		permission, ok = bots.PermissionManage, true
+	}
 	if strings.TrimSpace(botID) == "" || strings.TrimSpace(actorID) == "" || !ok {
 		return toolapproval.ErrForbidden
 	}
@@ -330,6 +349,10 @@ func (s *Service) authorizeToolApprovalResponse(ctx context.Context, target tool
 		return toolapproval.ErrForbidden
 	}
 	return nil
+}
+
+func isCapabilityManagementApproval(target toolapproval.Request) bool {
+	return target.ToolName == agenttools.ToolMCPManage().String() || target.ToolName == agenttools.ToolAppManage().String()
 }
 
 func toolApprovalPermission(operation string) (string, bool) {
@@ -365,7 +388,7 @@ func emitApprovalAck(ctx context.Context, eventCh chan<- WSStreamEvent) error {
 	return nil
 }
 
-func (s *Service) executeApprovedTool(ctx context.Context, req toolapproval.Request, input ToolApprovalResponseInput, runID string) (sdk.ToolResultPart, error) {
+func (s *Service) executeApprovedTool(ctx context.Context, req toolapproval.Request, input ToolApprovalResponseInput, runID string) (sdk.ToolResultPart, map[string]any, error) {
 	ctx = workspace.WithWorkspaceTarget(ctx, req.WorkspaceTargetID)
 	req = withLocalWebReplyTarget(req)
 	resolved, err := s.ResolveRunConfig(ctx,
@@ -378,14 +401,32 @@ func (s *Service) executeApprovedTool(ctx context.Context, req toolapproval.Requ
 		input.ChatToken,
 	)
 	if err != nil {
-		return sdk.ToolResultPart{}, err
+		return sdk.ToolResultPart{}, nil, err
 	}
 	resolved.RunConfig.RunID = runIDForChatRequest(runID)
-	return s.agent.ExecuteTool(ctx, resolved.RunConfig, sdk.ToolCall{
+	if fence, ok := runtimefence.FromContext(ctx); ok {
+		var count int64
+		err := runtimefence.InTransaction(ctx, s.queries, fence.BotID, fence.SessionID, func(queries dbstore.Queries) error {
+			var err error
+			count, err = queries.MarkSessionRunDecisionExecuting(ctx, sqlc.MarkSessionRunDecisionExecutingParams{
+				BotID: db.ParseUUIDOrEmpty(fence.BotID), SessionID: db.ParseUUIDOrEmpty(fence.SessionID),
+				RunID: db.ParseUUIDOrEmpty(runID), FencingToken: fence.Token, DecisionID: req.ID,
+			})
+			return err
+		})
+		if err != nil {
+			return sdk.ToolResultPart{}, nil, fmt.Errorf("checkpoint approved tool execution: %w", err)
+		}
+		if count != 1 {
+			return sdk.ToolResultPart{}, nil, sessionruntime.ErrRunOwnershipLost
+		}
+	}
+	part, uiMetadata, err := s.agent.ExecuteToolWithUIMetadata(ctx, resolved.RunConfig, sdk.ToolCall{
 		ToolCallID: req.ToolCallID,
 		ToolName:   req.ToolName,
-		Input:      req.ToolInput,
+		Input:      toolexec.ArgumentsFromValue(req.ToolInput),
 	})
+	return part, uiMetadata, err
 }
 
 func (s *Service) storeToolResultAndContinue(
@@ -393,6 +434,7 @@ func (s *Service) storeToolResultAndContinue(
 	approval toolapproval.Request,
 	input ToolApprovalResponseInput,
 	result sdk.ToolResultPart,
+	uiMetadata map[string]any,
 	runID string,
 	runHandle sessionruntime.RunHandle,
 	lifecycle *continuationLifecycleResult,
@@ -404,7 +446,17 @@ func (s *Service) storeToolResultAndContinue(
 	if err != nil {
 		return err
 	}
+	requestMessageID, err := s.continuationTurnRequestMessageID(ctx, approval.SessionID, runHandle)
+	if err != nil {
+		return err
+	}
 	modelMessages := sdkMessagesToModelMessages([]sdk.Message{sdk.ToolMessage(result)})
+	storeOpts := storeRoundOptions{AllowPendingToolCalls: true}
+	// UI-only payloads stripped from the tool output (e.g. the edit diff) ride
+	// the tool row's metadata — the model history reads only the content.
+	if len(uiMetadata) > 0 {
+		storeOpts.MessageMetadataByIndex = map[int]map[string]any{0: uiMetadata}
+	}
 	storeReq := ChatRequest{
 		RunID:                   runID,
 		BotID:                   input.BotID,
@@ -415,10 +467,11 @@ func (s *Service) storeToolResultAndContinue(
 		ReplyTarget:             approval.ReplyTarget,
 		ConversationType:        approval.ConversationType,
 		UserMessagePersisted:    true,
+		PersistedUserMessageID:  requestMessageID,
 		WorkspaceTargetID:       approval.WorkspaceTargetID,
 	}
 	storeReq.WorkspaceTarget = target
-	if err := s.storeRoundWithOptions(ctx, storeReq, modelMessages, "", storeRoundOptions{AllowPendingToolCalls: true}); err != nil {
+	if err := s.storeRoundWithOptions(ctx, storeReq, modelMessages, "", storeOpts); err != nil {
 		return err
 	}
 	return s.continueToolApprovalSession(ctx, approval, input, runID, runHandle, lifecycle, eventCh)
@@ -448,6 +501,10 @@ func (s *Service) continueToolApprovalSession(
 		return err
 	}
 	resolved.RunConfig.RunID = runIDForChatRequest(runID)
+	requestMessageID, err := s.continuationTurnRequestMessageID(ctx, approval.SessionID, runHandle)
+	if err != nil {
+		return err
+	}
 
 	cfg, err := s.prepareContinuationRunConfig(
 		ctx,
@@ -471,6 +528,7 @@ func (s *Service) continueToolApprovalSession(
 		ReplyTarget:             approval.ReplyTarget,
 		ConversationType:        approval.ConversationType,
 		UserMessagePersisted:    true,
+		PersistedUserMessageID:  requestMessageID,
 		WorkspaceTargetID:       approval.WorkspaceTargetID,
 		WorkspaceTarget:         workspaceTargetFromRunConfig(resolved.RunConfig),
 	}

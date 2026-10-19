@@ -3,6 +3,7 @@ package apperror
 import (
 	"errors"
 	"fmt"
+	"maps"
 	"net/http"
 	"strings"
 	"testing"
@@ -23,40 +24,6 @@ func TestErrorKeepsStableCodeAndPrivateCause(t *testing.T) {
 	}
 	if strings.Contains(err.Error(), cause.Error()) {
 		t.Fatal("infrastructure cause leaked through Error()")
-	}
-}
-
-func TestProblemFromUsesCatalogAndDoesNotExposeCause(t *testing.T) {
-	err := Wrap(CodeWorkspaceUnreachable, errors.New("secret runtime detail"), nil)
-	problem, ok := ProblemFrom(err, "req-1")
-	if !ok {
-		t.Fatal("ProblemFrom() did not recognize AppError")
-	}
-	if problem.Status != http.StatusServiceUnavailable {
-		t.Fatalf("status = %d, want %d", problem.Status, http.StatusServiceUnavailable)
-	}
-	if problem.Type != "urn:memoh:error:workspace.unreachable" {
-		t.Fatalf("type = %q", problem.Type)
-	}
-	if problem.Detail != "The workspace could not be reached." {
-		t.Fatalf("detail = %q", problem.Detail)
-	}
-	if problem.RequestID != "req-1" {
-		t.Fatalf("request_id = %q", problem.RequestID)
-	}
-}
-
-func TestPublicFromIsSharedByTransportAdapters(t *testing.T) {
-	err := New(CodeBotNameTaken, map[string]string{"field": "name"})
-	public, ok := PublicFrom(err, "req-public")
-	if !ok {
-		t.Fatal("PublicFrom() did not recognize AppError")
-	}
-	if public.Code != CodeBotNameTaken || public.Detail != "This name is already taken." {
-		t.Fatalf("public error = %#v", public)
-	}
-	if public.Args["field"] != "name" || public.RequestID != "req-public" {
-		t.Fatalf("public error metadata = %#v", public)
 	}
 }
 
@@ -81,12 +48,8 @@ func TestArgsAreCopiedAtInputAndOutput(t *testing.T) {
 	}
 
 	workspaceErr := Wrap(CodeWorkspaceUnreachable, errors.New("private"), map[string]string{"path": "/secret"})
-	problem, ok := ProblemFrom(workspaceErr, "req-2")
-	if !ok {
-		t.Fatal("ProblemFrom() did not recognize workspace error")
-	}
-	if len(problem.Args) != 0 {
-		t.Fatalf("workspace args = %#v, want empty allowlisted metadata", problem.Args)
+	if workspaceArgs := ArgsOf(workspaceErr); len(workspaceArgs) != 0 {
+		t.Fatalf("workspace args = %#v, want empty allowlisted metadata", workspaceArgs)
 	}
 }
 
@@ -208,8 +171,8 @@ func TestRegistryUpstreamErrorsUseStableContracts(t *testing.T) {
 		status int
 	}{
 		{code: CodeRegistryUnavailable, status: http.StatusBadGateway},
-		{code: CodeRegistryPackageNotFound, status: http.StatusNotFound},
-		{code: CodeRegistryPackageInvalid, status: http.StatusBadGateway},
+		{code: CodeRegistryAppNotFound, status: http.StatusNotFound},
+		{code: CodeRegistryAppInvalid, status: http.StatusBadGateway},
 	}
 	for _, test := range tests {
 		definition, ok := Lookup(test.code)
@@ -225,16 +188,16 @@ func TestRegistryUpstreamErrorsUseStableContracts(t *testing.T) {
 	}
 }
 
-func TestRegistryPackageInstallFailedUsesPrivateServerErrorContract(t *testing.T) {
-	definition, ok := Lookup(CodeRegistryPackageInstallFailed)
+func TestRegistryAppInstallFailedUsesPrivateServerErrorContract(t *testing.T) {
+	definition, ok := Lookup(CodeRegistryAppInstallFailed)
 	if !ok {
-		t.Fatal("registry.package_install_failed missing from catalog")
+		t.Fatal("registry.app_install_failed missing from catalog")
 	}
 	if definition.HTTPStatus != http.StatusInternalServerError {
-		t.Fatalf("registry.package_install_failed status = %d, want 500", definition.HTTPStatus)
+		t.Fatalf("registry.app_install_failed status = %d, want 500", definition.HTTPStatus)
 	}
 	if strings.TrimSpace(definition.Detail) == "" {
-		t.Fatal("registry.package_install_failed has empty fallback detail")
+		t.Fatal("registry.app_install_failed has empty fallback detail")
 	}
 }
 
@@ -260,14 +223,16 @@ func TestContextBudgetErrorsHaveStableCatalogContracts(t *testing.T) {
 
 func TestWorkspaceDependencyErrorCatalog(t *testing.T) {
 	cases := map[Code]int{
-		CodeWorkspaceDependencyNotFound:            http.StatusNotFound,
-		CodeWorkspaceDependencyRequestInvalid:      http.StatusBadRequest,
-		CodeWorkspaceDependencyActionUnsupported:   http.StatusUnprocessableEntity,
-		CodeWorkspaceDependencyPlatformUnsupported: http.StatusUnprocessableEntity,
-		CodeWorkspaceDependencyBusy:                http.StatusConflict,
-		CodeWorkspaceDependencyWorkspaceNotRunning: http.StatusConflict,
-		CodeWorkspaceDependencyWorkspaceMissing:    http.StatusConflict,
-		CodeWorkspaceDependencyRemoteOffline:       http.StatusConflict,
+		CodeWorkspaceDependencyNotFound:             http.StatusNotFound,
+		CodeWorkspaceDependencyRequestInvalid:       http.StatusBadRequest,
+		CodeWorkspaceDependencyActionUnsupported:    http.StatusUnprocessableEntity,
+		CodeWorkspaceDependencyPlatformUnsupported:  http.StatusUnprocessableEntity,
+		CodeWorkspaceDependencyBusy:                 http.StatusConflict,
+		CodeWorkspaceDependencyRequired:             http.StatusConflict,
+		CodeWorkspaceDependencyPrerequisitesChanged: http.StatusConflict,
+		CodeWorkspaceDependencyWorkspaceNotRunning:  http.StatusConflict,
+		CodeWorkspaceDependencyWorkspaceMissing:     http.StatusConflict,
+
 		CodeWorkspaceDependencyRollbackUnavailable: http.StatusConflict,
 		CodeWorkspaceDependencyOperationFailed:     http.StatusInternalServerError,
 	}
@@ -282,9 +247,69 @@ func TestWorkspaceDependencyErrorCatalog(t *testing.T) {
 		if definition.Detail == "" {
 			t.Errorf("%s has no detail", code)
 		}
-		problem, ok := ProblemFrom(Wrap(code, errors.New("private cause"), nil), "req-1")
-		if !ok || problem.Code != string(code) || problem.Status != status {
-			t.Errorf("%s problem = %+v, %v", code, problem, ok)
+	}
+}
+
+func TestChannelVerificationErrorCatalog(t *testing.T) {
+	t.Parallel()
+
+	definition, ok := Lookup(CodeChannelVerificationFailed)
+	if !ok {
+		t.Fatal("channel.verification_failed missing from catalog")
+	}
+	if definition.HTTPStatus != http.StatusBadGateway {
+		t.Fatalf("status = %d, want %d", definition.HTTPStatus, http.StatusBadGateway)
+	}
+	if definition.Detail != "The channel configuration could not be verified. Check the credentials, then try again." {
+		t.Fatalf("detail = %q", definition.Detail)
+	}
+}
+
+func TestErrorCauseIsNotUnwrap(t *testing.T) {
+	cause := errors.New("private cause")
+	err := Wrap(CodeInternal, cause, nil)
+
+	if got := err.Cause(); got != cause { //nolint:errorlint // identity of the retained cause
+		t.Fatalf("Cause() = %v, want the wrapped cause", got)
+	}
+	if errors.Unwrap(err) != nil || errors.Is(err, cause) {
+		t.Fatal("the private cause must not be reachable through Unwrap")
+	}
+	if got := New(CodeInternal, nil).Cause(); got != nil {
+		t.Fatalf("Cause() without a cause = %v, want nil", got)
+	}
+	var nilErr *Error
+	if got := nilErr.Cause(); got != nil {
+		t.Fatalf("nil Error Cause() = %v, want nil", got)
+	}
+}
+
+func TestParseFault(t *testing.T) {
+	t.Parallel()
+	for _, f := range []Fault{FaultClient, FaultServer, FaultDependency, FaultCanceled} {
+		if got, ok := ParseFault(string(f)); !ok || got != f {
+			t.Errorf("ParseFault(%q) = %q, %v", f, got, ok)
 		}
+	}
+	for _, s := range []string{"", "Client", "unknown"} {
+		if got, ok := ParseFault(s); ok || got != "" {
+			t.Errorf("ParseFault(%q) = %q, %v; want rejected", s, got, ok)
+		}
+	}
+}
+
+// A field error carries only the field to the client; the cause stays private.
+func TestFieldErrorsCarryOnlyTheField(t *testing.T) {
+	cause := errors.New("strconv.Atoi: parsing \"three\": invalid syntax")
+	invalid := FieldInvalid("count", cause)
+	if CodeOf(invalid) != CodeRequestFieldInvalid || !maps.Equal(ArgsOf(invalid), map[string]string{"field": "count"}) {
+		t.Fatalf("FieldInvalid = %s %v", CodeOf(invalid), ArgsOf(invalid))
+	}
+	if !errors.Is(CauseOf(invalid), cause) {
+		t.Fatalf("cause = %v, want the private cause", CauseOf(invalid))
+	}
+	required := FieldRequired("session_id")
+	if CodeOf(required) != CodeRequestFieldRequired || !maps.Equal(ArgsOf(required), map[string]string{"field": "session_id"}) {
+		t.Fatalf("FieldRequired = %s %v", CodeOf(required), ArgsOf(required))
 	}
 }

@@ -40,12 +40,13 @@
           @update:model-value="(val) => configData[field.key] = !!val"
         />
 
-        <Input
+        <NumberField
           v-else-if="field.type === 'number'"
           :id="`tts-field-${field.key}`"
-          v-model.number="configData[field.key] as number"
-          type="number"
+          :model-value="configData[field.key] as number"
           :placeholder="field.example ? String(field.example) : ''"
+          disable-wheel-change
+          @update:model-value="(value) => configData[field.key] = value"
         />
 
         <SearchableSelectPopover
@@ -141,12 +142,13 @@
                   @update:model-value="(val) => configData[field.key] = !!val"
                 />
 
-                <Input
+                <NumberField
                   v-else-if="field.type === 'number'"
                   :id="`tts-field-${field.key}`"
-                  v-model.number="configData[field.key] as number"
-                  type="number"
+                  :model-value="configData[field.key] as number"
                   :placeholder="field.example ? String(field.example) : ''"
+                  disable-wheel-change
+                  @update:model-value="(value) => configData[field.key] = value"
                 />
 
                 <SearchableSelectPopover
@@ -278,6 +280,7 @@
 import {
   DialogFooter,
   Input,
+  NumberField,
   Label,
   Switch,
   Textarea,
@@ -289,6 +292,7 @@ import { useI18n } from 'vue-i18n'
 import LoadingButton from '@/components/loading-button/index.vue'
 import SearchableSelectPopover from '@/components/searchable-select-popover/index.vue'
 import type { SearchableSelectOption } from '@/components/searchable-select-popover/index.vue'
+import { resolveApiErrorMessage } from '@/utils/api-error'
 
 interface SpeechFieldSchema {
   key: string
@@ -430,7 +434,7 @@ async function handleTest() {
       transcriptionLanguage.value = payload.language ?? ''
     }
   } catch (error: unknown) {
-    const msg = error instanceof Error ? error.message : t(mode.value === 'transcription' ? 'transcription.test.failed' : 'speech.test.failed')
+    const msg = resolveApiErrorMessage(error, t(mode.value === 'transcription' ? 'transcription.test.failed' : 'speech.test.failed'))
     testError.value = msg
     toast.error(msg)
   } finally {

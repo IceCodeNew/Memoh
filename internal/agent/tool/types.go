@@ -11,9 +11,10 @@ import (
 
 	sdk "github.com/felinics/twilight/sdk"
 
-	contextfrag "github.com/felinics/memoh/internal/agent/context/fragment"
+	toolapproval "github.com/felinics/memoh/internal/agent/decision/approval"
 	"github.com/felinics/memoh/internal/agent/sessionmode"
 	"github.com/felinics/memoh/internal/agent/tool/internal/toolset"
+	"github.com/felinics/memoh/internal/agent/toolexec"
 )
 
 // SkillDetail holds the description and content of a loadable skill.
@@ -31,13 +32,15 @@ const (
 	StreamEventReaction      StreamEventType = "reaction"
 	StreamEventSpeech        StreamEventType = "speech"
 	StreamEventSpawnProgress StreamEventType = "spawn_progress"
+	StreamEventToolApproval  StreamEventType = "tool_approval_request"
 )
 
 // ToolStreamEvent is a side-effect event emitted by a tool targeting the
 // current conversation (e.g. inline attachment, reaction, or TTS speech).
 // The agent framework converts these into the appropriate wire-level events.
 type ToolStreamEvent struct {
-	Type StreamEventType
+	Approval *toolapproval.Request
+	Type     StreamEventType
 	// ToolCallID identifies the tool call that produced this side effect, so
 	// downstream persistence can anchor it to the right message (and keep the
 	// live ordering after a history reload). Empty when unknown.
@@ -96,11 +99,13 @@ func NewMessageSnapshot(messages []sdk.Message) *MessageSnapshot {
 // Store calls preserve IDs only for unchanged messages that remain in order.
 func NewMessageSnapshotWithSources(messages []sdk.Message, sourceMessageIDs []string) *MessageSnapshot {
 	s := &MessageSnapshot{}
-	_ = s.storeInitial(messages, sourceMessageIDs)
+	_ = s.StoreWithSources(messages, sourceMessageIDs)
 	return s
 }
 
-func (s *MessageSnapshot) storeInitial(messages []sdk.Message, sourceMessageIDs []string) error {
+// StoreWithSources replaces the history basis before provider dispatch.
+// Later provider steps use Store to retain only unchanged sources.
+func (s *MessageSnapshot) StoreWithSources(messages []sdk.Message, sourceMessageIDs []string) error {
 	if messages == nil {
 		messages = []sdk.Message{}
 	}
@@ -225,10 +230,10 @@ func providerNeutralMessages(messages []sdk.Message) []sdk.Message {
 					clean.Content = append(clean.Content, sdk.FilePart{Data: value.Data, MediaType: value.MediaType, Filename: value.Filename})
 				}
 			case sdk.ToolCallPart:
-				clean.Content = append(clean.Content, sdk.ToolCallPart{ToolCallID: value.ToolCallID, ToolName: value.ToolName, Input: value.Input})
+				clean.Content = append(clean.Content, sdk.ToolCallPart{ToolCallID: value.ToolCallID, ToolName: value.ToolName, Input: toolexec.ArgumentsFromValue(value.Input)})
 			case *sdk.ToolCallPart:
 				if value != nil {
-					clean.Content = append(clean.Content, sdk.ToolCallPart{ToolCallID: value.ToolCallID, ToolName: value.ToolName, Input: value.Input})
+					clean.Content = append(clean.Content, sdk.ToolCallPart{ToolCallID: value.ToolCallID, ToolName: value.ToolName, Input: toolexec.ArgumentsFromValue(value.Input)})
 				}
 			case sdk.ToolResultPart:
 				clean.Content = append(clean.Content, value)
@@ -301,24 +306,27 @@ type MessageSnapshotEntry struct {
 
 // SessionContext carries request-scoped identity for tool execution.
 type SessionContext struct {
-	BotID                string
-	ChatID               string
-	SessionID            string
-	SessionType          string
-	UserID               string
-	ChannelIdentityID    string
-	SessionToken         string //nolint:gosec // carries session credential material at runtime
-	CurrentPlatform      string
-	ReplyTarget          string
-	ConversationType     string
-	CanRequestUserInput  bool
-	CanListUserInput     bool
-	SupportsImageInput   bool
-	SupportsFileInput    bool
-	IsSubagent           bool
-	CurrentModelUUID     string
-	CurrentModelID       string
-	CurrentModelProvider string
+	CapabilitiesChanged    func()
+	ApprovalEmitter        func(toolapproval.Request) bool
+	BotID                  string
+	ChatID                 string
+	SessionID              string
+	SessionType            string
+	UserID                 string
+	ChannelIdentityID      string
+	SessionToken           string //nolint:gosec // carries session credential material at runtime
+	CurrentPlatform        string
+	ReplyTarget            string
+	ConversationType       string
+	CanRequestUserInput    bool
+	CanListUserInput       bool
+	SupportsImageInput     bool
+	SupportsFileInput      bool
+	IsSubagent             bool
+	CurrentModelUUID       string
+	CurrentModelID         string
+	CurrentModelProvider   string
+	CurrentModelProviderID string
 	// ReasoningStoredEffort and ReasoningRequestedEffort are the unresolved
 	// parent-turn inputs. A tool that selects another model must resolve them for
 	// that model rather than inheriting the parent's provider-specific decision.
@@ -332,13 +340,12 @@ type SessionContext struct {
 	WorkspaceTargetName string
 	// WorkdirPath is the session's immutable working directory. When set,
 	// relative tool paths resolve under it and exec defaults its cwd to it.
-	WorkdirPath               string
-	Skills                    map[string]SkillDetail
-	TimezoneLocation          *time.Location
-	Emitter                   StreamEmitter
-	LiveStream                bool
-	ContextBudgetMaxTokens    int
-	ContextToolExchangePolicy *contextfrag.ToolExchangePolicy
+	WorkdirPath            string
+	Skills                 map[string]SkillDetail
+	TimezoneLocation       *time.Location
+	Emitter                StreamEmitter
+	LiveStream             bool
+	ContextBudgetMaxTokens int
 }
 
 // CanAskUser reports whether ask_user can be both shown to the model and
@@ -410,13 +417,13 @@ type ProviderLabeler interface {
 // Tools() is called per-request; implementations may return different
 // tool sets based on session context (e.g. subagent restrictions, bot settings).
 type ToolProvider interface {
-	Tools(ctx context.Context, session SessionContext) ([]sdk.Tool, error)
+	Tools(ctx context.Context, session SessionContext) ([]toolexec.Tool, error)
 }
 
 // AvailableTools is the set of tool names registered for the current session.
 type AvailableTools = toolset.Available
 
-func NewAvailableTools(tools []sdk.Tool) AvailableTools {
+func NewAvailableTools(tools []toolexec.Tool) AvailableTools {
 	names := make([]ToolName, 0, len(tools))
 	for _, tool := range tools {
 		name := strings.TrimSpace(tool.Name)
@@ -467,6 +474,15 @@ type ToolUsage interface {
 	Usage(ctx context.Context, session SessionContext, available AvailableTools) string
 }
 
+// ToolNotice lets a provider tell the model about tools it could not
+// register this turn, for example a federated source whose upstream failed.
+// Unlike ToolUsage the text is collected even when the provider contributed
+// no tools, which is exactly when a silent gap would mislead the model.
+// Return "" to contribute nothing.
+type ToolNotice interface {
+	ToolNotice(ctx context.Context, session SessionContext) string
+}
+
 // ---- argument parsing helpers ----
 
 func StringArg(arguments map[string]any, key string) string {
@@ -483,15 +499,6 @@ func StringArg(arguments map[string]any, key string) string {
 	default:
 		return strings.TrimSpace(fmt.Sprintf("%v", raw))
 	}
-}
-
-func FirstStringArg(arguments map[string]any, keys ...string) string {
-	for _, key := range keys {
-		if value := StringArg(arguments, key); value != "" {
-			return value
-		}
-	}
-	return ""
 }
 
 func IntArg(arguments map[string]any, key string) (int, bool, error) {
@@ -532,33 +539,13 @@ func IntArg(arguments map[string]any, key string) (int, bool, error) {
 	}
 }
 
-func BoolArg(arguments map[string]any, key string) (bool, bool, error) {
-	if arguments == nil {
-		return false, false, nil
-	}
-	raw, ok := arguments[key]
-	if !ok || raw == nil {
-		return false, false, nil
-	}
-	value, ok := raw.(bool)
-	if !ok {
-		return false, true, fmt.Errorf("%s must be a boolean", key)
-	}
-	return value, true, nil
-}
-
-func inputAsMap(input any) map[string]any {
-	args, ok := input.(map[string]any)
-	if ok {
-		return args
-	}
-	if input == nil {
+// inputAsMap decodes the model's arguments as an object. Invalid arguments
+// never reach a handler through the executor, so the fallback only covers a
+// direct caller; a non-object document yields the empty object.
+func inputAsMap(input sdk.ToolArguments) map[string]any {
+	args := map[string]any{}
+	if err := input.Unmarshal(&args); err != nil || args == nil {
 		return map[string]any{}
-	}
-	raw, _ := json.Marshal(input)
-	_ = json.Unmarshal(raw, &args)
-	if args == nil {
-		args = map[string]any{}
 	}
 	return args
 }

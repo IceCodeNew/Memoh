@@ -29,14 +29,12 @@ import i18n from '@/i18n'
 // selection still follows whichever chat view is active. Desktop is a
 // singleton WebRTC viewer per bot (DISPLAY_PANEL_ID).
 
-export type SidebarView = 'sessions' | 'files' | 'schedule'
+export type SidebarView = 'sessions' | 'files' | 'schedule' | 'supermarket'
 
 export const CHAT_PANEL_ID = 'chat'
 
 /** One desktop WebRTC viewer per bot; reconnect reuses this panel instead of display:2, display:3, … */
 export const DISPLAY_PANEL_ID = 'display:1'
-
-export const TERMINAL_TAB_COMPONENT = 'terminalTab'
 
 const DEFAULT_BROWSER_ADDRESS = 'localhost:5173/'
 const DEFAULT_CHAT_TITLE = 'New Session'
@@ -44,11 +42,6 @@ const DEFAULT_TERMINAL_TITLE = 'Terminal'
 // Persisted layouts from older releases used this value as the terminal title.
 // It is only recognized for migration; it is never used as a new title.
 const LEGACY_TERMINAL_TITLE = 'zsh'
-
-// Default share of the editor height the bottom terminal panel claims when it
-// first splits off below the chat. ~1/3 mirrors VS Code's editor:panel ratio
-// (≈554:269) — enough room to work in without burying the conversation.
-const TERMINAL_PANEL_HEIGHT_RATIO = 1 / 3
 
 export type WorkspacePanelComponent = 'chat' | 'file' | 'preview' | 'asset' | 'terminal' | 'browser' | 'display' | 'schedule'
 
@@ -100,26 +93,6 @@ function panelComponentOf(id: string): WorkspacePanelComponent | null {
   return null
 }
 
-function isTerminalOnlyGroup(group: { panels: Array<{ id: string }> }): boolean {
-  const panels = group.panels
-  return panels.length > 0 && panels.every(p => p.id.startsWith('terminal:'))
-}
-
-function syncTerminalGroupChrome(group: DockviewGroupPanel) {
-  const terminalOnly = isTerminalOnlyGroup(group)
-  group.element.classList.toggle('memoh-terminal-group', terminalOnly)
-  const target = terminalOnly ? 'bottom' : 'top'
-  if (group.api.getHeaderPosition() !== target) {
-    group.api.setHeaderPosition(target)
-  }
-}
-
-function syncAllTerminalGroupChrome(dock: DockviewApi) {
-  for (const group of dock.groups) {
-    syncTerminalGroupChrome(group)
-  }
-}
-
 export const useWorkspaceTabsStore = defineStore('workspace-tabs', () => {
   const selection = useChatSelectionStore()
   const { currentBotId } = storeToRefs(selection)
@@ -157,8 +130,7 @@ export const useWorkspaceTabsStore = defineStore('workspace-tabs', () => {
   // tab can't land on the blank part of another group's tab bar. chat-workspace
   // mirrors this onto the dock root as `.memoh-dock-dragging`, and the theme
   // flips the void to `no-drag` while it's set so the whole header accepts drops,
-  // then back to a window handle on drag end. Also gates the terminal "no-drop"
-  // cursor below.
+  // then back to a window handle on drag end.
   const panelDragging = ref(false)
   // Per-panel unsaved-changes state for file panels. Kept here (NOT baked into
   // the tab title) so the tab dot, the sidebar count badge, and the close-confirm
@@ -191,31 +163,14 @@ export const useWorkspaceTabsStore = defineStore('workspace-tabs', () => {
   // not enough).
   let dockHoldsMobileStack = false
   let apiDisposables: Array<{ dispose(): void }> = []
-  // Whether the in-flight drag started from a terminal. Non-terminal drags lock
-  // the exclusive terminal groups (see beginDrag) so an editor can never merge
-  // into the bottom panel; terminal drags leave them open so terminals can be
-  // reordered or stacked. Reset on drag end.
-  let dragSourceTerminal = false
   let draftChatQueued = false
-  // After restoring a NON-empty dock, ignore initialize()'s auto-picked
-  // sessionId (and other non-explicit selection churn). Otherwise a File /
-  // Preview workspace gets an extra Untitled/New Session tab punched in by
-  // selection watchers — the cold-start hijack this store exists to prevent.
-  // Explicit user actions (sidebar click, New Session, /new) either call the
-  // public open* APIs directly or set hasExplicitSessionSelection, both of
-  // which bypass this guard. Cleared when the dock is empty again.
-  let suppressSelectionDockMutations = false
-  const reconcilingDeletedChatPanelIds = new Set<string>()
+  // initialize() may auto-pick the latest conversation without a user click.
+  // That pick may fill the draft only when the dock restored empty (the draft
+  // is then the store's own fallback); a restored workspace is the user's, so
+  // the pick is dropped instead.
+  let autoPickMayFillDraft = false
   const deletedSessionIdsByBot = new Map<string, Set<string>>()
-  let suppressReconcileActivation = false
-  let reconcileActivationReleaseToken = 0
-  let reconcileActivationReleaseTimer: ReturnType<typeof setTimeout> | null = null
   const chatActivationExplicitOverrides = new Map<string, boolean>()
-  // The most recent NON-terminal group to hold focus. A terminal group is
-  // exclusive — opening a file/browser/etc. while it is the active group must
-  // land in an editor group, not contaminate the terminals — so we remember the
-  // last editor group to route those opens back to (see nonTerminalTarget).
-  let lastNonTerminalGroupId: string | null = null
 
   function ensureBotLayout(botId: string | null | undefined): BotLayoutState | null {
     const bid = (botId ?? '').trim()
@@ -250,12 +205,10 @@ export const useWorkspaceTabsStore = defineStore('workspace-tabs', () => {
       if (node.type === 'leaf' && node.data && typeof node.data === 'object') {
         const data = { ...(node.data as Record<string, unknown>) }
         delete data.hideHeader
-        // Defensively strip `locked`: older builds toggled 'no-drop-target' on
-        // terminal groups mid-drag and a layout-change persist could bake it
-        // into storage, permanently sealing the group on the next restore. Drop
-        // rejection is now an onWillDrop veto (see registerApi), so we never set
-        // it — this just scrubs any value an old snapshot still carries.
+        // Older terminal groups persisted a bottom header and transient drop lock.
+        // Keep their panels and split geometry, but restore ordinary tab chrome.
         delete data.locked
+        delete data.headerPosition
         return { ...node, data }
       }
       if (node.type === 'branch' && Array.isArray(node.data)) {
@@ -263,10 +216,7 @@ export const useWorkspaceTabsStore = defineStore('workspace-tabs', () => {
       }
       return node
     }
-    // Strip any persisted per-panel tabComponent (older layouts pinned terminals
-    // to 'terminalTab'): terminals now resolve their tab through the default host
-    // by group, so a baked component would override that and keep a moved-out
-    // terminal stuck as a chip.
+    // Legacy terminal chips must resolve through the same tab renderer as all panels.
     function stripTabComponents(panels: SerializedDockview['panels']): SerializedDockview['panels'] {
       if (!panels || typeof panels !== 'object') return panels
       const out: Record<string, unknown> = {}
@@ -347,10 +297,25 @@ export const useWorkspaceTabsStore = defineStore('workspace-tabs', () => {
     return numberedFallbackTitle(prefix, id)
   }
 
-  // Per-session chat title fallback (English; the sidebar callers pass localized
-  // strings, and syncChatTitles overlays the server title once known).
+  // System-titled panels always label from the current locale; the English
+  // constants are only guards against a missing key.
+  function defaultChatTitle(): string {
+    return i18n.global.t('chat.newSession').trim() || DEFAULT_CHAT_TITLE
+  }
+
+  function browserTabTitle(): string {
+    return i18n.global.t('chat.tabs.browser').trim() || 'Browser'
+  }
+
+  function scheduleTabTitle(): string {
+    return i18n.global.t('chat.tabs.schedule').trim() || 'Schedule'
+  }
+
+  // Per-session chat title fallback (syncChatTitles overlays the server title
+  // once known). Draft tabs (no session) are system-titled, and so is a first
+  // send's tab until the server confirms the send (see isSessionTentative).
   function chatTitleFallbackFor(sid: string | null): string {
-    if (!sid) return DEFAULT_CHAT_TITLE
+    if (!sid || chatStore.isSessionTentative(sid)) return defaultChatTitle()
     const session = chatStore.knownSessionSummary(sid)
     return (session?.title ?? '').trim() || routeConversationLabel(session) || i18n.global.t('chat.untitledSession')
   }
@@ -374,30 +339,61 @@ export const useWorkspaceTabsStore = defineStore('workspace-tabs', () => {
         const address = params.address
         return typeof address === 'string' && address.trim()
           ? address.trim()
-          : numberedFallbackTitle('Browser', panel.id)
+          : numberedFallbackTitle(browserTabTitle(), panel.id)
       }
       case 'display':
-        return numberedFallbackTitle('Desktop', panel.id)
+        // Creation (openDisplay) titles the singleton panel chat.display.title;
+        // the repair fallback must match.
+        return i18n.global.t('chat.display.title')
       case 'schedule':
-        return 'Schedule'
+        return scheduleTabTitle()
       default:
         return panel.id
     }
   }
 
-  function repairEmptyPanelTitles(): boolean {
+  // Beyond filling empty titles, regenerate system-titled panels (draft chat,
+  // unsaved schedule, terminal/browser/display fallbacks) from the current
+  // locale: titles are persisted in the layout, so a workspace saved under
+  // another language would otherwise keep stale foreign titles forever.
+  function repairPanelTitles(): boolean {
     const dock = api.value
     if (!dock) return false
     let repaired = false
     for (const panel of dock.panels) {
-      const title = (panel.api.title ?? '').trim()
-      const isLegacyTerminalTitle = panelComponentOf(panel.id) === 'terminal'
-        && title.toLowerCase() === LEGACY_TERMINAL_TITLE
-      if (title && !isLegacyTerminalTitle) continue
-      panel.api.setTitle(panelTitleFallback(panel))
+      const next = repairedPanelTitle(panel)
+      if (next === null || next === (panel.api.title ?? '').trim()) continue
+      panel.api.setTitle(next)
       repaired = true
     }
     return repaired
+  }
+
+  // The title this panel should have after restore, or null to keep the
+  // persisted one (sessions, files, user-named schedules, live terminal titles).
+  function repairedPanelTitle(panel: { id: string, api: { title?: string }, params?: Record<string, unknown> }): string | null {
+    const title = (panel.api.title ?? '').trim()
+    const component = panelComponentOf(panel.id)
+    // Draft chat and unsaved schedule tabs never carry user content, so their
+    // titles are always re-derived — this is what migrates a draft persisted
+    // under another locale.
+    if (component === 'chat' && panelSessionId(panel) === null) return defaultChatTitle()
+    if (component === 'schedule' && panel.id.startsWith('schedule:new:')) return scheduleTabTitle()
+    if (!title) return panelTitleFallback(panel)
+    // Pre-localization builds persisted English fallback titles; recognize those
+    // exact shapes so old layouts migrate. A live page or shell reporting
+    // exactly "Browser 2"-style text is negligible.
+    if (component === 'terminal'
+      && (title.toLowerCase() === LEGACY_TERMINAL_TITLE || /^Terminal( \d+)?$/.test(title))) {
+      return terminalTitleFallback(panel.id)
+    }
+    if (component === 'browser' && /^Browser( \d+)?$/.test(title)) {
+      return numberedFallbackTitle(browserTabTitle(), panel.id)
+    }
+    if (component === 'display' && /^Desktop( \d+)?$/.test(title)) {
+      return i18n.global.t('chat.display.title')
+    }
+    return null
   }
 
   function updateTerminalTitle(panelId: string, title: unknown) {
@@ -448,8 +444,7 @@ export const useWorkspaceTabsStore = defineStore('workspace-tabs', () => {
       }
       ephemeralPanels.value = nextEphemeral
       activePanelId.value = dock.activePanel?.id ?? null
-      syncAllTerminalGroupChrome(dock)
-      repairedEmptyTitles = repairEmptyPanelTitles()
+      repairedEmptyTitles = repairPanelTitles()
       dockEmptyAfterRestore = dock.panels.length === 0
     } finally {
       suppressPersist = false
@@ -457,12 +452,11 @@ export const useWorkspaceTabsStore = defineStore('workspace-tabs', () => {
     if (repairedEmptyTitles && !dockEmptyAfterRestore) persistLayout()
     // Non-empty restore is authoritative for this tab's panels. Empty restore
     // still needs the draft fallback, and may accept initialize()'s auto-pick
-    // (repointing that draft). Same product rule either way: never invent tabs
-    // on top of a restored workspace.
-    suppressSelectionDockMutations = !dockEmptyAfterRestore
+    // (filling that draft).
+    autoPickMayFillDraft = dockEmptyAfterRestore
     if (dockEmptyAfterRestore) ensureDraftChatPanel()
     syncDraftChatExplicitSelection()
-    syncRestoredChatSelection({ preserveRestoredChat: true })
+    alignSelectionWithDock()
   }
 
   function domListener<K extends keyof DocumentEventMap>(
@@ -477,38 +471,6 @@ export const useWorkspaceTabsStore = defineStore('workspace-tabs', () => {
         document.removeEventListener(type, handler as EventListener, options)
       },
     }
-  }
-
-  // A terminal group is exclusive: an editor (file/preview/chat/…) can never
-  // become a tab inside it, mirroring how a VS Code terminal panel refuses
-  // editor drops. We enforce this per drag with onWillShowOverlay (veto the
-  // drop overlay) and onWillDrop (veto the drop) — see registerApi. Preventing
-  // the overlay routes through dockview's removeDropTarget, so no stale
-  // "can-drop" highlight lingers over the terminal. The group-level `locked`
-  // flag can't do that: it makes canDisplayOverlay bail out early and the
-  // shared overlay element is left untouched, so the highlight from the group
-  // hovered just before stays painted. beginDrag only records WHAT is being
-  // dragged so those vetoes can tell a foreign editor from a terminal session
-  // being reordered.
-  function beginDrag(sourceTerminal: boolean) {
-    panelDragging.value = true
-    dragSourceTerminal = sourceTerminal
-  }
-
-  function endDrag() {
-    panelDragging.value = false
-    dragSourceTerminal = false
-  }
-
-  // Is the in-flight drag a NON-terminal panel/group? A single-tab drag carries
-  // its panelId; a whole-group drag has a null panelId, so we fall back to the
-  // terminal-vs-editor classification recorded at drag start.
-  function draggingNonTerminal(
-    event: { getData(): { panelId?: string | null } | undefined },
-  ): boolean {
-    const panelId = event.getData()?.panelId
-    if (typeof panelId === 'string') return !panelId.startsWith('terminal:')
-    return !dragSourceTerminal
   }
 
   // ---- mobile single-stack constraint --------------------------------------
@@ -557,28 +519,14 @@ export const useWorkspaceTabsStore = defineStore('workspace-tabs', () => {
         // consumer via activeId). Use `event.panel`.
         const panel = event.panel
         activePanelId.value = panel?.id ?? null
-        const group = panel?.group
-        if (group && !isTerminalOnlyGroup(group)) {
-          lastNonTerminalGroupId = group.id
-        }
         // Activating a chat tab makes its session the live one. Strictly gated so
-        // file/terminal activation never touches chat state. During deleted-tab
-        // reconciliation dockview may auto-activate a neighboring tab; ignore that
-        // transient activation so it cannot override chat-list's chosen fallback
-        // session.
-        if (!suppressReconcileActivation && panel && panelComponentOf(panel.id) === 'chat') {
+        // file/terminal activation never touches chat state. This includes the
+        // neighbor dockview activates after a deleted session's tab closes.
+        if (panel && panelComponentOf(panel.id) === 'chat') {
           activateChatSession(panel)
         }
       }),
       dock.onDidLayoutChange(() => {
-        // Catch-all: keep terminal-group chrome (bottom header + class) in
-        // lockstep with composition for ANY layout mutation, including drags
-        // dockview may not surface through onDidMovePanel. The per-tab host
-        // also keys off layout changes, so syncing here guarantees the group
-        // chrome and the chip-vs-normal tab never disagree. setHeaderPosition
-        // is guarded by a current-value check, so this cannot loop. Sync first
-        // so the persisted snapshot already reflects the resolved chrome.
-        syncAllTerminalGroupChrome(dock)
         // Also re-apply the mobile tab-strip visibility: it is runtime-only
         // state, so groups added or rebuilt by a restore must pick it up here.
         syncMobileGroupHeaders(dock)
@@ -590,44 +538,40 @@ export const useWorkspaceTabsStore = defineStore('workspace-tabs', () => {
           const bid = loadedBotId
           void nextTick(() => deleteTerminalSnapshot(terminalCacheKey(bid, panel.id)))
         }
-        const closingDeletedChat = reconcilingDeletedChatPanelIds.delete(panel.id)
-        if (closingDeletedChat && reconcilingDeletedChatPanelIds.size === 0) {
-          releaseDeletedChatActivationAfterRemove()
-        }
         // Closing the LAST chat tab resets the global view to a fresh draft, so the
         // dock respawns a "New Session" page instead of reopening the session that
-        // was just closed (its id is still the global one until we clear it). A
-        // reconcile-driven close is different: chat-list has already selected the
-        // next valid session, so do not clear that selection back to draft.
+        // was just closed (its id is still the global one until we clear it).
         if (
-          !closingDeletedChat
-          && panelComponentOf(panel.id) === 'chat'
+          panelComponentOf(panel.id) === 'chat'
           && !dock.panels.some(p => panelComponentOf(p.id) === 'chat')
         ) {
           chatStore.selectDraft({ explicitSelection: false })
         }
-        syncAllTerminalGroupChrome(dock)
+        // With a non-chat tab focused, the selection is the last chat the user
+        // looked at. Once that chat's last tab closes it is no longer on screen,
+        // so Recents must stop highlighting it. A chat tab taking focus instead
+        // updates the selection through its own activation.
+        else if (!suppressPersist && panelComponentOf(panel.id) === 'chat') {
+          const sid = (chatStore.sessionId ?? '').trim()
+          const active = dock.activePanel
+          if (
+            sid
+            && panelSessionId(panel) === sid
+            && !chatPanelForSession(sid)
+            && (!active || panelComponentOf(active.id) !== 'chat')
+          ) {
+            chatStore.resetToEmptyComposer({
+              clearPendingExternalAgent: false,
+              explicitSelection: false,
+              draftIntent: false,
+            })
+          }
+        }
         ensureDraftChatPanel()
       }),
-      dock.onDidAddPanel(() => {
-        syncAllTerminalGroupChrome(dock)
-      }),
-      dock.onDidMovePanel(() => {
-        syncAllTerminalGroupChrome(dock)
-      }),
-      // Record what is being dragged (a terminal session vs a foreign editor)
-      // and flip the desktop window-drag region off so blank header space
-      // accepts drops.
-      dock.onWillDragPanel((event) => {
-        beginDrag(event.panel.id.startsWith('terminal:'))
-      }),
-      dock.onWillDragGroup((event) => {
-        beginDrag(isTerminalOnlyGroup(event.group))
-      }),
-      // Terminal groups are exclusive. Veto the drop overlay so no "can-drop"
-      // highlight ever paints over the terminal, and veto the drop itself,
-      // whenever a foreign editor is dragged onto one (header, tab strip or
-      // content, any edge). Terminal sessions stay droppable among themselves.
+      // Let the entire desktop header accept panel and group drops.
+      dock.onWillDragPanel(() => { panelDragging.value = true }),
+      dock.onWillDragGroup(() => { panelDragging.value = true }),
       dock.onWillShowOverlay((event) => {
         // Mobile runs a single group: veto any drop that would split off a new
         // group. A 'center' drop merges as a tab inside the group — the only
@@ -636,117 +580,23 @@ export const useWorkspaceTabsStore = defineStore('workspace-tabs', () => {
           event.preventDefault()
           return
         }
-        if (isTerminalOnlyGroup(event.group) && draggingNonTerminal(event)) {
-          event.preventDefault()
-        }
       }),
       dock.onWillDrop((event) => {
         if (isMobile.value && event.position !== 'center') {
           event.preventDefault()
           return
         }
-        if (isTerminalOnlyGroup(event.group) && draggingNonTerminal(event)) {
-          event.preventDefault()
-        }
       }),
       // Clear the drag flags however the drag ends (drop, cancel, Esc). Native
       // 'dragend' always fires for the HTML5 backend; 'pointerup' covers the
       // pointer/touch backend.
-      domListener('dragend', () => endDrag(), { capture: true }),
-      domListener('pointerup', () => endDrag(), { capture: true }),
-      // The vetoes above already refuse foreign editors, but dockview still
-      // preventDefaults the native dragover, so the OS would otherwise paint a
-      // droppable cursor. Force the "no-drop" cursor over the terminal group
-      // while a non-terminal is in flight. Capture phase so this runs before
-      // dockview's own dragover sets the effect.
-      domListener('dragover', (event) => {
-        if (!panelDragging.value || dragSourceTerminal) return
-        const target = event.target
-        if (!(target instanceof Element)) return
-        if (!target.closest('.memoh-terminal-group')) return
-        if (event.dataTransfer) event.dataTransfer.dropEffect = 'none'
-      }, { capture: true }),
+      domListener('dragend', () => { panelDragging.value = false }, { capture: true }),
+      domListener('pointerup', () => { panelDragging.value = false }, { capture: true }),
     ]
     const bid = (currentBotId.value ?? '').trim()
     if (bid) {
-      if (deletedSessionIdsByBot.get(bid)?.size) holdDeletedChatActivation()
       restoreLayout(bid)
       reconcileDeletedChatPanels()
-    }
-  }
-
-  function holdDeletedChatActivation() {
-    suppressReconcileActivation = true
-    reconcileActivationReleaseToken++
-    if (reconcileActivationReleaseTimer) {
-      clearTimeout(reconcileActivationReleaseTimer)
-      reconcileActivationReleaseTimer = null
-    }
-  }
-
-  function releaseDeletedChatActivationAfterRemove() {
-    const token = ++reconcileActivationReleaseToken
-    if (reconcileActivationReleaseTimer) clearTimeout(reconcileActivationReleaseTimer)
-    reconcileActivationReleaseTimer = setTimeout(() => {
-      reconcileActivationReleaseTimer = null
-      if (token === reconcileActivationReleaseToken && reconcilingDeletedChatPanelIds.size === 0) {
-        suppressReconcileActivation = false
-        const active = api.value?.activePanel
-        const activeSid = active ? panelSessionId(active) : null
-        const selectedSid = (selection.sessionId ?? '').trim()
-        if (
-          active
-          && panelComponentOf(active.id) === 'chat'
-          && activeSid
-          && (!selectedSid || activeSid === selectedSid)
-          && !isDeletedSessionForCurrentBot(activeSid)
-        ) {
-          activateChatSession(active, { explicitSelection: chatStore.hasExplicitSessionSelection === true })
-        }
-      }
-    }, 0)
-  }
-
-  function releaseDeletedChatActivationNow() {
-    reconcileActivationReleaseToken++
-    if (reconcileActivationReleaseTimer) {
-      clearTimeout(reconcileActivationReleaseTimer)
-      reconcileActivationReleaseTimer = null
-    }
-    if (reconcilingDeletedChatPanelIds.size !== 0) return
-    suppressReconcileActivation = false
-    const active = api.value?.activePanel
-    const activeSid = active ? panelSessionId(active) : null
-    const selectedSid = (selection.sessionId ?? '').trim()
-    if (
-      active
-      && panelComponentOf(active.id) === 'chat'
-      && activeSid
-      && (!selectedSid || activeSid === selectedSid)
-      && !isDeletedSessionForCurrentBot(activeSid)
-    ) {
-      activateChatSession(active, { explicitSelection: chatStore.hasExplicitSessionSelection === true })
-    }
-  }
-
-  function ensureSelectedChatPanel() {
-    const sid = (selection.sessionId ?? '').trim()
-    if (!sid || isDeletedSessionForCurrentBot(sid)) return
-    if (chatPanelForSession(sid)) return
-    const bid = (currentBotId.value ?? '').trim()
-    if (!bid) return
-    const id = nextChatPanelId(bid)
-    setNextChatActivationExplicit(id, chatStore.hasExplicitSessionSelection === true)
-    if (focusOrAdd({
-      id,
-      component: 'chat',
-      title: chatTitleFallbackFor(sid),
-      params: {
-        sessionId: sid,
-        explicitSelection: chatStore.hasExplicitSessionSelection === true,
-      },
-    })) {
-      markEphemeral(id)
     }
   }
 
@@ -757,16 +607,37 @@ export const useWorkspaceTabsStore = defineStore('workspace-tabs', () => {
     activePanelId.value = null
     loadedBotId = null
     panelDragging.value = false
-    dragSourceTerminal = false
     draftChatQueued = false
-    suppressSelectionDockMutations = false
-    reconcilingDeletedChatPanelIds.clear()
-    releaseDeletedChatActivationNow()
+    autoPickMayFillDraft = false
   }
 
   // ---- panel operations ----------------------------------------------------
 
   const activeId = computed<string | null>(() => activePanelId.value)
+  const pendingChatInputFocus = ref<{ panelId: string; botId: string; sessionId: string | null } | null>(null)
+  watch([activeId, currentBotId, () => selection.sessionId], () => { pendingChatInputFocus.value = null }, { flush: 'sync' })
+
+  function requestChatInputFocus() {
+    if (!activePanelId.value || panelComponentOf(activePanelId.value) !== 'chat') activateChatPanel()
+    const panel = api.value?.activePanel
+    if (!activePanelIsChat.value || !panel || !currentBotId.value) return
+    pendingChatInputFocus.value = {
+      panelId: panel.id,
+      botId: currentBotId.value,
+      sessionId: panel.params?.sessionId ?? null,
+    }
+  }
+
+  function focusAdjacentTab(direction: -1 | 1): boolean {
+    const group = api.value?.activeGroup
+    if (!group || group.panels.length < 2) return false
+    const index = group.panels.findIndex(panel => panel.id === activeId.value)
+    if (index < 0) return false
+    const target = group.panels[(index + direction + group.panels.length) % group.panels.length]
+    if (!target) return false
+    focusPanel(target)
+    return true
+  }
 
   // The mobile top bar picks its left affordance from this: chat active → "≡"
   // opens the navigation; a secondary panel (terminal/browser/…) active → "←"
@@ -781,50 +652,14 @@ export const useWorkspaceTabsStore = defineStore('workspace-tabs', () => {
     return hasBotPermission(currentBot.value?.current_user_permissions, permission)
   }
 
-  // Resolve a non-terminal group to anchor against. A terminal-only group is
-  // exclusive, so we never let an editor panel land in / split off one: prefer
-  // the caller's group (if not terminal), then the active group, then the last
-  // editor group to hold focus, then any non-terminal group. Undefined → there is
-  // no editor group to anchor against (empty dock, or only terminal groups exist).
-  // This is the single source of the candidate-priority order; nonTerminalTarget
-  // wraps it for the "join a group" case, openFileToSide uses the group directly
-  // for the "split beside a group" case.
-  function nonTerminalAnchorGroup(
-    dock: DockviewApi,
-    groupId?: string,
-  ): DockviewGroupPanel | undefined {
-    const explicit = groupId ? dock.getGroup(groupId) : undefined
-    if (explicit && !isTerminalOnlyGroup(explicit)) return explicit
-    const active = dock.activeGroup
-    if (active && !isTerminalOnlyGroup(active)) return active
-    if (lastNonTerminalGroupId) {
-      const last = dock.getGroup(lastNonTerminalGroupId)
-      if (last && !isTerminalOnlyGroup(last)) return last
-    }
-    return dock.groups.find(g => !isTerminalOnlyGroup(g))
+  // New tabs join the requested group, otherwise the currently focused group.
+  function targetGroup(dock: DockviewApi, groupId?: string): DockviewGroupPanel | undefined {
+    return dock.groups.find(group => group.id === groupId) ?? dock.activeGroup ?? dock.groups[0]
   }
 
-  // Resolve a group an EDITOR-class panel may JOIN. Reuses nonTerminalAnchorGroup
-  // for the candidate priority (caller → active → last editor → any non-terminal),
-  // then returns it as a 'within' target. When no non-terminal group exists but
-  // terminal groups do, open ABOVE the first group so the panel gets its own group
-  // instead of joining the terminals — except on mobile, where the single-stack
-  // constraint overrides terminal exclusivity and the panel joins the one group
-  // (reachable only via a cross-device session delete closing the last editor
-  // while a terminal stays open). Undefined → empty dock (let dockview create
-  // the first group).
-  function nonTerminalTarget(
-    dock: DockviewApi,
-    groupId?: string,
-  ): { referenceGroup: string, direction: 'within' | 'above' } | undefined {
-    const anchor = nonTerminalAnchorGroup(dock, groupId)
-    if (anchor) return { referenceGroup: anchor.id, direction: 'within' }
-    const fallback = dock.groups[0]
-    if (fallback) {
-      const direction = isMobile.value ? 'within' : 'above'
-      return { referenceGroup: fallback.id, direction }
-    }
-    return undefined
+  function tabPosition(dock: DockviewApi, groupId?: string) {
+    const group = targetGroup(dock, groupId)
+    return group ? { referenceGroup: group.id, direction: 'within' as const } : undefined
   }
 
   function focusOrAdd(options: {
@@ -845,7 +680,7 @@ export const useWorkspaceTabsStore = defineStore('workspace-tabs', () => {
       focusPanel(existing)
       return true
     }
-    const target = nonTerminalTarget(dock, options.groupId)
+    const target = tabPosition(dock, options.groupId)
     dock.addPanel({
       id: options.id,
       component: options.component,
@@ -874,7 +709,7 @@ export const useWorkspaceTabsStore = defineStore('workspace-tabs', () => {
     ephemeralPanels.value = next
   }
 
-  // Open (or focus) an ephemeral-slot panel. Each non-terminal group holds at most
+  // Open (or focus) an ephemeral-slot panel. Each group holds at most
   // one ephemeral panel; opening another ephemeral-eligible tab into that group
   // replaces it IN PLACE (add the new one first, then close the old so the group
   // never empties mid-swap). Ephemeral panels are never dirty, so the close needs
@@ -895,7 +730,7 @@ export const useWorkspaceTabsStore = defineStore('workspace-tabs', () => {
       if (!opts.inactive) focusPanel(existing)
       return true
     }
-    const target = nonTerminalTarget(dock, opts.groupId)
+    const target = tabPosition(dock, opts.groupId)
     // Only an in-place join ('within' an existing editor group) has a previous
     // ephemeral to replace; opening a brand-new group never does.
     const targetGroupId = target?.direction === 'within' ? target.referenceGroup : undefined
@@ -918,77 +753,6 @@ export const useWorkspaceTabsStore = defineStore('workspace-tabs', () => {
     return true
   }
 
-  function defaultTerminalPosition(dock: DockviewApi, belowGroupId?: string) {
-    // Reuse the bottom terminal panel (a terminal-ONLY group) if one exists, so a
-    // new session stacks as another tab instead of spawning a parallel panel. We
-    // match terminal-ONLY (not "has a terminal"): a terminal dragged up into the
-    // chat group lives in a MIXED group, which is no longer the bottom panel.
-    const terminalGroupId = dock.groups.find(g => isTerminalOnlyGroup(g))?.id
-    if (terminalGroupId) {
-      return { referenceGroup: terminalGroupId, direction: 'within' as const }
-    }
-    // No bottom panel yet: open one directly BELOW the column the request came
-    // from — the editor group whose "+" was clicked, else the active editor
-    // group, else the chat group. This is why a terminal opened from the RIGHT
-    // split now appears under the right split instead of jumping back under the
-    // chat on the left.
-    const below
-      = (belowGroupId ? dock.getGroup(belowGroupId) : undefined)
-        ?? (dock.activeGroup && !isTerminalOnlyGroup(dock.activeGroup) ? dock.activeGroup : undefined)
-        ?? dock.groups.find(g => g.panels.some(p => panelComponentOf(p.id) === 'chat'))
-    if (below && !isTerminalOnlyGroup(below)) {
-      return { referenceGroup: below.id, direction: 'below' as const }
-    }
-    return undefined
-  }
-
-  function addTerminalPanel(options: {
-    id: string
-    title: string
-    groupId?: string
-    position?: { referenceGroup: string, direction: 'within' | 'below' | 'right' | 'left' | 'above' }
-  }) {
-    const dock = api.value
-    if (!dock) return false
-    const existing = dock.getPanel(options.id)
-    if (existing) {
-      existing.api.setActive()
-      syncAllTerminalGroupChrome(dock)
-      return true
-    }
-    // No per-panel tabComponent: terminals use the default tab host, which
-    // renders the file-chip tab ONLY while the panel sits in a terminal-only
-    // group and falls back to the normal editor tab once a terminal is dragged
-    // into a mixed group — so a moved-out terminal blends into the dock strip.
-    const panelBase = {
-      id: options.id,
-      component: 'terminal' as const,
-      title: options.title,
-      renderer: 'always' as const,
-    }
-    // Mobile forbids the bottom split: a terminal joins the single stack as a
-    // tab, anchored through the same editor-group resolution as other opens.
-    const position = isMobile.value
-      ? nonTerminalTarget(dock, options.groupId)
-      : options.groupId
-        ? { referenceGroup: options.groupId, direction: 'within' as const }
-        : options.position
-    const panel = dock.addPanel({
-      ...panelBase,
-      ...(position ? { position } : {}),
-    })
-    // Only when the terminal opens its OWN new group BELOW the chat: give that
-    // group a sensible default height instead of dockview's even 50/50 split.
-    // Joining an existing terminal/editor group keeps whatever height it has.
-    if (position?.direction === 'below' && dock.height > 0) {
-      panel.group.api.setSize({
-        height: Math.round(dock.height * TERMINAL_PANEL_HEIGHT_RATIO),
-      })
-    }
-    syncAllTerminalGroupChrome(dock)
-    return true
-  }
-
   // The session a chat panel renders, read from its dockview params (null = draft).
   function panelSessionId(panel: { params?: Record<string, unknown> }): string | null {
     const sid = panel.params?.sessionId
@@ -1006,7 +770,7 @@ export const useWorkspaceTabsStore = defineStore('workspace-tabs', () => {
   function resetDeletedChatPanelToDraft(panel: { id: string, api: { updateParameters(params: Record<string, unknown>): void, setTitle(title: string): void } }) {
     const explicitSelection = chatStore.hasExplicitSessionSelection === true
     panel.api.updateParameters({ sessionId: null, explicitSelection })
-    panel.api.setTitle(DEFAULT_CHAT_TITLE)
+    panel.api.setTitle(defaultChatTitle())
     markEphemeral(panel.id)
     if (api.value?.activePanel?.id === panel.id) {
       chatStore.selectDraft({ explicitSelection })
@@ -1070,7 +834,7 @@ export const useWorkspaceTabsStore = defineStore('workspace-tabs', () => {
     // Repoint the target group's existing ephemeral CHAT slot in place (no
     // remount). If the slot holds a non-chat ephemeral (or none), fall through to
     // openEphemeral, which replaces it or adds a fresh chat tab.
-    const target = nonTerminalTarget(dock, opts.groupId)
+    const target = tabPosition(dock, opts.groupId)
     const targetGroupId = target?.direction === 'within' ? target.referenceGroup : undefined
     const reusable = targetGroupId
       ? dock.getGroup(targetGroupId)?.panels.find(
@@ -1150,7 +914,7 @@ export const useWorkspaceTabsStore = defineStore('workspace-tabs', () => {
       focusPanel(existing)
       return
     }
-    const target = nonTerminalTarget(dock, opts.groupId)
+    const target = tabPosition(dock, opts.groupId)
     dock.addPanel({
       id: nextChatPanelId(bid),
       component: 'chat',
@@ -1186,15 +950,13 @@ export const useWorkspaceTabsStore = defineStore('workspace-tabs', () => {
       return
     }
 
-    const primaryGroup = dock.groups.find(group => !isTerminalOnlyGroup(group))
+    const primaryGroup = dock.groups[0]
     if (!primaryGroup) {
       openSessionChatPinned({ sessionId: sid, title })
       return
     }
     const adjacentRight = dock.adjacentGroupInDirection(primaryGroup, 'right')
-    const secondaryGroup = adjacentRight && !isTerminalOnlyGroup(adjacentRight)
-      ? adjacentRight
-      : undefined
+    const secondaryGroup = dock.groups.find(group => group.id === adjacentRight?.id)
     dock.addPanel({
       id: nextChatPanelId(bid),
       component: 'chat',
@@ -1214,9 +976,6 @@ export const useWorkspaceTabsStore = defineStore('workspace-tabs', () => {
     if (!dock) return
     const bid = (currentBotId.value ?? '').trim()
     if (!bid) return
-    // Public entry (sidebar New Session, /new, empty-dock fallback): the user
-    // asked for a draft, so stop shielding the restored layout from mutations.
-    suppressSelectionDockMutations = false
     const draftCandidates = opts?.groupId
       ? dock.getGroup(opts.groupId)?.panels ?? []
       : dock.panels
@@ -1237,7 +996,7 @@ export const useWorkspaceTabsStore = defineStore('workspace-tabs', () => {
     openEphemeral({
       id,
       component: 'chat',
-      title: opts?.title?.trim() || DEFAULT_CHAT_TITLE,
+      title: opts?.title?.trim() || defaultChatTitle(),
       params: { sessionId: null, explicitSelection: opts?.explicitSelection === true },
       groupId: opts?.groupId,
     })
@@ -1253,6 +1012,11 @@ export const useWorkspaceTabsStore = defineStore('workspace-tabs', () => {
     // That is not a user click, and must not promote a stale restored chat tab into
     // an explicit chat-selection entry before chat initialization/default External Agent wins.
     if (suppressPersist) return
+    // A deleted session's tabs are closing. When one of them was split into
+    // several tabs, dockview may hand focus to another copy on its way out;
+    // selecting it would revive the deleted session's runtime and selection.
+    const deletedSid = panelSessionId(panel)
+    if (deletedSid && isDeletedSessionForCurrentBot(deletedSid)) return
     // Switch the panel-scoped chat state before the global selection changes. ACP
     // draft staging uses this transition to persist the old view before loading
     // the newly focused panel.
@@ -1279,76 +1043,29 @@ export const useWorkspaceTabsStore = defineStore('workspace-tabs', () => {
     }
   }
 
-  function syncRestoredChatSelection(options?: { preserveRestoredChat?: boolean }) {
+  // The dock owns focus and the chat selection mirrors the focused chat tab
+  // (activateChatSession). Two moments change one side without a tab
+  // activation: a layout restore (fromJSON activates panels while activation
+  // is muted) and initialize() settling a session it picked or kept. Bring the
+  // selection back in line with the dock then — never the other way round:
+  // this must not focus, open, or close a tab, so nothing running in the
+  // background can pull the user off the tab they are looking at.
+  function alignSelectionWithDock() {
     const dock = api.value
-    const sid = (chatStore.sessionId ?? '').trim()
     if (!dock) return
+    const sid = (chatStore.sessionId ?? '').trim()
     const explicitSelection = chatStore.hasExplicitSessionSelection === true
-    // Cold-start guard: non-explicit selection must not invent dock tabs after
-    // a non-empty restore. Explicit clicks bypass it. Separate from
-    // preserveRestoredChat, which only covers the empty-selection + restored
-    // real-session case below.
-    const blockNonExplicitOpen = suppressSelectionDockMutations && !explicitSelection
+    // A non-explicit pick may still be overridden by the default External
+    // Agent while chats load; the loadingChats watcher runs this again.
+    if (sid && !explicitSelection && chatStore.loadingChats) return
     const active = dock.activePanel
-    const activeIsChat = !!active && panelComponentOf(active.id) === 'chat'
-    const activeSession = activeIsChat ? panelSessionId(active) : null
-    const groupId = activeIsChat ? active.group.id : undefined
-    if (sid) {
-      // A non-explicit stored session may be the last auto-picked history item.
-      // While chat initialization is still deciding whether default External Agent should win,
-      // do not let the restored layout promote that stale id into an explicit user
-      // selection. Once loading settles, the loading watcher calls this again.
-      if (!explicitSelection && chatStore.loadingChats) return
-      if (isDeletedSessionForCurrentBot(sid)) return
-      if (activeIsChat && activeSession === sid) {
-        chatStore.focusChatView(active.id)
-        return
-      }
-      const existing = chatPanelForSession(sid)
-      if (existing) {
-        setNextChatActivationExplicit(existing.id, explicitSelection)
-        focusPanel(existing)
-        return
-      }
-      // Auto-picked / cold-start selection must not add a chat tab on top of a
-      // restored File/Preview (or any non-empty) workspace. If the restored
-      // active panel is already a different chat, pull selection onto it so
-      // Recents highlights the conversation on screen — not the auto-pick.
-      if (blockNonExplicitOpen) {
-        adoptActiveRestoredChatSelection(activeSession, active?.id)
-        return
-      }
-      openSessionChat({ sessionId: sid, groupId, explicitSelection })
-      return
-    }
-    if (!activeIsChat) return
-    if (activeSession === null) {
-      chatStore.focusChatView(active.id)
-      if (active.params?.explicitSelection !== explicitSelection) {
-        active.api.updateParameters({ explicitSelection })
-      }
-      chatStore.selectDraft({ explicitSelection })
-      return
-    }
-    if (options?.preserveRestoredChat || blockNonExplicitOpen) {
-      // A fresh top-level tab has no separately-seeded chat selection, but its
-      // restored workspace can already contain the chat the user was viewing.
-      // Keep that panel instead of interpreting the empty selection as a request
-      // for a second draft. Align the global selection to the preserved panel
-      // (non-explicit) so the Recents highlight matches the open conversation.
-      adoptActiveRestoredChatSelection(activeSession, active.id)
-      return
-    }
-    openDraftChat({ groupId, explicitSelection })
-  }
-
-  // Align global selection to the chat on screen (or to none). Called after a
-  // non-empty restore blocks inventing tabs: if the active panel is a chat,
-  // Recents must highlight that session; if there is no chat to adopt,
-  // drop initialize()'s non-explicit auto-pick so Recents stays unselected.
-  function adoptActiveRestoredChatSelection(sessionId: string | null, panelId?: string) {
-    if (!sessionId || isDeletedSessionForCurrentBot(sessionId)) {
-      if (!chatStore.hasExplicitSessionSelection && (chatStore.sessionId ?? '').trim()) {
+    // Empty dock: ensureDraftChatPanel owns what appears first.
+    if (!active) return
+    if (panelComponentOf(active.id) !== 'chat') {
+      // No conversation on screen. A selected session that still has a tab
+      // is the last one the user focused; one without a tab is dropped so
+      // Recents does not highlight a conversation that is not open.
+      if (sid && !chatPanelForSession(sid)) {
         chatStore.resetToEmptyComposer({
           clearPendingExternalAgent: false,
           explicitSelection: false,
@@ -1357,23 +1074,32 @@ export const useWorkspaceTabsStore = defineStore('workspace-tabs', () => {
       }
       return
     }
-    if (panelId) chatStore.focusChatView(panelId)
-    // Already pointing at the preserved panel — leave explicitness alone.
-    if ((chatStore.sessionId ?? '').trim() === sessionId) return
-    // Non-explicit: layout ownership, not a user click.
-    selectChatSession(sessionId, false)
-  }
-
-  function syncDraftTargetFromState() {
-    const dock = api.value
-    if (!dock || suppressPersist) return
-    if ((selection.sessionId ?? '').trim()) return
-    if (chatStore.hasExplicitSessionSelection !== true && !chatStore.pendingExternalAgentSessionInput) return
-    // Explicit empty-composer / External Agent draft staging is a real request to show a
-    // draft, even after a non-empty restore — clear the cold-start guard so
-    // syncRestoredChatSelection can open one.
-    if (suppressSelectionDockMutations) suppressSelectionDockMutations = false
-    syncRestoredChatSelection()
+    chatStore.focusChatView(active.id)
+    const activeSid = panelSessionId(active)
+    if (activeSid) {
+      if (activeSid === sid) return
+      // Layout ownership, not a user click: non-explicit.
+      selectChatSession(activeSid, false)
+      return
+    }
+    // The focused tab is a draft. It may take a selected session that has no
+    // tab yet — filling it changes the draft's content, not which tab has
+    // focus. An auto-pick fills only the store's own empty-dock draft.
+    if (
+      sid
+      && !isDeletedSessionForCurrentBot(sid)
+      && !chatPanelForSession(sid)
+      && (explicitSelection || autoPickMayFillDraft)
+    ) {
+      active.api.updateParameters({ sessionId: sid, explicitSelection })
+      active.api.setTitle(chatTitleFallbackFor(sid))
+      selectChatSession(sid, explicitSelection)
+      return
+    }
+    if (active.params?.explicitSelection !== explicitSelection) {
+      active.api.updateParameters({ explicitSelection })
+    }
+    chatStore.selectDraft({ explicitSelection })
   }
 
   function syncDraftChatExplicitSelection() {
@@ -1404,8 +1130,8 @@ export const useWorkspaceTabsStore = defineStore('workspace-tabs', () => {
       // Untitled sessions (channel/discuss ones) derive their tab title from the
       // fallback chain (conversation name → untitled): this refreshes a persisted
       // "Untitled Session" placeholder after upgrade and follows a group rename —
-      // repairEmptyPanelTitles skips non-empty titles, so without this both stay stale.
-      const next = (session.title ?? '').trim() || chatTitleFallbackFor(sid)
+      // repairPanelTitles skips non-empty session titles, so without this both stay stale.
+      const next = chatTitleFallbackFor(sid)
       if (panel.api.title !== next) panel.api.setTitle(next)
     }
   }
@@ -1418,44 +1144,21 @@ export const useWorkspaceTabsStore = defineStore('workspace-tabs', () => {
     const bid = (targetBotId ?? loadedBotId ?? currentBotId.value ?? '').trim()
     if (!dock || !bid) return
     if (!targetBotId && loadedBotId && loadedBotId !== bid) return
-	    const deletedSessionIds = deletedSessionIdsByBot.get(bid)
-	    if (!deletedSessionIds || deletedSessionIds.size === 0) return
-	    const latestDeleted = chatStore.deletedSession
-	    const resetComposerScope = latestDeleted?.botId === bid ? latestDeleted.composerScope?.trim() : ''
-	    const closingPanels: Array<{ id: string }> = []
-	    for (const panel of [...dock.panels]) {
-	      if (panelComponentOf(panel.id) !== 'chat') continue
-	      const sid = panelSessionId(panel)
-	      if (!sid || !deletedSessionIds.has(sid)) continue
-	      if (resetComposerScope && resetComposerScope === `${bid}:${panel.id}`) {
-	        resetDeletedChatPanelToDraft(panel)
-	        continue
-	      }
-	      reconcilingDeletedChatPanelIds.add(panel.id)
-      closingPanels.push({ id: panel.id })
-      holdDeletedChatActivation()
+    const deletedSessionIds = deletedSessionIdsByBot.get(bid)
+    if (!deletedSessionIds || deletedSessionIds.size === 0) return
+    const latestDeleted = chatStore.deletedSession
+    const resetComposerScope = latestDeleted?.botId === bid ? latestDeleted.composerScope?.trim() : ''
+    for (const panel of [...dock.panels]) {
+      if (panelComponentOf(panel.id) !== 'chat') continue
+      const sid = panelSessionId(panel)
+      if (!sid || !deletedSessionIds.has(sid)) continue
+      if (resetComposerScope && resetComposerScope === `${bid}:${panel.id}`) {
+        resetDeletedChatPanelToDraft(panel)
+        continue
+      }
+      // Like closing a browser tab: dockview activates a neighbor, and the
+      // selection follows that activation. No replacement session is opened.
       panel.api.close()
-    }
-    if (closingPanels.length === 0) {
-      releaseDeletedChatActivationNow()
-      ensureSelectedChatPanel()
-      return
-    }
-    for (const { id } of closingPanels) {
-      void nextTick(() => {
-        if (api.value?.getPanel(id)) {
-          reconcilingDeletedChatPanelIds.delete(id)
-          if (reconcilingDeletedChatPanelIds.size === 0) {
-            releaseDeletedChatActivationAfterRemove()
-          }
-          return
-        }
-        reconcilingDeletedChatPanelIds.delete(id)
-        if (reconcilingDeletedChatPanelIds.size === 0) {
-          releaseDeletedChatActivationAfterRemove()
-          void nextTick(() => ensureSelectedChatPanel())
-        }
-      })
     }
   }
 
@@ -1474,19 +1177,20 @@ export const useWorkspaceTabsStore = defineStore('workspace-tabs', () => {
       const latestDock = api.value
       if (!latestDock || suppressPersist || latestDock.panels.length > 0) return
       if (!(currentBotId.value ?? '').trim()) return
-      // Dock is empty again — cold-start shielding no longer applies.
-      suppressSelectionDockMutations = false
       // Only an EXPLICIT selection may refill as that session. initialize()'s
       // auto-pick leaves a non-explicit sessionId even when we refused to open
       // its tab over a File/Preview restore; honoring it here would surface a
       // random Untitled Session the moment the user closes the last file tab.
-      // Live tabs that already selected a session explicitly keep that refill.
+      // Live tabs that already selected a session explicitly keep that refill,
+      // and so does a cold start that restored nothing once initialize() is done.
       const sid = (chatStore.sessionId ?? '').trim()
       const explicitSelection = chatStore.hasExplicitSessionSelection === true
-      if (sid && explicitSelection && !isDeletedSessionForCurrentBot(sid)) {
+      const acceptAutoPick = autoPickMayFillDraft && !chatStore.loadingChats
+      if (acceptAutoPick) autoPickMayFillDraft = false
+      if (sid && (explicitSelection || acceptAutoPick) && !isDeletedSessionForCurrentBot(sid)) {
         openSessionChat({
           sessionId: sid,
-          explicitSelection: true,
+          explicitSelection,
         })
       } else {
         openDraftChat({ explicitSelection })
@@ -1494,19 +1198,25 @@ export const useWorkspaceTabsStore = defineStore('workspace-tabs', () => {
     })
   }
 
-  // Mobile top bar "←": re-activate the chat panel for the CURRENT session.
-  // Secondary panels are never closed by going back (renderer 'always' keeps
-  // terminals/WebRTC alive), so back is a pure activation. Falls back to any
-  // open chat tab — focusing it pulls the global selection onto it via the
-  // activation sync — and on an empty dock to the draft respawn guard.
+  // Explicit navigation back to chat differs from automatic empty-dock repair:
+  // a file/preview-only layout is valid until the user asks to return. Recreate
+  // the selected chat (or a draft) as a pinned panel so neither this action nor
+  // the next file open evicts another panel from its ephemeral slot.
   function activateChatPanel() {
     const dock = api.value
-    if (!dock) return
+    const bid = (currentBotId.value ?? '').trim()
+    // Do not focus the previous bot's panels while its replacement is queued.
+    if (!dock || !bid || loadedBotId !== bid) return
+    const explicitSelection = chatStore.hasExplicitSessionSelection === true
     const sid = (selection.sessionId ?? '').trim()
     if (sid && !isDeletedSessionForCurrentBot(sid)) {
       const current = chatPanelForSession(sid)
       if (current) {
         focusPanel(current)
+        return
+      }
+      if (explicitSelection) {
+        openSessionChatPinned({ sessionId: sid })
         return
       }
     }
@@ -1515,19 +1225,30 @@ export const useWorkspaceTabsStore = defineStore('workspace-tabs', () => {
       focusPanel(anyChat)
       return
     }
-    ensureDraftChatPanel()
+    const id = nextChatPanelId(bid)
+    const target = tabPosition(dock)
+    setNextChatActivationExplicit(id, explicitSelection)
+    dock.addPanel({
+      id,
+      component: 'chat',
+      title: defaultChatTitle(),
+      params: { sessionId: null, explicitSelection },
+      renderer: 'always',
+      ...(target ? { position: target } : {}),
+    })
   }
 
-  function openFile(filePath: string) {
-    if (!hasCurrentPermission('workspace_read')) return
+  function openFile(filePath: string): boolean {
+    if (!hasCurrentPermission('workspace_read') || !api.value) return false
     const path = (filePath ?? '').trim()
-    if (!path) return
+    if (!path) return false
     openEphemeral({
       id: `file:${path}`,
       component: 'file',
       title: fileBaseName(path),
       params: { filePath: path },
     })
+    return true
   }
 
   // Open a file as a PINNED tab in the active editor group. This is the
@@ -1550,7 +1271,7 @@ export const useWorkspaceTabsStore = defineStore('workspace-tabs', () => {
       focusPanel(existing)
       return
     }
-    const target = nonTerminalTarget(dock, groupId)
+    const target = tabPosition(dock, groupId)
     dock.addPanel({
       id,
       component: 'file',
@@ -1581,9 +1302,7 @@ export const useWorkspaceTabsStore = defineStore('workspace-tabs', () => {
     const dock = api.value
     if (!dock) return
     const id = `file:${path}`
-    // Anchor the split off an EDITOR group, never the terminal strip (matches
-    // openFilePinned's terminal-exclusion).
-    const anchor = nonTerminalAnchorGroup(dock, groupId)
+    const anchor = targetGroup(dock, groupId)
     const existing = dock.getPanel(id)
     if (existing) {
       pinPanel(existing.id)
@@ -1598,14 +1317,9 @@ export const useWorkspaceTabsStore = defineStore('workspace-tabs', () => {
       focusPanel(existing)
       return
     }
-    // New file: split RIGHT off the editor anchor. When there is no editor group
-    // to split from (empty dock, or only terminal groups), fall back to
-    // nonTerminalTarget so the file lands in its OWN group ('above' the terminal
-    // strip) instead of defaulting into the active terminal group — matches
-    // openFilePinned's terminal-exclusion.
     const position = anchor
       ? { referenceGroup: anchor.id, direction: 'right' as const }
-      : nonTerminalTarget(dock, groupId)
+      : tabPosition(dock, groupId)
     dock.addPanel({
       id,
       component: 'file',
@@ -1642,7 +1356,7 @@ export const useWorkspaceTabsStore = defineStore('workspace-tabs', () => {
       ? { referenceGroup: prevPreview.group.id, direction: 'within' as const }
       : (() => {
           // Mobile forbids the side-by-side preview: join the stack as a tab.
-          if (isMobile.value) return nonTerminalTarget(dock, groupId)
+          if (isMobile.value) return tabPosition(dock, groupId)
           const referenceGroup = groupId || dock.activeGroup?.id
           return referenceGroup
             ? { referenceGroup, direction: 'right' as const }
@@ -1701,20 +1415,12 @@ export const useWorkspaceTabsStore = defineStore('workspace-tabs', () => {
     }
     const next = state.terminalCounter + 1
     patchBotLayout(bid, { terminalCounter: next })
-    // The "+" lives per group. Fired from a terminal-only group, the new session
-    // JOINS it (another tab in the bottom panel). Fired from an editor group's
-    // "+" menu — or opened programmatically — it lands in the bottom terminal
-    // panel, which opens directly below the INITIATING editor column when none
-    // exists yet (see defaultTerminalPosition). Passing a non-terminal groupId
-    // straight through would wrongly merge the terminal into that editor group.
-    const initiating = groupId ? dock.getGroup(groupId) : undefined
-    const joinTerminalGroup = !!initiating && isTerminalOnlyGroup(initiating)
     const id = `terminal:${next}`
-    addTerminalPanel({
+    focusOrAdd({
       id,
+      component: 'terminal',
       title: terminalTitleFallback(id),
-      groupId: joinTerminalGroup ? groupId : undefined,
-      position: joinTerminalGroup ? undefined : defaultTerminalPosition(dock, groupId),
+      groupId,
     })
   }
 
@@ -1735,9 +1441,9 @@ export const useWorkspaceTabsStore = defineStore('workspace-tabs', () => {
   }
 
   // Create a fresh browser panel at `address`. Shared by the manual "+ New
-  // Browser" entry (always-new, default "Browser N" title) and the link-click
-  // path (after a dedup miss, titled with the address). Returns false when there
-  // is no dock/bot layout.
+  // Browser" entry (always-new, default localized "Browser N" title) and the
+  // link-click path (after a dedup miss, titled with the address). Returns false
+  // when there is no dock/bot layout.
   function addBrowserPanel(address: string, title: string | undefined, groupId?: string): boolean {
     const bid = (currentBotId.value ?? '').trim()
     const state = ensureBotLayout(bid)
@@ -1747,7 +1453,7 @@ export const useWorkspaceTabsStore = defineStore('workspace-tabs', () => {
     focusOrAdd({
       id: `browser:${next}`,
       component: 'browser',
-      title: title ?? `Browser ${next}`,
+      title: title ?? `${browserTabTitle()} ${next}`,
       params: { address },
       groupId,
     })
@@ -1808,82 +1514,6 @@ export const useWorkspaceTabsStore = defineStore('workspace-tabs', () => {
       title: i18n.global.t('chat.display.title'),
       groupId,
     })
-  }
-
-  // GUI tools should keep the conversation visible on the left and reserve the
-  // first region to its right for the live Desktop. Bottom terminal groups do
-  // not count as editor regions, and a below-only split must not be mistaken for
-  // the requested right-side region.
-  function openDisplayForAgentUse() {
-    if (!hasCurrentPermission('manage')) return
-    const dock = api.value
-    if (!dock) return
-    // Mobile never auto-opens the Desktop for agent activity. The single
-    // stack has no right-side region, so open/focus steals the WHOLE screen
-    // from the conversation — and the runtime fires one request per GUI tool
-    // call, so a single turn would rip the user back to the viewer over and
-    // over (issue #1071). Watching stays possible via the manual top-bar
-    // "+" → Desktop entry; the viewer connects on demand there.
-    if (isMobile.value) return
-
-    const primaryGroup = dock.groups.find(group => !isTerminalOnlyGroup(group))
-    if (!primaryGroup) {
-      openDisplay()
-      return
-    }
-
-    const adjacentRight = dock.adjacentGroupInDirection(primaryGroup, 'right')
-    const secondaryGroup = adjacentRight && !isTerminalOnlyGroup(adjacentRight)
-      ? adjacentRight
-      : undefined
-    const existingDisplays = dock.panels.filter(panel => panelComponentOf(panel.id) === 'display')
-    const existing = existingDisplays[0]
-    let targetDisplay = existing
-
-    if (secondaryGroup) {
-      const displayInSecondary = secondaryGroup.panels.find(
-        panel => panelComponentOf(panel.id) === 'display',
-      )
-      if (displayInSecondary) {
-        targetDisplay = displayInSecondary
-        focusPanel(displayInSecondary)
-      }
-      else if (existing) {
-        existing.api.moveTo({ group: secondaryGroup, position: 'center' })
-        focusPanel(existing)
-      }
-      else {
-        dock.addPanel({
-          id: DISPLAY_PANEL_ID,
-          component: 'display',
-          title: i18n.global.t('chat.display.title'),
-          renderer: 'always',
-          position: { referenceGroup: secondaryGroup.id, direction: 'within' },
-        })
-      }
-    }
-    else if (existing) {
-      // Desktop is a singleton. When it is still a tab in the only editor
-      // region, move that live panel to a new right split instead of reconnecting
-      // a duplicate viewer.
-      if (existing.group.id !== primaryGroup.id || primaryGroup.panels.length > 1) {
-        existing.api.moveTo({ group: primaryGroup, position: 'right' })
-      }
-      focusPanel(existing)
-    }
-    else {
-      dock.addPanel({
-        id: DISPLAY_PANEL_ID,
-        component: 'display',
-        title: i18n.global.t('chat.display.title'),
-        renderer: 'always',
-        position: { referenceGroup: primaryGroup.id, direction: 'right' },
-      })
-    }
-
-    for (const extra of existingDisplays) {
-      if (extra !== targetDisplay) extra.api.close()
-    }
   }
 
   function uniqueSplitPanelId(baseId: string): string {
@@ -1947,9 +1577,11 @@ export const useWorkspaceTabsStore = defineStore('workspace-tabs', () => {
         const next = state.terminalCounter + 1
         patchBotLayout(bid, { terminalCounter: next })
         const id = `terminal:${next}`
-        addTerminalPanel({
+        dock.addPanel({
           id,
+          component: 'terminal',
           title: terminalTitleFallback(id),
+          renderer: 'always',
           position,
         })
         break
@@ -1977,7 +1609,7 @@ export const useWorkspaceTabsStore = defineStore('workspace-tabs', () => {
         dock.addPanel({
           id: `browser:${next}`,
           component: 'browser',
-          title: title || `Browser ${next}`,
+          title: title || `${browserTabTitle()} ${next}`,
           params: { address: (params?.address as string | undefined) ?? DEFAULT_BROWSER_ADDRESS },
           renderer: 'always',
           position,
@@ -2020,7 +1652,7 @@ export const useWorkspaceTabsStore = defineStore('workspace-tabs', () => {
     if (!hasCurrentPermission('manage')) return
     const bid = (currentBotId.value ?? '').trim()
     if (!bid) return
-    const panelTitle = title?.trim() || 'Schedule'
+    const panelTitle = title?.trim() || scheduleTabTitle()
     const state = ensureBotLayout(bid)
     if (!state) return
     const panelId = scheduleId
@@ -2237,6 +1869,7 @@ export const useWorkspaceTabsStore = defineStore('workspace-tabs', () => {
   // shown. Collapsing the whole sidebar lives on the workbench toggle (the
   // chrome button over the dock), not on the nav items.
   function selectSidebarView(view: SidebarView) {
+    if (view === 'files' && !hasCurrentPermission('workspace_read')) return
     sidebarView.value = view
     sidebarOpen.value = true
     setWorkbench(true)
@@ -2252,18 +1885,6 @@ export const useWorkspaceTabsStore = defineStore('workspace-tabs', () => {
 
   function hideWorkbench() {
     setWorkbench(false)
-  }
-
-  // ---- bottom panel actions -------------------------------------------------
-  // Terminals use the standard dockview layout but always default to a group
-  // at the bottom of the editor area, so the layout feels like a VS Code-style
-  // bottom panel while remaining fully draggable and composable.
-
-  // groupId is the header strip that triggered the "+" (the terminal group's own
-  // bar). Passing it keeps the new session in THAT group; without it (editor "+"
-  // menu) the terminal routes to the default bottom slot.
-  function openTerminalInPanel(groupId?: string) {
-    openTerminal(groupId)
   }
 
   // One-shot navigation request consumed by the sidebar files panel.
@@ -2327,7 +1948,6 @@ export const useWorkspaceTabsStore = defineStore('workspace-tabs', () => {
     }
     ensureBotLayout(next)
     if (api.value && loadedBotId !== next) {
-      if (deletedSessionIdsByBot.get(next)?.size) holdDeletedChatActivation()
       restoreLayout(next)
       reconcileDeletedChatPanels()
     }
@@ -2366,6 +1986,26 @@ export const useWorkspaceTabsStore = defineStore('workspace-tabs', () => {
     () => prunePanels(),
   )
 
+  // A draft becoming a session repoints exactly that panel — its content, not
+  // which tab has focus; the creator updates the selection itself. Sync flush:
+  // the send that created the session resumes right after promotion and
+  // matches the pane against this param to keep its scroll pin and turn
+  // entrance.
+  watch(() => chatStore.draftPromoted, (sig) => {
+    if (!sig) return
+    const dock = api.value
+    const bid = (currentBotId.value ?? '').trim()
+    if (!dock || !bid || sig.botId !== bid) return
+    const panel = dock.getPanel(sig.viewId)
+    if (!panel || panelComponentOf(panel.id) !== 'chat') return
+    const currentSessionId = panelSessionId(panel)
+    // A delayed create must not overwrite a panel since reused for another session.
+    if (currentSessionId && currentSessionId !== sig.sessionId) return
+    if (currentSessionId !== sig.sessionId) {
+      panel.api.updateParameters({ sessionId: sig.sessionId })
+    }
+  }, { flush: 'sync' })
+
   // A sent message pins exactly the originating chat view (it is no longer a
   // preview). Draft promotion also repoints only that view to the new session.
   watch(() => chatStore.userSentInSession, (sig) => {
@@ -2387,11 +2027,6 @@ export const useWorkspaceTabsStore = defineStore('workspace-tabs', () => {
     syncChatTitles()
   })
 
-  watch(() => chatStore.guiToolUseRequested, (request) => {
-    if (!request || request.botId !== (currentBotId.value ?? '').trim()) return
-    openDisplayForAgentUse()
-  }, { flush: 'sync' })
-
   // `/new` can finish resolving Agent defaults after focus has moved to a
   // different split. The workspace owns the final Draft panel id because a
   // preview can be reused in place while a pinned source must remain open and
@@ -2412,7 +2047,7 @@ export const useWorkspaceTabsStore = defineStore('workspace-tabs', () => {
         sessionId: null,
         explicitSelection: request.explicitSelection,
       })
-      panel.api.setTitle(DEFAULT_CHAT_TITLE)
+      panel.api.setTitle(defaultChatTitle())
       return
     }
 
@@ -2422,7 +2057,7 @@ export const useWorkspaceTabsStore = defineStore('workspace-tabs', () => {
     if (!openEphemeral({
       id,
       component: 'chat',
-      title: DEFAULT_CHAT_TITLE,
+      title: defaultChatTitle(),
       params: {
         sessionId: null,
         explicitSelection: request.explicitSelection,
@@ -2454,47 +2089,6 @@ export const useWorkspaceTabsStore = defineStore('workspace-tabs', () => {
     })
   }, { flush: 'sync' })
 
-  // Keep the active chat tab in step with the global session when it is set from
-  // OUTSIDE a tab activation (initialize picking a session, an External Agent session being
-  // created, a session deleted). Declared AFTER the userSentInSession watch so a
-  // send-promotion has already repointed the draft tab by the time this runs —
-  // chatPanelForSession then finds it and this just focuses (no duplicate tab).
-  watch(() => selection.sessionId, (sid) => {
-    const dock = api.value
-    if (!dock || suppressPersist) return
-    const trimmed = (sid ?? '').trim()
-    if (!trimmed) {
-      syncDraftTargetFromState()
-      return
-    }
-    if (isDeletedSessionForCurrentBot(trimmed)) return
-    const existing = chatPanelForSession(trimmed)
-    const explicitSelection = chatStore.hasExplicitSessionSelection === true
-    if (existing) {
-      setNextChatActivationExplicit(existing.id, explicitSelection)
-      focusPanel(existing)
-      return
-    }
-    // initialize() auto-picks the latest history item with explicitSelection
-    // false. That must not open a chat tab over a restored File/Preview layout.
-    // Sidebar clicks go through openSessionChat directly (or set explicit).
-    if (suppressSelectionDockMutations && !explicitSelection) return
-    // No tab yet: open one. If the group's ephemeral slot is a draft, this
-    // repoints it in place (no stray draft tab); otherwise it adds a chat tab.
-    openSessionChat({
-      sessionId: trimmed,
-      explicitSelection,
-    })
-  })
-
-  watch(
-    () => chatStore.pendingExternalAgentSessionInput,
-    (pending) => {
-      if (!pending) return
-      syncDraftTargetFromState()
-    },
-  )
-
   watch(
     () => `${chatStore.sessionId ?? ''}:${chatStore.hasExplicitSessionSelection === true ? '1' : '0'}`,
     () => syncDraftChatExplicitSelection(),
@@ -2503,8 +2097,10 @@ export const useWorkspaceTabsStore = defineStore('workspace-tabs', () => {
   // Server renames flow into each open chat tab's title. Keyed by a sorted
   // id:title:conversation-name digest so it fires on title changes AND on
   // channel route (group/peer name) changes, not on every sidebar reorder.
+  // Tentativeness is part of the key so a first send's tab takes the session
+  // title once the server confirms the send.
   watch(
-    () => chatStore.knownSessions.map(s => `${s.id}:${s.title ?? ''}:${(s.route_metadata?.conversation_name as string) ?? ''}`).sort().join('|'),
+    () => chatStore.knownSessions.map(s => `${s.id}:${s.title ?? ''}:${(s.route_metadata?.conversation_name as string) ?? ''}:${chatStore.isSessionTentative(s.id) ? 1 : 0}`).sort().join('|'),
     () => syncChatTitles(),
   )
 
@@ -2516,22 +2112,22 @@ export const useWorkspaceTabsStore = defineStore('workspace-tabs', () => {
     reconcileDeletedChatPanels(deleted.botId)
   })
 
-  watch(
-    () => [chatStore.loadingChats, chatStore.sessions.length, currentBotId.value] as const,
-    () => {
-      if (chatStore.loadingChats) return
-      // After chats load, reconcile selection ↔ dock. suppressSelectionDockMutations
-      // inside syncRestoredChatSelection still blocks auto-picked opens on a
-      // restored non-empty workspace.
-      syncRestoredChatSelection({
-        preserveRestoredChat: suppressSelectionDockMutations,
-      })
-    },
-  )
+  // initialize() settled the selection (kept, picked, or cleared it). Align it
+  // with the dock once; later session-list refreshes never touch the dock.
+  watch(() => chatStore.loadingChats, (loading) => {
+    if (loading) return
+    alignSelectionWithDock()
+    // An empty dock has not drawn its draft yet; ensureDraftChatPanel takes
+    // the pick when it does.
+    if (api.value?.activePanel) autoPickMayFillDraft = false
+  })
 
   return {
     api,
     activeId,
+    pendingChatInputFocus,
+    requestChatInputFocus,
+    focusAdjacentTab,
     isMobile,
     activePanelIsChat,
     mobileNavOpen,
@@ -2568,7 +2164,6 @@ export const useWorkspaceTabsStore = defineStore('workspace-tabs', () => {
     openFilesAt,
     consumePendingFilesPath,
     openTerminal,
-    openTerminalInPanel,
     openBrowser,
     openBrowserAt,
     openDisplay,

@@ -1,8 +1,17 @@
+/**
+ * Automatic updates default on: checking → downloading → downloaded → installing.
+ * `available` is only an upstream event, never a user decision or public status.
+ * Downloads report null progress until bytes are known. Restart is optional:
+ * main applies prepared updates on a real quit, or recovers them next launch.
+ * Hiding a window does not install. Turning automation off prevents automatic
+ * checks and installation; About can still explicitly check-and-update/restart.
+ * Failures remain actionable in About; install attempts must not loop at startup.
+ */
 export type DesktopUpdateStatus =
   | 'idle'
   | 'checking'
   | 'up-to-date'
-  | 'available'
+  | 'installing'
   | 'downloading'
   | 'downloaded'
   | 'error'
@@ -16,18 +25,25 @@ export interface DesktopUpdateInfo {
 
 export interface DesktopUpdateState {
   status: DesktopUpdateStatus
+  autoUpdate: boolean
   currentVersion: string
   latestVersion: string | null
   progress: number | null
   error: string | null
+  // Release notes carried by the update feed (electron-builder `releaseInfo`).
+  // null both when no update is pending and when the feed ships no notes —
+  // the renderer hides the notes affordance on null.
+  releaseNotes: string | null
 }
 
 export type DesktopUpdateStateEvent =
   | { type: 'checking' }
+  | { type: 'installing' }
+  | { type: 'preference', autoUpdate: boolean }
   | { type: 'not-available', latestVersion?: string | null }
-  | { type: 'available', latestVersion: string }
+  | { type: 'available', latestVersion: string, releaseNotes?: string | null }
   | { type: 'download-progress', percent: number }
-  | { type: 'downloaded', latestVersion?: string | null }
+  | { type: 'downloaded', latestVersion?: string | null, releaseNotes?: string | null }
   | { type: 'error', error: unknown }
   | { type: 'unavailable', error: string }
 
@@ -37,10 +53,12 @@ export function createInitialDesktopUpdateState(
 ): DesktopUpdateState {
   return {
     status: enabled ? 'idle' : 'unavailable',
+    autoUpdate: true,
     currentVersion,
     latestVersion: null,
     progress: null,
     error: enabled ? null : 'No update feed URL is configured.',
+    releaseNotes: null,
   }
 }
 
@@ -49,6 +67,10 @@ export function reduceDesktopUpdateState(
   event: DesktopUpdateStateEvent,
 ): DesktopUpdateState {
   switch (event.type) {
+    case 'preference':
+      return { ...state, autoUpdate: event.autoUpdate }
+    case 'installing':
+      return { ...state, status: 'installing', error: null }
     case 'checking':
       return {
         ...state,
@@ -63,14 +85,16 @@ export function reduceDesktopUpdateState(
         latestVersion: event.latestVersion ?? state.currentVersion,
         progress: null,
         error: null,
+        releaseNotes: null,
       }
     case 'available':
       return {
         ...state,
-        status: 'available',
+        status: 'downloading',
         latestVersion: event.latestVersion,
         progress: null,
         error: null,
+        releaseNotes: event.releaseNotes ?? null,
       }
     case 'download-progress':
       return {
@@ -86,6 +110,7 @@ export function reduceDesktopUpdateState(
         latestVersion: event.latestVersion ?? state.latestVersion,
         progress: 100,
         error: null,
+        releaseNotes: event.releaseNotes ?? state.releaseNotes,
       }
     case 'error':
       return {
@@ -101,6 +126,7 @@ export function reduceDesktopUpdateState(
         latestVersion: null,
         progress: null,
         error: event.error,
+        releaseNotes: null,
       }
   }
 }

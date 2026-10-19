@@ -36,7 +36,7 @@ export interface DependencyPrimaryAction {
   disabled: boolean
 }
 
-export type DependencyMenuActionKind = 'install' | 'reinstall' | 'rollback' | 'viewScript' | 'remove'
+export type DependencyMenuActionKind = 'install' | 'reinstall' | 'rollback' | 'viewScript'
 
 export interface DependencyMenuAction {
   kind: DependencyMenuActionKind
@@ -145,6 +145,19 @@ export function dependencyUpdateAvailable(
  */
 export function dependencyAllows(item: Pick<DependencyItem, 'actions'>, action: DependencyAvailableAction): boolean {
   return (item.actions ?? []).includes(action)
+}
+
+/**
+ * The failure text of a row: the catalog copy for its error code, or the text
+ * recorded by an earlier server when the record has no code.
+ */
+export function dependencyLastError(
+  item: Pick<DependencyItem, 'last_error' | 'last_error_code'>,
+  translate: (key: string) => string,
+): string {
+  const code = item.last_error_code?.trim()
+  if (code) return translate(`errors.${code}`)
+  return item.last_error?.trim() ?? ''
 }
 
 /** Drives the tab count badge: rows the user should act on. */
@@ -303,15 +316,51 @@ export function dependencyMenuActions(
       separatorBefore: false,
     })
   }
+  // Removal is not offered per dependency: the App that references the
+  // dependency removes it, so shared copies are never pulled out from under
+  // another App.
   if (scripted) items.push({ ...viewScript, separatorBefore: items.length > 0 })
-  if (dependencyAllows(item, 'remove')) {
-    items.push({
-      kind: 'remove',
-      labelKey: `${ACTION_KEY}.remove`,
-      destructive: true,
-      disabled: readonly,
-      separatorBefore: false,
-    })
-  }
   return items
+}
+
+/**
+ * Everything `rootIds` transitively require, prerequisites first, in the
+ * order the Server installs them. Roots themselves are left out; unknown ids
+ * contribute no requires.
+ */
+export function prerequisiteOrder(rootIds: string[], requiresOf: (id: string) => string[] | undefined): string[] {
+  const roots = new Set(rootIds)
+  const seen = new Set<string>()
+  const order: string[] = []
+  const visit = (id: string) => {
+    if (seen.has(id)) return
+    seen.add(id)
+    for (const required of requiresOf(id) ?? []) visit(required)
+    if (!roots.has(id)) order.push(id)
+  }
+  rootIds.forEach(visit)
+  return order
+}
+
+/** Prerequisites of `item` the workspace lacks; installing it installs these first. */
+export function missingPrerequisites(item: DependencyItem, items: DependencyItem[]): DependencyItem[] {
+  const byId = new Map(items.map(entry => [entry.id ?? '', entry]))
+  return prerequisiteOrder([item.id ?? ''], id => byId.get(id)?.requires)
+    .map(id => byId.get(id) ?? { id, name: id } as DependencyItem)
+    .filter(entry => entry.status !== 'installed')
+}
+
+/**
+ * Definition revisions of everything `item` transitively requires, as the
+ * confirmation shows them. The Server installs a missing prerequisite only at
+ * the revision sent here and asks for a new review otherwise.
+ */
+export function prerequisiteRevisions(item: DependencyItem, items: DependencyItem[]): Record<string, string> {
+  const byId = new Map(items.map(entry => [entry.id ?? '', entry]))
+  const revisions: Record<string, string> = {}
+  for (const id of prerequisiteOrder([item.id ?? ''], other => byId.get(other)?.requires)) {
+    const revision = byId.get(id)?.definition_revision
+    if (revision) revisions[id] = revision
+  }
+  return revisions
 }

@@ -17,6 +17,11 @@ type QueueUserTurnUpdate struct {
 	ClaimedSteerItemID    string
 	ClaimedSteerText      string
 	ClaimedSteerTimestamp time.Time
+	// ClaimedSteerTurn* is the turn slot drawn for this input at claim time. It
+	// is the same identity the step commit files the user row under, so the live
+	// bubble and the settled one are one turn from the start.
+	ClaimedSteerTurnID       string
+	ClaimedSteerTurnPosition int64
 	// AfterStepIndex, when set, is the durable step whose output must already
 	// be in the live projection before a claimed steer is anchored. The commit
 	// barrier runs on the model loop while agent events are consumed on
@@ -118,6 +123,9 @@ func (m *Manager) PublishQueueUserTurns(ctx context.Context, handle RunHandle, u
 				run.SteerTurns[index].Status = "applied"
 				if appliedTurn != nil {
 					run.SteerTurns[index].TurnID = strings.TrimSpace(appliedTurn.TurnID)
+					if appliedTurn.TurnPosition != nil {
+						run.SteerTurns[index].TurnPosition = *appliedTurn.TurnPosition
+					}
 					run.SteerTurns[index].Timestamp = appliedTurn.Timestamp
 				}
 			}
@@ -132,6 +140,7 @@ func (m *Manager) PublishQueueUserTurns(ctx context.Context, handle RunHandle, u
 			}
 			incoming := SteerTurnView{
 				ItemID: claimedItemID, Status: "claimed", Text: strings.TrimSpace(update.ClaimedSteerText),
+				TurnID: strings.TrimSpace(update.ClaimedSteerTurnID), TurnPosition: update.ClaimedSteerTurnPosition,
 				AfterMessageID: maxRuntimeMessageID(run.Messages), Timestamp: claimedAt,
 			}
 			index := steerTurnIndex(run.SteerTurns, claimedItemID)
@@ -139,6 +148,11 @@ func (m *Manager) PublishQueueUserTurns(ctx context.Context, handle RunHandle, u
 				run.SteerTurns = append(run.SteerTurns, incoming)
 			} else {
 				incoming.AfterMessageID = run.SteerTurns[index].AfterMessageID
+				// A re-published claim must never drop a name already handed out.
+				if incoming.TurnID == "" {
+					incoming.TurnID = run.SteerTurns[index].TurnID
+					incoming.TurnPosition = run.SteerTurns[index].TurnPosition
+				}
 				run.SteerTurns[index] = incoming
 			}
 			steerUpserts = append(steerUpserts, incoming)
@@ -147,6 +161,13 @@ func (m *Manager) PublishQueueUserTurns(ctx context.Context, handle RunHandle, u
 		if !changed {
 			return snapshot, false, nil
 		}
+		// A persisted turn normally arrives numbered: the insert returns its
+		// turn position and the history projection carries it through. The one
+		// path that loses it is a user message with attachments, which is
+		// written in two steps (row first, turn linked after) and returns a
+		// Message the link never wrote back into. Restore the run's own turn
+		// from the slot admission drew, so an upsert cannot un-number it.
+		stampRunTurnPosition(run)
 		snapshot.Seq++
 		snapshot.UpdatedAt = now
 		run.UpdatedAt = now

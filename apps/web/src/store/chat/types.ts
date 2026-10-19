@@ -8,6 +8,8 @@ import type {
   UIForwardRef,
   UIReasoningMessage,
   UINoticeMessage,
+  UICommandMessage,
+  UIStatusMessage,
   UIReplyRef,
   UISkillActivation,
   UITextMessage,
@@ -15,6 +17,7 @@ import type {
   UIToolMessage,
   UIUserInput,
 } from '@/composables/api/useChat.types'
+import type { BotAgentRuntime, DirectBotAgentRuntime } from '@/utils/bot-agent'
 
 /**
  * Prefix of the synthetic turn_id the runtime projection assigns to a live
@@ -62,7 +65,7 @@ export interface ToolCallBlock extends UIToolMessage {
   backgroundTask?: BackgroundTask
 }
 
-export type ContentBlock = TextBlock | ThinkingBlock | ToolCallBlock | AttachmentBlock | ErrorBlock | NoticeBlock
+export type ContentBlock = TextBlock | ThinkingBlock | ToolCallBlock | AttachmentBlock | ErrorBlock | NoticeBlock | UICommandMessage | UIStatusMessage
 
 export interface ChatViewTarget {
   botId: string
@@ -85,7 +88,7 @@ export type ActiveChatTarget =
       kind: 'draft-external-agent'
       sessionId: null
       session: null
-      runtimeType: 'acp_agent' | 'codex' | 'claude-code'
+      runtimeType: 'acp_agent' | DirectBotAgentRuntime
       isExternalAgent: true
       isPendingExternalAgent: true
       metadata: Record<string, unknown>
@@ -122,11 +125,19 @@ export interface ChatUserTurn {
   isSelf: boolean
   invocationId?: string
   turnId?: string
-  // Immutable turn-level sequence from the settled (REST history) path.
-  // Live turns do not carry one until their settled twin arrives.
+  // Immutable turn-level sequence. Both the settled (REST history) path and
+  // live runtime frames carry one; a steer's turn stays unnumbered only until
+  // its step commits.
   turnPosition?: number
+  // True once the turn has been read back from durable history. Distinct from
+  // turnPosition, which a live turn now also carries: pagination needs a turn
+  // the database can address by id, not merely one that knows its place.
+  settled?: boolean
   runtimeRunId?: string
   runtimeContinuation?: boolean
+  // Set from the frame's steer turn ids, not read off the turn id's shape: a
+  // steer is named at claim time now, so it carries an ordinary turn id.
+  runtimeSteer?: boolean
   // Set by createOptimisticUserTurn / createOptimisticAssistantTurn and
   // cleared as soon as the server twin replaces the optimistic row in
   // mergeMessages. mergeMessages keys off this flag to decide which side of
@@ -136,6 +147,7 @@ export interface ChatUserTurn {
 }
 
 export interface ChatAssistantTurn {
+  runtimeForkable?: boolean
   id: string
   serverId?: string
   role: 'assistant'
@@ -147,8 +159,11 @@ export interface ChatAssistantTurn {
   invocationId?: string
   turnId?: string
   turnPosition?: number
+  settled?: boolean
   runtimeRunId?: string
   runtimeContinuation?: boolean
+  // See ChatUserTurn.runtimeSteer.
+  runtimeSteer?: boolean
   // See ChatUserTurn.__optimistic.
   __optimistic?: boolean
 }
@@ -164,9 +179,24 @@ export interface ChatSystemTurn {
   streaming: boolean
   turnId?: string
   turnPosition?: number
+  settled?: boolean
 }
 
 export type ChatMessage = ChatUserTurn | ChatAssistantTurn | ChatSystemTurn
+
+/**
+ * A user turn the queue steered into a run that was already running.
+ *
+ * The marker is set from the frame's steer turn ids. Testing the turn id for
+ * the `queue-steer:` prefix only ever worked while a steer had no durable name;
+ * once the server names one at claim time it carries an ordinary turn id, and
+ * every caller keyed on the prefix silently stopped matching.
+ */
+export function isRuntimeSteerUserTurn(
+  message: { role: string, runtimeSteer?: boolean },
+): boolean {
+  return message.role === 'user' && message.runtimeSteer === true
+}
 
 /**
  * A user turn admitted from a durable follow-up continuation run.
@@ -181,13 +211,14 @@ export function isRuntimeContinuationUserTurn(
     turnId?: string
     runtimeRunId?: string
     runtimeContinuation?: boolean
+    runtimeSteer?: boolean
   },
 ): boolean {
   return message.role === 'user'
     && Boolean(message.runtimeRunId?.trim())
     && message.runtimeContinuation === true
     && Boolean(message.turnId?.trim())
-    && !isRuntimeSteerTurnId(message.turnId)
+    && !isRuntimeSteerUserTurn(message)
 }
 
 export type SendMessageStage = 'startup' | 'stream'
@@ -212,6 +243,8 @@ export interface SendMessageOptions {
   workspaceTargetId?: string
   requestedSkills?: RequestedSkillSelection[]
   composerScope?: string
+  /** Defaults to true. Actions that do not consume a composer draft opt out. */
+  restoreDraftOnFailure?: boolean
   /** Called after command handling, before creating a session or sending a message. */
   onBeforeMessageSend?: () => void
   /** The server has finished this turn's preference write, before generation ends. */
@@ -231,10 +264,13 @@ export interface ChatWorkspaceTargetSnapshot {
 export type ChatWorkspaceTargetSelectionSource = 'unset' | 'default' | 'session' | 'user'
 
 export interface ExternalAgentSessionInput {
+  /** Explicit permission override for this draft; persisted on first send. */
+  permissionMode?: string
+  planMode?: boolean
   /** Persisted Agent instance selected for this session. */
   botAgentId?: string
   /** Runtime owned by the selected Agent. Omitted by legacy ACP callers. */
-  runtime?: 'acp' | 'codex' | 'claude-code'
+  runtime?: BotAgentRuntime
   /** Temporary ACP provider identity stored in BotAgent metadata. */
   agentId: string
   sessionMode?: 'chat' | 'discuss'

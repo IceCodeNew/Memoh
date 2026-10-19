@@ -91,7 +91,7 @@ func TestPostgresStoreLifecycle(t *testing.T) {
 	pool := openDependencyPostgres(t, ctx)
 	botID := createDependencyBot(t, ctx, pool)
 	store := newIntegrationStore(pool)
-	key := InstallationKey{BotID: botID, WorkspaceTargetID: "native", DependencyID: "codex"}
+	key := InstallationKey{BotID: botID, DependencyID: "codex"}
 
 	// Upsert creates the intent row.
 	created, err := store.Upsert(ctx, UpsertInstallation{
@@ -138,12 +138,12 @@ func TestPostgresStoreLifecycle(t *testing.T) {
 		t.Fatalf("intent columns not replaced: %+v", again)
 	}
 
-	// SetStatus writes status and last_error.
-	failed, err := store.SetStatus(ctx, key, StatusFailed, "exec exited 1")
+	// SetStatus writes status and the failure's code, never the text.
+	failed, err := store.SetStatus(ctx, key, StatusFailed, "workspace_dependency.busy")
 	if err != nil {
 		t.Fatalf("set status: %v", err)
 	}
-	if failed.Status != StatusFailed || failed.LastError != "exec exited 1" {
+	if failed.Status != StatusFailed || failed.LastErrorCode != "workspace_dependency.busy" || failed.LastError != "" {
 		t.Fatalf("set status = %+v", failed)
 	}
 
@@ -161,35 +161,28 @@ func TestPostgresStoreLifecycle(t *testing.T) {
 		t.Fatalf("observed columns not written: %+v", observed)
 	}
 	if observed.Source != InstallationSourceImage || observed.InstalledVersion != "0.151.0" ||
-		observed.LastError != "exec exited 1" || observed.ManifestDigest != "sha256:two" || observed.Status != StatusFailed {
+		observed.LastErrorCode != "workspace_dependency.busy" || observed.ManifestDigest != "sha256:two" || observed.Status != StatusFailed {
 		t.Fatalf("nil fields must leave columns untouched: %+v", observed)
 	}
 	empty := ""
-	cleared, err := store.UpdateObserved(ctx, key, ObservedUpdate{LastError: &empty})
+	cleared, err := store.UpdateObserved(ctx, key, ObservedUpdate{LastErrorCode: &empty})
 	if err != nil {
-		t.Fatalf("clear last_error: %v", err)
+		t.Fatalf("clear the failure code: %v", err)
 	}
-	if cleared.LastError != "" || cleared.LatestVersion != latest {
-		t.Fatalf("pointer to empty string must clear only last_error: %+v", cleared)
+	if cleared.LastErrorCode != "" || cleared.LatestVersion != latest || cleared.LastError != "" {
+		t.Fatalf("pointer to empty string must clear only the failure code: %+v", cleared)
 	}
 
 	// Listing by target, bot, and status all see the row.
-	second := InstallationKey{BotID: botID, WorkspaceTargetID: "remote-1", DependencyID: "claude-code"}
+	second := InstallationKey{BotID: botID, DependencyID: "claude-code"}
 	if _, err := store.Upsert(ctx, UpsertInstallation{InstallationKey: second, Source: InstallationSourceManaged, Status: StatusMissing}); err != nil {
 		t.Fatalf("upsert second: %v", err)
-	}
-	forTarget, err := store.ListForTarget(ctx, botID, "native")
-	if err != nil {
-		t.Fatalf("list for target: %v", err)
-	}
-	if len(forTarget) != 1 || forTarget[0].DependencyID != "codex" {
-		t.Fatalf("list for target = %+v", forTarget)
 	}
 	forBot, err := store.ListForBot(ctx, botID)
 	if err != nil {
 		t.Fatalf("list for bot: %v", err)
 	}
-	if len(forBot) != 2 || forBot[0].WorkspaceTargetID != "native" || forBot[1].WorkspaceTargetID != "remote-1" {
+	if len(forBot) != 2 {
 		t.Fatalf("list for bot = %+v", forBot)
 	}
 	missing, err := store.ListByStatus(ctx, StatusMissing)
@@ -225,9 +218,9 @@ func TestPostgresStoreStaleOperations(t *testing.T) {
 	botID := createDependencyBot(t, ctx, pool)
 	store := newIntegrationStore(pool)
 
-	stuck := InstallationKey{BotID: botID, WorkspaceTargetID: "native", DependencyID: "codex"}
-	fresh := InstallationKey{BotID: botID, WorkspaceTargetID: "native", DependencyID: "claude-code"}
-	done := InstallationKey{BotID: botID, WorkspaceTargetID: "native", DependencyID: "hermes"}
+	stuck := InstallationKey{BotID: botID, DependencyID: "codex"}
+	fresh := InstallationKey{BotID: botID, DependencyID: "claude-code"}
+	done := InstallationKey{BotID: botID, DependencyID: "hermes"}
 	for _, in := range []UpsertInstallation{
 		{InstallationKey: stuck, Source: InstallationSourceManaged, Status: StatusUpdating},
 		{InstallationKey: fresh, Source: InstallationSourceManaged, Status: StatusInstalling},
@@ -287,7 +280,7 @@ func TestPostgresStoreRejectsUnknownStatusAndSource(t *testing.T) {
 	pool := openDependencyPostgres(t, ctx)
 	botID := createDependencyBot(t, ctx, pool)
 	store := newIntegrationStore(pool)
-	key := InstallationKey{BotID: botID, WorkspaceTargetID: "native", DependencyID: "codex"}
+	key := InstallationKey{BotID: botID, DependencyID: "codex"}
 
 	if _, err := store.Upsert(ctx, UpsertInstallation{InstallationKey: key, Source: InstallationSourceManaged, Status: Status("bogus")}); err == nil {
 		t.Fatal("status CHECK must reject unknown values")
@@ -296,14 +289,14 @@ func TestPostgresStoreRejectsUnknownStatusAndSource(t *testing.T) {
 		t.Fatal("source CHECK must reject unknown values")
 	}
 	if _, err := store.Upsert(ctx, UpsertInstallation{
-		InstallationKey: InstallationKey{BotID: botID, WorkspaceTargetID: "native", DependencyID: ""},
+		InstallationKey: InstallationKey{BotID: botID, DependencyID: ""},
 		Source:          InstallationSourceManaged,
 		Status:          StatusInstalled,
 	}); err == nil {
 		t.Fatal("dependency_id CHECK must reject the empty string")
 	}
 	if _, err := store.Upsert(ctx, UpsertInstallation{
-		InstallationKey: InstallationKey{BotID: uuid.NewString(), WorkspaceTargetID: "native", DependencyID: "codex"},
+		InstallationKey: InstallationKey{BotID: uuid.NewString(), DependencyID: "codex"},
 		Source:          InstallationSourceManaged,
 		Status:          StatusInstalled,
 	}); err == nil {
@@ -313,7 +306,7 @@ func TestPostgresStoreRejectsUnknownStatusAndSource(t *testing.T) {
 
 func containsKey(items []Installation, key InstallationKey) bool {
 	for _, item := range items {
-		if item.BotID == key.BotID && item.WorkspaceTargetID == key.WorkspaceTargetID && item.DependencyID == key.DependencyID {
+		if item.BotID == key.BotID && item.DependencyID == key.DependencyID {
 			return true
 		}
 	}

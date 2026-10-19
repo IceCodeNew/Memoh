@@ -126,6 +126,7 @@ import MainLayout from '@/layout/main-layout/index.vue'
 import SettingsSidebar from '@/components/settings-sidebar/index.vue'
 import MobileTopBar from './components/mobile-top-bar.vue'
 import { DesktopShellKey } from '@/lib/desktop-shell'
+import { useMacTrafficReserve } from '@/composables/useMacTrafficReserve'
 import { useIsMobile } from '@/composables/useIsMobile'
 import { usePreviousRoute } from '@/composables/useBackOr'
 import { useBackToChatRoute } from '@/composables/useBackToChat'
@@ -140,12 +141,7 @@ const backToChatRoute = useBackToChatRoute()
 
 // macOS desktop only: the settings sidebar now runs to the very top of the window
 // (the old full-width topbar is gone), so its header must clear the traffic lights.
-// Mirrors main-section's computation.
-const macTrafficReserve = computed(() =>
-  desktopShell
-  && typeof navigator !== 'undefined'
-  && navigator.platform.toLowerCase().includes('mac'),
-)
+const macTrafficReserve = useMacTrafficReserve()
 
 // On a single bot's detail page the bot's own nav owns the left column, so we
 // drop the settings nav here to avoid two stacked sidebars (the "three-column"
@@ -177,7 +173,7 @@ function onListBack(): void {
 }
 
 // CONTENT ← : pop real drill-ins (bots → bots/new → progress, supermarket →
-// Package detail) — their paths nest under the page that opened them, so "the
+// App detail) — their paths nest under the page that opened them, so "the
 // route before this one is my ancestor" is exactly when router.back() is
 // right. Everything else goes back to the list at /settings: replace, so the
 // content page doesn't linger as a history entry above the list.
@@ -211,7 +207,10 @@ function onAfterLeave(): void {
 <style>
 /* Keep the scroll viewport stationary while list and detail cross-slide.
    The shell bar overlays it; only the list pane reserves the bar's h-11.
-   Each transitioning pane retains its own inset until it leaves the DOM. */
+   Each transitioning pane retains its own inset until it leaves the DOM.
+   A page that hosts its own detail view without a top-level SwapTransition
+   (Providers swaps inside each scope panel) drops the inset while a detail is
+   open: the bar is hidden then, so the inset would only leave a gap. */
 [data-settings-content-shell] > [data-settings-content-bar] {
   position: absolute;
   inset-inline: 0;
@@ -221,7 +220,7 @@ function onAfterLeave(): void {
 [data-settings-content-shell]:has(> [data-settings-content-bar]) > [data-settings-content-scroll] > [data-view-swap] {
   display: flow-root;
 }
-[data-settings-content-shell]:has(> [data-settings-content-bar]) > [data-settings-content-scroll] > :not([data-view-swap]),
+[data-settings-content-shell]:has(> [data-settings-content-bar]) > [data-settings-content-scroll] > :not([data-view-swap]):not(:has([data-settings-detail-back])),
 [data-settings-content-shell]:has(> [data-settings-content-bar]) > [data-settings-content-scroll] > [data-view-swap] > :not(:has([data-settings-detail-back])) {
   margin-top: calc(var(--spacing) * 11);
 }

@@ -1,8 +1,10 @@
 <template>
   <SettingsShell width="narrow">
     <div class="space-y-4 sm:space-y-6">
-      <section class="flex items-center gap-3 rounded-[var(--radius-menu-shell)] border border-border bg-card px-4 py-3">
-        <span class="flex size-9 shrink-0 items-center justify-center rounded-full bg-muted">
+      <ProviderIdentityCard
+        :name="curProvider?.name"
+      >
+        <template #media>
           <ProviderIcon
             v-if="curProvider?.icon"
             :icon="curProvider.icon"
@@ -14,13 +16,8 @@
           >
             {{ getInitials(curProvider?.name) }}
           </span>
-        </span>
-        <div class="min-w-0 flex-1">
-          <h2 class="truncate text-sm font-semibold">
-            {{ curProvider?.name }}
-          </h2>
-        </div>
-        <div class="ml-auto flex shrink-0 items-center gap-2">
+        </template>
+        <template #actions>
           <span class="text-xs text-muted-foreground">
             {{ $t('common.enable') }}
           </span>
@@ -30,8 +27,8 @@
             :aria-label="$t('common.enable')"
             @update:model-value="handleToggleEnable"
           />
-        </div>
-      </section>
+        </template>
+      </ProviderIdentityCard>
 
       <form @submit.prevent="handleSaveProvider">
         <SettingsSection
@@ -71,13 +68,14 @@
                 :model-value="!!providerConfig[field.key]"
                 @update:model-value="(val) => providerConfig[field.key] = !!val"
               />
-              <Input
+              <NumberField
                 v-else-if="field.type === 'number'"
                 :id="`video-provider-${field.key}`"
-                v-model.number="providerConfig[field.key] as number"
-                type="number"
+                :model-value="providerConfig[field.key] as number"
                 class="w-full sm:w-80"
                 :placeholder="field.example ? String(field.example) : ''"
+                disable-wheel-change
+                @update:model-value="(value) => providerConfig[field.key] = value"
               />
               <Select
                 v-else-if="field.type === 'enum' && field.enum"
@@ -148,7 +146,7 @@
           </div>
         </div>
 
-        <div class="overflow-hidden rounded-[var(--radius-menu-shell)] border border-border bg-card">
+        <SurfaceCard padding="none">
           <div
             v-if="providerModels.length === 0"
             class="px-4 py-10 text-center text-xs text-muted-foreground"
@@ -167,7 +165,7 @@
               @click="openModelEditor(model)"
             />
           </template>
-        </div>
+        </SurfaceCard>
       </section>
 
       <Dialog v-model:open="modelDialogOpen">
@@ -231,6 +229,7 @@
 </template>
 
 <script setup lang="ts">
+import ProviderIdentityCard from '@/components/provider-identity-card/index.vue'
 import {
   Button,
   Dialog,
@@ -240,6 +239,7 @@ import {
   DialogHeader,
   DialogTitle,
   Input,
+  NumberField,
   Select,
   SelectContent,
   SelectItem,
@@ -248,8 +248,9 @@ import {
   Spinner,
   Switch,
 } from '@felinic/ui'
-import { computed, inject, reactive, ref, watch } from 'vue'
-import { FieldStack, FormStack, ModelListRow, SettingsRow, SettingsSection, SettingsShell, toast } from '@felinic/ui'
+import { computed, inject, reactive, ref } from 'vue'
+import { useServerSyncedRecord, useServerSyncedScalar } from '@/composables/use-server-synced-form'
+import { FieldStack, FormStack, ModelListRow, SettingsRow, SettingsSection, SettingsShell, SurfaceCard, toast } from '@felinic/ui'
 import { useI18n } from 'vue-i18n'
 import { useQuery, useQueryCache } from '@pinia/colada'
 import { getVideoProvidersById, getVideoProvidersByIdModels, getVideoProvidersMeta, postProvidersFromTemplate, postVideoProvidersByIdImportModels, putProvidersById, putVideoModelsById } from '@memohai/sdk'
@@ -370,11 +371,26 @@ const providerModels = computed<VideoModelResponse[]>(() => {
   }))
 })
 
-watch(() => providerDetail.value, (provider) => {
-  providerName.value = provider?.name ?? curProvider.value?.name ?? ''
-  Object.keys(providerConfig).forEach((key) => delete providerConfig[key])
-  Object.assign(providerConfig, { ...(provider?.config ?? curProvider.value?.config ?? {}) })
-}, { immediate: true, deep: true })
+// providerName/providerConfig are shared between the user's draft and the
+// server snapshot that colada's refetchOnWindowFocus can replace at any
+// moment — the composables reconcile them (hard reset on provider switch,
+// per-field guard on background refresh). The detail pane is NOT keyed by
+// provider, so the identity function must cover id / template / client_type.
+const providerIdentity = (provider: typeof providerDetail.value) =>
+  String(provider?.id ?? curProvider.value?.id ?? curProvider.value?.provider_template_id ?? curProvider.value?.client_type ?? '')
+
+useServerSyncedScalar(providerName, {
+  source: () => providerDetail.value,
+  identity: providerIdentity,
+  server: provider => provider?.name ?? curProvider.value?.name ?? '',
+  deep: true,
+})
+useServerSyncedRecord(providerConfig, {
+  source: () => providerDetail.value,
+  identity: providerIdentity,
+  server: provider => ({ ...(provider?.config ?? curProvider.value?.config ?? {}) } as Record<string, unknown>),
+  deep: true,
+})
 
 async function handleToggleEnable(value: boolean) {
   if (!curProvider.value) return

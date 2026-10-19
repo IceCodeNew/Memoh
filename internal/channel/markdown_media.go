@@ -61,7 +61,7 @@ func expandMarkdownMessage(msg OutboundMessage) ([]OutboundMessage, bool) {
 	markdownmedia.Visit(msg.Message.Text, bindings, appendText, func(binding markdownmedia.Binding) {
 		if binding.ErrorCode != "" {
 			locale, _ := base.Metadata["locale"].(string)
-			appendText(binding.Label + " — " + i18n.New(locale).T(binding.ErrorCode))
+			appendText(binding.Label + " — " + i18n.New(locale).T("errors."+binding.ErrorCode))
 			return
 		}
 		asset := binding.Asset

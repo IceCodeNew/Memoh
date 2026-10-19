@@ -1,3 +1,4 @@
+import { randomUUID } from '@/utils/uuid'
 import { useUserStore } from '@/store/user'
 import type {
   Bot,
@@ -133,11 +134,19 @@ const turnRoleRank: Record<ChatMessage['role'], number> = { user: 0, assistant: 
 
 export function sortChatMessages(items: ChatMessage[]): ChatMessage[] {
   return [...items].sort((a, b) => {
-    // Turn positions are the authoritative order once both sides carry one;
-    // timestamps stay as the fallback for live turns that do not.
+    // Turn positions are the authoritative order. A turn the database has not
+    // numbered yet will be numbered after every turn that already is — they all
+    // draw from one monotonic per-session counter — so "no position" means "at
+    // the end", not "unknown". Ordering an unnumbered live turn against a
+    // numbered one by timestamp put a still-streaming steer above the request
+    // it answers, because the request row is timestamped at step commit.
     const ap = a.turnPosition
     const bp = b.turnPosition
-    if (ap !== undefined && bp !== undefined && ap !== bp) return ap - bp
+    if (ap !== bp) {
+      if (ap === undefined) return 1
+      if (bp === undefined) return -1
+      return ap - bp
+    }
     // Inside one turn the request precedes the reply. Rows of a turn are
     // persisted together at step commit and share a timestamp, so neither
     // timestamps nor ids can order them.
@@ -161,9 +170,7 @@ export function isOptimisticTurn(turn: ChatMessage): boolean {
 }
 
 export function createInvocationId(): string {
-  const randomUUID = globalThis.crypto?.randomUUID
-  if (typeof randomUUID === 'function') return randomUUID.call(globalThis.crypto)
-  return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`
+  return randomUUID()
 }
 
 export function cloneToolApprovalState(approval: UIToolApproval): UIToolApproval {

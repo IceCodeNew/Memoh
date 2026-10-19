@@ -3,10 +3,16 @@ package view
 import (
 	"encoding/json"
 	"reflect"
+	"sort"
 	"strings"
 	"testing"
 	"time"
 
+	sdk "github.com/felinics/twilight/sdk"
+
+	agentevent "github.com/felinics/memoh/internal/agent/event"
+	"github.com/felinics/memoh/internal/agent/partmeta"
+	"github.com/felinics/memoh/internal/agent/runtime/external"
 	"github.com/felinics/memoh/internal/agent/turn"
 	messagepkg "github.com/felinics/memoh/internal/chat/message"
 )
@@ -698,6 +704,99 @@ func TestUIMessageStreamConverterKeepsReasoningBeforeText(t *testing.T) {
 	}
 }
 
+// The live converter and the external transcript split blocks at the same
+// events, so the terminal snapshot replaces each live block in place:
+// separate thinking blocks, thinking around a tool call, and text after it.
+func TestUIMessageStreamMatchesExternalTranscript(t *testing.T) {
+	events := []agentevent.StreamEvent{
+		{Type: agentevent.ReasoningDelta, Delta: "A1"},
+		{Type: agentevent.ReasoningEnd},
+		{Type: agentevent.ReasoningDelta, Delta: "A2"},
+		{Type: agentevent.ReasoningEnd},
+		{Type: agentevent.ToolCallStart, ToolCallID: "call-1", ToolName: "exec"},
+		{Type: agentevent.ToolCallEnd, ToolCallID: "call-1", ToolName: "exec", Result: "ok"},
+		{Type: agentevent.ReasoningDelta, Delta: "B"},
+		{Type: agentevent.TextDelta, Delta: "T1"},
+		{Type: agentevent.TextDelta, Delta: "T2"},
+	}
+	converter := NewUIMessageStreamConverter()
+	recorder := external.NewTranscriptRecorder()
+	live := map[int]UIMessage{}
+	for _, ev := range events {
+		for _, block := range converter.HandleEvent(UIStreamEventFromAgentEvent(ev)) {
+			live[block.ID] = block
+		}
+		recorder.Add(ev)
+	}
+	raw, err := json.Marshal(recorder.Messages(""))
+	if err != nil {
+		t.Fatal(err)
+	}
+	terminal := converter.ConvertTerminalMessages(raw)
+	if len(terminal) != len(live) {
+		t.Fatalf("terminal = %#v, live = %#v", terminal, live)
+	}
+	for i, block := range terminal {
+		if block.ID != i || live[i].Type != block.Type || live[i].Content != block.Content {
+			t.Fatalf("terminal block %d = %#v, live = %#v", i, block, live[i])
+		}
+	}
+}
+
+// Reasoning does not end the open text block: the native runtime persists one
+// text part per step, so text resumed after reasoning stays in the same live
+// block the terminal snapshot will reuse.
+func TestUIMessageStreamConverterKeepsTextAcrossReasoning(t *testing.T) {
+	converter := NewUIMessageStreamConverter()
+	before := converter.HandleEvent(UIMessageStreamEvent{Type: "text_delta", Delta: "T1"})
+	converter.HandleEvent(UIMessageStreamEvent{Type: "reasoning_start"})
+	converter.HandleEvent(UIMessageStreamEvent{Type: "reasoning_delta", Delta: "R"})
+	converter.HandleEvent(UIMessageStreamEvent{Type: "reasoning_end"})
+	after := converter.HandleEvent(UIMessageStreamEvent{Type: "text_delta", Delta: "T2"})
+	if after[0].ID != before[0].ID || after[0].Content != "T1T2" {
+		t.Fatalf("text resumed after reasoning = %#v, want block %d with T1T2", after, before[0].ID)
+	}
+}
+
+// External runtimes stream reasoning without reasoning_end. A tool call ends
+// the block, as it does in the runtime transcript, so the live view and the
+// terminal snapshot agree.
+func TestUIMessageStreamConverterSplitsReasoningAroundToolCall(t *testing.T) {
+	converter := NewUIMessageStreamConverter()
+	converter.HandleEvent(UIMessageStreamEvent{Type: "reasoning_start"}) // hidden thinking: no content
+	first := converter.HandleEvent(UIMessageStreamEvent{Type: "reasoning_delta", Delta: "A"})
+	converter.HandleEvent(UIMessageStreamEvent{Type: "text_delta", Delta: "t"})
+	converter.HandleEvent(UIMessageStreamEvent{Type: "reasoning_delta", Delta: "\n\n"}) // blank: dropped from the snapshot
+	converter.HandleEvent(UIMessageStreamEvent{Type: "tool_call_start", ToolCallID: "call-1", ToolName: "exec"})
+	converter.HandleEvent(UIMessageStreamEvent{Type: "tool_call_end", ToolCallID: "call-1", ToolName: "exec"})
+	second := converter.HandleEvent(UIMessageStreamEvent{Type: "reasoning_delta", Delta: "B"})
+	if first[0].ID == second[0].ID || second[0].Content != "B" {
+		t.Fatalf("reasoning after a tool call joined the earlier block: first=%#v second=%#v", first, second)
+	}
+
+	raw, err := json.Marshal([]sdk.Message{
+		{Role: sdk.MessageRoleAssistant, Content: []sdk.MessagePart{sdk.ReasoningPart{Text: "A"}, sdk.TextPart{Text: "t"}}},
+		{Role: sdk.MessageRoleAssistant, Content: []sdk.MessagePart{
+			sdk.ReasoningPart{Text: "\n\n"},
+			sdk.ToolCallPart{ToolCallID: "call-1", ToolName: "exec"},
+		}},
+		{Role: sdk.MessageRoleTool, Content: []sdk.MessagePart{sdk.ToolResultPart{ToolCallID: "call-1", ToolName: "exec"}}},
+		{Role: sdk.MessageRoleAssistant, Content: []sdk.MessagePart{sdk.ReasoningPart{Text: "B"}}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var ids []int
+	for _, block := range converter.ConvertTerminalMessages(raw) {
+		if block.Type == UIMessageReasoning {
+			ids = append(ids, block.ID)
+		}
+	}
+	if len(ids) != 2 || ids[0] != first[0].ID || ids[1] != second[0].ID {
+		t.Fatalf("terminal reasoning ids = %v, want [%d %d]", ids, first[0].ID, second[0].ID)
+	}
+}
+
 func TestUIMessageStreamConverterUserInputRequest(t *testing.T) {
 	converter := NewUIMessageStreamConverter()
 	before := converter.HandleEvent(UIMessageStreamEvent{Type: "text_delta", Delta: "Before the question."})
@@ -945,34 +1044,84 @@ func TestConvertMessagesToUITurnsTruncatesReplyPreview(t *testing.T) {
 	}
 }
 
-func TestConvertMessagesToUITurnsProjectsTimeoutFailure(t *testing.T) {
-	now := time.Now().UTC()
-	turns := convertTestMessagesToUITurns([]messagepkg.Message{{
-		ID:        "user-1",
-		TurnID:    "turn-1",
-		BotID:     "bot-1",
-		Role:      "user",
-		Content:   json.RawMessage(`{"role":"user","content":[{"type":"text","text":"hello"}]}`),
-		CreatedAt: now,
+func TestConvertMessagesToUITurnsProjectsHistoryErrorCode(t *testing.T) {
+	cases := []struct {
+		name     string
+		content  string
+		metadata map[string]any
+		want     []string
+	}{{
+		name:     "no content",
+		content:  `{"role":"assistant","content":[]}`,
+		metadata: map[string]any{messagepkg.HistoryErrorCodeMetadataKey: "agent.response_timeout"},
+		want:     []string{"error agent.response_timeout"},
 	}, {
-		ID:      "assistant-1",
-		TurnID:  "turn-1",
-		BotID:   "bot-1",
-		Role:    "assistant",
-		Content: json.RawMessage(`{"role":"assistant","content":[]}`),
-		Metadata: map[string]any{
-			messagepkg.HistoryErrorCodeMetadataKey: "agent.response_timeout",
+		name:     "text",
+		content:  `{"role":"assistant","content":[{"type":"text","text":"partial"}]}`,
+		metadata: map[string]any{messagepkg.HistoryErrorCodeMetadataKey: "agent.response_interrupted", "error": "stream reset"},
+		want:     []string{"text partial", "error agent.response_interrupted stream reset"},
+	}, {
+		name:     "tool call",
+		content:  `{"role":"assistant","content":[{"type":"text","text":"checking"},{"type":"tool-call","toolCallId":"exec-1","toolName":"exec","input":{}}]}`,
+		metadata: map[string]any{messagepkg.HistoryErrorCodeMetadataKey: "agent.tool_timeout"},
+		want:     []string{"text checking", "tool exec", "error agent.tool_timeout"},
+	}, {
+		name:    "error args",
+		content: `{"role":"assistant","content":[]}`,
+		metadata: map[string]any{
+			messagepkg.HistoryErrorCodeMetadataKey: "agent_dependency_missing",
+			messagepkg.HistoryErrorArgsMetadataKey: map[string]any{"dep_id": "codex", "operation_in_progress": "false"},
 		},
-		CreatedAt: now.Add(time.Second),
-	}})
-	if len(turns) != 2 {
-		t.Fatalf("expected user + timeout assistant, got %d", len(turns))
-	}
-	if turns[1].Role != "assistant" || len(turns[1].Messages) != 1 {
-		t.Fatalf("timeout assistant turn = %#v", turns[1])
-	}
-	if turns[1].Messages[0].Type != UIMessageError || turns[1].Messages[0].Code != "agent.response_timeout" {
-		t.Fatalf("timeout block = %#v", turns[1].Messages[0])
+		want: []string{"error agent_dependency_missing dep_id=codex operation_in_progress=false"},
+	}, {
+		name:    "no error code",
+		content: `{"role":"assistant","content":[{"type":"text","text":"done"}]}`,
+		want:    []string{"text done"},
+	}}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			now := time.Now().UTC()
+			turns := convertTestMessagesToUITurns([]messagepkg.Message{{
+				ID:        "user-1",
+				TurnID:    "turn-1",
+				BotID:     "bot-1",
+				Role:      "user",
+				Content:   json.RawMessage(`{"role":"user","content":[{"type":"text","text":"hello"}]}`),
+				CreatedAt: now,
+			}, {
+				ID:        "assistant-1",
+				TurnID:    "turn-1",
+				BotID:     "bot-1",
+				Role:      "assistant",
+				Content:   json.RawMessage(tc.content),
+				Metadata:  tc.metadata,
+				CreatedAt: now.Add(time.Second),
+			}})
+			if len(turns) != 2 || turns[1].Role != "assistant" {
+				t.Fatalf("expected user + assistant turn, got %#v", turns)
+			}
+			got := make([]string, 0, len(turns[1].Messages))
+			for _, message := range turns[1].Messages {
+				switch message.Type {
+				case UIMessageText:
+					got = append(got, "text "+message.Content)
+				case UIMessageTool:
+					got = append(got, "tool "+message.Name)
+				case UIMessageError:
+					parts := []string{strings.TrimSpace("error " + message.Code + " " + message.Content)}
+					for key, value := range message.Args {
+						parts = append(parts, key+"="+value)
+					}
+					sort.Strings(parts[1:])
+					got = append(got, strings.Join(parts, " "))
+				default:
+					got = append(got, string(message.Type))
+				}
+			}
+			if strings.Join(got, "|") != strings.Join(tc.want, "|") {
+				t.Fatalf("assistant blocks = %q, want %q", got, tc.want)
+			}
+		})
 	}
 }
 
@@ -1455,13 +1604,13 @@ func TestConvertRawModelMessagesToUIAssistantMessagesBuildsTerminalSnapshots(t *
 			Role: "assistant",
 			Content: mustUIRawJSON(t, []map[string]any{
 				{"type": "reasoning", "text": "thinking"},
-				{"type": "tool-call", "toolCallId": "call-1", "toolName": "read", "input": map[string]any{"path": "/tmp/a.txt"}},
+				{"type": "tool-call", "toolCallId": "call-1", "toolName": "read", "input": map[string]any{"json": map[string]any{"path": "/tmp/a.txt"}}},
 			}),
 		},
 		{
 			Role: "tool",
 			Content: mustUIRawJSON(t, []map[string]any{
-				{"type": "tool-result", "toolCallId": "call-1", "toolName": "read", "result": map[string]any{"structuredContent": map[string]any{"stdout": "ok"}}},
+				{"type": "tool-result", "toolCallId": "call-1", "toolName": "read", "result": map[string]any{"json": map[string]any{"structuredContent": map[string]any{"stdout": "ok"}}}},
 			}),
 		},
 		{
@@ -1495,13 +1644,13 @@ func TestConvertRawModelMessagesToUIAssistantMessagesKeepsBackgroundExecRunning(
 		{
 			Role: "assistant",
 			Content: mustUIRawJSON(t, []map[string]any{
-				{"type": "tool-call", "toolCallId": "call-1", "toolName": "exec", "input": map[string]any{"command": "npm test"}},
+				{"type": "tool-call", "toolCallId": "call-1", "toolName": "exec", "input": map[string]any{"json": map[string]any{"command": "npm test"}}},
 			}),
 		},
 		{
 			Role: "tool",
 			Content: mustUIRawJSON(t, []map[string]any{
-				{"type": "tool-result", "toolCallId": "call-1", "toolName": "exec", "result": map[string]any{"structuredContent": map[string]any{"status": "background_started", "task_id": "bg_1", "output_file": "/tmp/memoh-bg/bg_1.log"}}},
+				{"type": "tool-result", "toolCallId": "call-1", "toolName": "exec", "result": map[string]any{"json": map[string]any{"structuredContent": map[string]any{"status": "background_started", "task_id": "bg_1", "output_file": "/tmp/memoh-bg/bg_1.log"}}}},
 			}),
 		},
 	})
@@ -1739,13 +1888,13 @@ func TestConvertTerminalMessagesReusesLiveBlockIDsAroundAttachments(t *testing.T
 		{
 			Role: "assistant",
 			Content: mustUIRawJSON(t, []map[string]any{
-				{"type": "tool-call", "toolCallId": "call-1", "toolName": "generate_image", "input": map[string]any{"prompt": "a cat"}},
+				{"type": "tool-call", "toolCallId": "call-1", "toolName": "generate_image", "input": map[string]any{"json": map[string]any{"prompt": "a cat"}}},
 			}),
 		},
 		{
 			Role: "tool",
 			Content: mustUIRawJSON(t, []map[string]any{
-				{"type": "tool-result", "toolCallId": "call-1", "toolName": "generate_image", "result": map[string]any{"path": "/data/generated-images/1.png"}},
+				{"type": "tool-result", "toolCallId": "call-1", "toolName": "generate_image", "result": map[string]any{"json": map[string]any{"path": "/data/generated-images/1.png"}}},
 			}),
 		},
 		{
@@ -1809,13 +1958,13 @@ func TestConvertTerminalMessagesAfterRetryIgnoresDiscardedAttemptBlocks(t *testi
 		{
 			Role: "assistant",
 			Content: mustUIRawJSON(t, []map[string]any{
-				{"type": "tool-call", "toolCallId": "call-1", "toolName": "generate_image", "input": map[string]any{"prompt": "a cat"}},
+				{"type": "tool-call", "toolCallId": "call-1", "toolName": "generate_image", "input": map[string]any{"json": map[string]any{"prompt": "a cat"}}},
 			}),
 		},
 		{
 			Role: "tool",
 			Content: mustUIRawJSON(t, []map[string]any{
-				{"type": "tool-result", "toolCallId": "call-1", "toolName": "generate_image", "result": map[string]any{"path": "/data/generated-images/1.png"}},
+				{"type": "tool-result", "toolCallId": "call-1", "toolName": "generate_image", "result": map[string]any{"json": map[string]any{"path": "/data/generated-images/1.png"}}},
 			}),
 		},
 		{
@@ -1870,13 +2019,13 @@ func TestConvertTerminalMessagesSkipsTagOnlyLiveTextBlocks(t *testing.T) {
 		{
 			Role: "assistant",
 			Content: mustUIRawJSON(t, []map[string]any{
-				{"type": "tool-call", "toolCallId": "call-1", "toolName": "generate_image", "input": map[string]any{"prompt": "a cat"}},
+				{"type": "tool-call", "toolCallId": "call-1", "toolName": "generate_image", "input": map[string]any{"json": map[string]any{"prompt": "a cat"}}},
 			}),
 		},
 		{
 			Role: "tool",
 			Content: mustUIRawJSON(t, []map[string]any{
-				{"type": "tool-result", "toolCallId": "call-1", "toolName": "generate_image", "result": map[string]any{"path": "/tmp/a.png"}},
+				{"type": "tool-result", "toolCallId": "call-1", "toolName": "generate_image", "result": map[string]any{"json": map[string]any{"path": "/tmp/a.png"}}},
 			}),
 		},
 		{
@@ -1942,5 +2091,255 @@ func TestUIMessageStreamConverterRuntimeNoticeCarriesMetadataArgs(t *testing.T) 
 	}
 	if strings.Contains(string(data), `"args"`) {
 		t.Fatalf("args must be omitted from the wire shape when empty: %s", data)
+	}
+}
+
+func TestConvertModelMessagesToUIAssistantMessagesIncludesDiff(t *testing.T) {
+	t.Parallel()
+
+	diff := "--- a/f\n+++ b/f\n@@ -1 +1 @@\n-old\n+new\n"
+	messages := ConvertModelMessagesToUIAssistantMessages([]turn.ModelMessage{{
+		Role: "assistant",
+		Content: mustUIRawJSON(t, []map[string]any{{
+			"type":       "tool-call",
+			"toolCallId": "call-1",
+			"toolName":   "edit",
+			"input":      map[string]any{"path": "f"},
+			"providerMetadata": map[string]any{
+				"diff": diff,
+			},
+		}}),
+	}})
+
+	if len(messages) != 1 || messages[0].Diff != diff {
+		t.Fatalf("messages = %#v, want diff %q", messages, diff)
+	}
+}
+
+func TestConvertMessagesToUITurnsAppliesToolRowDiffMetadata(t *testing.T) {
+	t.Parallel()
+
+	diff := "--- a/f\n+++ b/f\n@@ -1 +1 @@\n-old\n+new\n"
+	turns := convertTestMessagesToUITurns([]messagepkg.Message{
+		{
+			ID:        "assistant-1",
+			BotID:     "bot-1",
+			SessionID: "session-1",
+			Role:      "assistant",
+			Content: mustUIMessageJSON(t, turn.ModelMessage{
+				Role: "assistant",
+				Content: mustUIRawJSON(t, []map[string]any{
+					{"type": "tool-call", "toolCallId": "call-1", "toolName": "edit", "input": map[string]any{"path": "f"}},
+				}),
+			}),
+		},
+		{
+			ID:        "tool-1",
+			BotID:     "bot-1",
+			SessionID: "session-1",
+			Role:      "tool",
+			Content: mustUIMessageJSON(t, turn.ModelMessage{
+				Role: "tool",
+				Content: mustUIRawJSON(t, []map[string]any{
+					{"type": "tool-result", "toolCallId": "call-1", "toolName": "edit", "result": map[string]any{"ok": true}},
+				}),
+			}),
+			Metadata: map[string]any{"diff": diff},
+		},
+	})
+
+	if len(turns) != 1 || len(turns[0].Messages) != 1 {
+		t.Fatalf("turns = %#v, want one tool block", turns)
+	}
+	block := turns[0].Messages[0]
+	if block.Diff != diff {
+		t.Fatalf("tool block diff = %q, want %q", block.Diff, diff)
+	}
+}
+
+func TestConvertMessagesToUITurnsAppliesAssistantRowDiffsMetadata(t *testing.T) {
+	t.Parallel()
+
+	// The immediate path lifts diffs out of the assistant row's content onto
+	// its metadata at persist time; the converter must read them back.
+	diff := "--- a/f\n+++ b/f\n@@ -1 +1 @@\n-old\n+new\n"
+	turns := convertTestMessagesToUITurns([]messagepkg.Message{
+		{
+			ID:        "assistant-1",
+			BotID:     "bot-1",
+			SessionID: "session-1",
+			Role:      "assistant",
+			Content: mustUIMessageJSON(t, turn.ModelMessage{
+				Role: "assistant",
+				Content: mustUIRawJSON(t, []map[string]any{
+					{"type": "tool-call", "toolCallId": "call-1", "toolName": "edit", "input": map[string]any{"path": "f"}},
+					{"type": "tool-call", "toolCallId": "call-2", "toolName": "exec", "input": map[string]any{"command": "ls"}},
+				}),
+			}),
+			Metadata: map[string]any{
+				"diffs": map[string]any{"call-1": diff},
+			},
+		},
+	})
+
+	if len(turns) != 1 || len(turns[0].Messages) != 2 {
+		t.Fatalf("turns = %#v, want two tool blocks", turns)
+	}
+	if got := turns[0].Messages[0].Diff; got != diff {
+		t.Fatalf("first block diff = %q, want %q", got, diff)
+	}
+	if got := turns[0].Messages[1].Diff; got != "" {
+		t.Fatalf("unrelated block picked up a diff: %q", got)
+	}
+}
+
+func TestUIMessageStreamConverterAppliesDiffMetadataOnToolEnd(t *testing.T) {
+	t.Parallel()
+
+	diff := "--- a/f\n+++ b/f\n@@ -1 +1 @@\n-old\n+new\n"
+	converter := NewUIMessageStreamConverter()
+	converter.HandleEvent(UIMessageStreamEvent{
+		Type:       "tool_call_start",
+		ToolName:   "edit",
+		ToolCallID: "call-1",
+		Input:      map[string]any{"path": "f"},
+	})
+	update := converter.HandleEvent(UIMessageStreamEvent{
+		Type:       "tool_call_end",
+		ToolName:   "edit",
+		ToolCallID: "call-1",
+		Output:     map[string]any{"ok": true},
+		Metadata:   map[string]any{"diff": diff},
+	})
+
+	if len(update) != 1 || update[0].Diff != diff {
+		t.Fatalf("update = %#v, want diff %q", update, diff)
+	}
+}
+
+func TestRuntimeFeedbackLiveAndHistoryProjection(t *testing.T) {
+	c := NewUIMessageStreamConverter()
+	command := c.HandleEvent(UIMessageStreamEvent{Type: "command_output", ToolName: "goal", Delta: "Goal set: review"})[0]
+	tool := c.HandleEvent(UIMessageStreamEvent{Type: "tool_call_start", ToolCallID: "exec-1", ToolName: "exec"})[0]
+	text := c.HandleEvent(UIMessageStreamEvent{Type: "text_delta", Delta: "Review"})[0]
+	for _, seconds := range []float64{2, 5} {
+		update := c.HandleEvent(UIMessageStreamEvent{Type: "tool_call_metadata", ToolCallID: "exec-1", Metadata: map[string]any{
+			"execution_progress": map[string]any{"elapsed_time_seconds": seconds},
+		}})[0]
+		if update.ID != tool.ID || *update.ElapsedTimeSeconds != seconds || len(update.Progress) != 0 {
+			t.Fatalf("heartbeat appended instead of updating: %#v", update)
+		}
+	}
+	status := c.HandleEvent(UIMessageStreamEvent{Type: "runtime_status", Code: "api_retry"})[0]
+	if next := c.HandleEvent(UIMessageStreamEvent{Type: "runtime_status", Code: "compacting"})[0]; next.ID != status.ID {
+		t.Fatal("runtime status accumulated")
+	}
+	if next := c.HandleEvent(UIMessageStreamEvent{Type: "text_delta", Delta: "ed."})[0]; next.ID != text.ID || next.Content != "Reviewed." {
+		t.Fatal("status or heartbeat interrupted model text")
+	}
+	raw := json.RawMessage(`[{"role":"assistant","content":[{"type":"text","text":"Goal set: review","providerMetadata":{"runtime_command":"goal"}}]},{"role":"assistant","content":[{"type":"tool-call","toolCallId":"exec-1","toolName":"exec","providerMetadata":{"execution_progress":{"elapsed_time_seconds":5}}}]},{"role":"assistant","content":[{"type":"text","text":"Reviewed."}]}]`)
+	terminal := c.ConvertTerminalMessages(raw)
+	if len(terminal) != 4 || terminal[0].ID != command.ID || terminal[0].Type != UIMessageCommand || terminal[2].ID != text.ID || terminal[3].Name != "" {
+		t.Fatalf("terminal feedback mismatch: %#v", terminal)
+	}
+	var modelMessages []json.RawMessage
+	_ = json.Unmarshal(raw, &modelMessages)
+	var rows []messagepkg.Message
+	for _, content := range modelMessages {
+		rows = append(rows, messagepkg.Message{Role: "assistant", Content: content, TurnID: "turn-1"})
+	}
+	history := ConvertMessagesToUITurns(rows)
+	if len(history) != 1 || len(history[0].Messages) != 3 || history[0].Messages[0].Type != UIMessageCommand {
+		t.Fatalf("history lost command identity: %#v", history)
+	}
+}
+
+// The terminal snapshot is a serialized []sdk.Message. Its tool input and
+// Memoh annotations arrive in the SDK shape and must read back the way the
+// persisted rows do; a pending ask_user card otherwise loses its form when
+// the run ends and the snapshot replaces the live block.
+func TestConvertRawModelMessagesReadsSDKShapedToolCalls(t *testing.T) {
+	call := sdk.ToolCallPart{
+		ToolCallID: "call-1",
+		ToolName:   "ask_user",
+		Input:      sdk.ToolArguments{JSON: json.RawMessage(`{"questions":[{"kind":"text","text":"name?"}]}`)},
+	}
+	call.ProviderMetadata = partmeta.Set(call.ProviderMetadata, partmeta.KeyUserInput, map[string]any{
+		"user_input_id": "req-1",
+		"short_id":      3,
+		"status":        "pending",
+		"ui_payload":    map[string]any{"version": 2, "questions": []any{map[string]any{"id": "q1", "kind": "text", "text": "name?"}}},
+	})
+	approved := sdk.ToolCallPart{
+		ToolCallID: "call-2",
+		ToolName:   "exec",
+		Input:      sdk.ToolArguments{JSON: json.RawMessage(`{"command":"ls"}`)},
+	}
+	approved.ProviderMetadata = partmeta.Set(approved.ProviderMetadata, partmeta.KeyApproval, map[string]any{
+		"approval_id": "appr-1", "short_id": 4, "status": "pending", "can_approve": true,
+	})
+	raw, err := json.Marshal([]sdk.Message{
+		{Role: sdk.MessageRoleAssistant, Content: []sdk.MessagePart{call, approved}},
+		{Role: sdk.MessageRoleTool, Content: []sdk.MessagePart{sdk.ToolResultPart{
+			ToolCallID: "call-2", ToolName: "exec", Result: sdk.ToolOutput{JSON: json.RawMessage(`{"stdout":"ok"}`)},
+		}}},
+	})
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+
+	messages := ConvertRawModelMessagesToUIAssistantMessages(raw)
+	byCall := map[string]UIMessage{}
+	for _, message := range messages {
+		if message.Type == UIMessageTool {
+			byCall[message.ToolCallID] = message
+		}
+	}
+	ask, ok := byCall["call-1"]
+	if !ok {
+		t.Fatalf("ask_user block missing: %#v", messages)
+	}
+	input, _ := ask.Input.(map[string]any)
+	if _, wrapped := input["json"]; wrapped || input["questions"] == nil {
+		t.Fatalf("ask_user input must be the plain object, got %#v", ask.Input)
+	}
+	if ask.UserInput == nil || ask.UserInput.UserInputID != "req-1" || ask.UserInput.ShortID != 3 || ask.UserInput.Status != "pending" {
+		t.Fatalf("ask_user user_input not read from SDK metadata: %#v", ask.UserInput)
+	}
+	if len(ask.UserInput.Questions) != 1 || ask.UserInput.Questions[0].Text != "name?" {
+		t.Fatalf("ask_user ui_payload questions lost: %#v", ask.UserInput)
+	}
+	exec, ok := byCall["call-2"]
+	if !ok {
+		t.Fatalf("exec block missing: %#v", messages)
+	}
+	if exec.Approval == nil || exec.Approval.ApprovalID != "appr-1" || exec.Approval.ShortID != 4 {
+		t.Fatalf("exec approval not read from SDK metadata: %#v", exec.Approval)
+	}
+	output, _ := exec.Output.(map[string]any)
+	if output["stdout"] != "ok" {
+		t.Fatalf("exec output must be the plain value, got %#v", exec.Output)
+	}
+}
+
+func TestLatestOnlyForkProjectionUsesDurableAnchorAcrossPages(t *testing.T) {
+	rows := []messagepkg.Message{
+		{ID: "m1", TurnID: "t1", Role: "assistant", Content: json.RawMessage(`{"role":"assistant","content":"first"}`), Metadata: map[string]any{"agent_turn_id": "p1"}},
+		{ID: "m2", TurnID: "t2", Role: "assistant", Content: json.RawMessage(`{"role":"assistant","content":"second"}`), Metadata: map[string]any{"agent_turn_id": "p2"}},
+	}
+	meta := map[string]any{"grok_last_prompt_id": "p2"}
+	turns := ConvertSessionMessagesToUITurns(rows, "grok-build", meta)
+	if len(turns) != 2 || turns[0].RuntimeForkable || !turns[1].RuntimeForkable {
+		t.Fatalf("fork flags: %+v", turns)
+	}
+	older := ConvertSessionMessagesToUITurns(rows[:1], "grok-build", meta)
+	if older[0].RuntimeForkable {
+		t.Fatal("last reply on an older page is not the latest native turn")
+	}
+	for _, runtime := range []string{"codex", "claude-code"} {
+		turns = ConvertSessionMessagesToUITurns(rows, runtime, meta)
+		if !turns[0].RuntimeForkable || !turns[1].RuntimeForkable {
+			t.Fatalf("historical fork regressed for %s", runtime)
+		}
 	}
 }

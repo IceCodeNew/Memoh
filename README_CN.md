@@ -21,7 +21,7 @@
     </a>
   </div>
   <h3>
-    <a href="https://memoh.ai/waitlist">Memoh Cloud</a> · <a href="#部署到服务器">部署到服务器</a> · <a href="https://docs.memoh.ai">文档</a> · <a href="https://memoh.ai">官网</a> · <a href="https://x.com/memoh_ai">X</a>
+    <a href="https://app.memoh.net">Login</a> · <a href="#self-hosted">Self-hosted</a> · <a href="https://docs.memoh.ai">文档</a> · <a href="https://memoh.ai">官网</a> · <a href="https://x.com/memoh_ai">X</a>
   </h3>
   <img src="./assets/hero.png" alt="Memoh" width="1000">
 </div>
@@ -38,10 +38,9 @@ Memoh 是一个开源的多智能体平台。每个 Agent 都有一台自己的�
 
 ### Memoh Cloud
 
-> [!TIP]
-> Memoh Cloud 即将上线 — 零配置、Agent 全天候运行在云端。在 [memoh.ai/waitlist](https://memoh.ai/waitlist) 加入等待列表。
+你现在可以直接去 [app.memoh.net](https://app.memoh.net) 注册登录账号。
 
-### 部署到服务器
+### Self-hosted
 
 在自己的基础设施上自托管完整服务。
 
@@ -63,7 +62,9 @@ docker compose up -d
 
 Compose 会分别启动 Server 和 Channel 服务。请妥善保存内部 RPC 密钥，重新创建服务时继续使用同一个值。
 
-不使用 Docker（或从已有裸机部署升级）？在 `config.toml` 中将 `internal_rpc.shared_secret` 留空即可：Server 会内嵌 Channel 运行时，继续以单进程 all-in-one 方式运行——外部渠道、Email、webhook 端点全部保留，无需运行 `memoh-channel` 进程。设置密钥则切换为双进程拆分部署。
+拆分部署中，Channel 通过认证后的内部 Storage RPC 流式读写媒体，只有 Server 需要访问工作区和媒体存储。升级时先更新 Server，再更新 Channel，确保 Storage 服务已可用。
+
+不使用 Docker（或从已有裸机部署升级）？在 `config.toml` 中将 `internal_rpc.shared_secret` 留空即可：Server 会内嵌 Channel 运行时，继续以单进程 all-in-one 方式运行——外部渠道、webhook 端点全部保留，无需运行 `memoh-channel` 进程。设置密钥则切换为双进程拆分部署。
 
 执行过 setup 的已有仓库仍然可以继续使用 `git pull`：post-merge hook 会初始化新增的
 submodule，setup 也会为后续 pull 启用递归更新。如果从未安装过该 hook，升级后只需执行
@@ -87,19 +88,6 @@ submodule，setup 也会为后续 pull 启用递归更新。如果从未安装�
 - **每个 Agent 一台电脑**：独立 Workspace，自带文件系统、网络、桌面和浏览器
 - **多用户、多机器人**：给自己跑一个，给家人各部署一个，在一台机器上同时跑一群
 - **轻量**：可以自托管在自己的基础设施上，也可以连接 Memoh Cloud
-
-## 功能概览
-
-- **多机多人**：多个机器人，可私聊、可群聊、可互相对话，支持跨平台身份绑定
-- **隔离 Workspace**：每个机器人都有独立的文件系统、网络、工具和桌面环境
-- **内置记忆**：跨会话、跨平台的长期记忆，开箱即用，也支持接入 [Mem0](https://mem0.ai)、OpenViking
-- **十余种渠道**：Telegram、Discord、飞书、微信、QQ、邮件等
-- **MCP**：接入外部工具服务，每个机器人独立管理连接
-- **Agent 托管**：通过 ACP 在 Memoh Workspace 内托管外部 Agent，目前支持 Codex 和 Claude Code，每个机器人独立配置
-- **Browser Use**：在 Workspace 内驱动浏览器
-- **Computer Use**：操作 Workspace 桌面，处理需要 GUI 的工作流
-- **技能与应用超市**：模块化技能，从超市安装模板，重活交给子智能体
-- **自动化**：通过定时任务运行周期性工作流
 
 ## 为本项目拆出的子项目
 

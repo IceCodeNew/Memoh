@@ -14,6 +14,7 @@ import (
 	compaction "github.com/felinics/memoh/internal/agent/context/compaction"
 	contextfrag "github.com/felinics/memoh/internal/agent/context/fragment"
 	historyfrag "github.com/felinics/memoh/internal/agent/context/history"
+	"github.com/felinics/memoh/internal/agent/partmeta"
 	messagepkg "github.com/felinics/memoh/internal/chat/message"
 	"github.com/felinics/memoh/internal/chat/timeline"
 	dbpkg "github.com/felinics/memoh/internal/db"
@@ -21,11 +22,32 @@ import (
 	dbstore "github.com/felinics/memoh/internal/db/store"
 )
 
+func TestDropPreflightFailureTurns(t *testing.T) {
+	user := sdkMessagesToModelMessages([]sdk.Message{sdk.UserMessage("rejected")})[0]
+	assistant := sdkMessagesToModelMessages([]sdk.Message{sdk.AssistantMessage("")})[0]
+	kept := sdkMessagesToModelMessages([]sdk.Message{sdk.UserMessage("accepted")})[0]
+	records := []historyfrag.HistoryRecord{
+		{ModelMessage: user, Metadata: map[string]any{messagepkg.HistoryFailureOriginMetadataKey: messagepkg.HistoryFailureOriginUserMessageHook}},
+		{ModelMessage: assistant, Metadata: map[string]any{messagepkg.HistoryFailureOriginMetadataKey: messagepkg.HistoryFailureOriginUserMessageHook}},
+		{ModelMessage: kept},
+	}
+
+	got := dropPreflightFailureTurns(records)
+	if len(got) != 1 || got[0].ModelMessage.TextContent() != "accepted" {
+		t.Fatalf("preflight failure records = %#v, want only accepted input", got)
+	}
+}
+
 func TestDropEmptyHistoryFailures(t *testing.T) {
 	empty := sdkMessagesToModelMessages([]sdk.Message{sdk.AssistantMessage("")})[0]
 	kept := sdkMessagesToModelMessages([]sdk.Message{sdk.AssistantMessage("hello")})[0]
+	var stepFailure ModelMessage
+	if err := json.Unmarshal([]byte(`{"role":"assistant","content":[]}`), &stepFailure); err != nil {
+		t.Fatal(err)
+	}
 	records := []historyfrag.HistoryRecord{
 		{ModelMessage: empty, Metadata: map[string]any{messagepkg.HistoryErrorCodeMetadataKey: "agent.response_timeout"}},
+		{ModelMessage: stepFailure, Metadata: map[string]any{messagepkg.HistoryErrorCodeMetadataKey: "agent.provider_request_rejected", messagepkg.AgentStepInterruptedMetadataKey: true}},
 		{ModelMessage: kept, Metadata: map[string]any{messagepkg.HistoryErrorCodeMetadataKey: "agent.response_timeout"}},
 		{ModelMessage: empty},
 	}
@@ -69,9 +91,9 @@ func TestProjectInterruptedHistoryReasoningKeepsOpaqueBlock(t *testing.T) {
 				ID:     "r1",
 				Format: sdk.ReasoningFormatAnthropic,
 				Model:  "claude-sonnet-4-20250514",
-				ProviderMetadata: map[string]any{
+				ProviderMetadata: partmeta.Fold(map[string]any{
 					"anthropic": map[string]any{"redactedData": "BLOB"},
-				},
+				}),
 			}},
 		}})[0],
 		Metadata: map[string]any{messagepkg.AgentStepInterruptedMetadataKey: true},
@@ -89,13 +111,13 @@ func TestProjectInterruptedHistoryReasoningKeepsOpaqueBlock(t *testing.T) {
 		part.Model != "claude-sonnet-4-20250514" {
 		t.Fatalf("reasoning provenance was not preserved: %#v", part)
 	}
-	meta, _ := part.ProviderMetadata["anthropic"].(map[string]any)
-	if data, _ := meta["redactedData"].(string); data != "BLOB" {
+	meta := part.ProviderMetadata["anthropic"]
+	if data := meta["redactedData"]; data != "BLOB" {
 		t.Fatalf("redactedData = %q, want BLOB", data)
 	}
 }
 
-func TestProjectInterruptedHistoryReasoningSkipsSupersededCheckpoint(t *testing.T) {
+func TestProjectInterruptedHistoryReasoningProjectsSupersededCheckpoint(t *testing.T) {
 	checkpoint := historyfrag.HistoryRecord{
 		ModelMessage: sdkMessagesToModelMessages([]sdk.Message{{
 			Role:    sdk.MessageRoleAssistant,
@@ -112,10 +134,10 @@ func TestProjectInterruptedHistoryReasoningSkipsSupersededCheckpoint(t *testing.
 	projected := projectInterruptedHistoryReasoning([]historyfrag.HistoryRecord{checkpoint, answer})
 	got := modelMessageToSDKMessage(projected[0].ModelMessage)
 	if len(got.Content) != 1 {
-		t.Fatalf("projected content = %#v, want the reasoning part untouched", got.Content)
+		t.Fatalf("projected content = %#v, want one text part", got.Content)
 	}
-	if _, ok := got.Content[0].(sdk.ReasoningPart); !ok {
-		t.Fatalf("superseded checkpoint was projected into prompt text: %#v", got.Content[0])
+	if text, ok := got.Content[0].(sdk.TextPart); !ok || !strings.Contains(text.Text, "partial reasoning") {
+		t.Fatalf("superseded checkpoint must keep the projection it had while live: %#v", got.Content[0])
 	}
 }
 
@@ -206,11 +228,14 @@ func TestBuildMessagesFromPipelineInsertsArtifactSummary(t *testing.T) {
 		logger:   slog.New(slog.DiscardHandler),
 	}
 
-	messages, _ := svc.buildMessagesFromPipeline(context.Background(), ChatRequest{
+	messages, raw, pressure := svc.buildMessagesFromPipeline(context.Background(), ChatRequest{
 		BotID:    pipelineTestBotID,
 		ThreadID: pipelineTestSessionID,
 	}, 0)
 
+	if pressure <= raw {
+		t.Fatalf("summary pressure missing: raw=%d pressure=%d", raw, pressure)
+	}
 	if len(messages) != 2 {
 		t.Fatalf("expected summary + current message, got %d: %s", len(messages), messagesDebug(messages))
 	}
@@ -262,6 +287,17 @@ func TestTrimPipelineMessagesKeepsPinnedSummaries(t *testing.T) {
 	}
 }
 
+func TestTrimPipelineMessagesNeverDropsOversizedCurrentSource(t *testing.T) {
+	messages := []ModelMessage{
+		{Role: "user", Content: newTextContent("summary")},
+		{Role: "user", Content: newTextContent(strings.Repeat("current", 1000))},
+	}
+	got := trimPipelineMessagesByTokens(nil, messages, []bool{true, false}, 100)
+	if len(got) != 2 || string(got[1].Content) != string(messages[1].Content) {
+		t.Fatal("oversized current input must reach fail-closed provider admission, not disappear")
+	}
+}
+
 func TestBuildMessagesFromPipelineKeepsSummaryUnderBudget(t *testing.T) {
 	t.Parallel()
 
@@ -276,14 +312,14 @@ func TestBuildMessagesFromPipelineKeepsSummaryUnderBudget(t *testing.T) {
 		logger:   slog.New(slog.DiscardHandler),
 	}
 
-	messages, _ := svc.buildMessagesFromPipeline(context.Background(), ChatRequest{
+	messages, raw, pressure := svc.buildMessagesFromPipeline(context.Background(), ChatRequest{
 		BotID:    pipelineTestBotID,
 		ThreadID: pipelineTestSessionID,
 	}, 200)
 
-	// Consecutive rendered segments merge into one user message, so the tail
-	// here is a single oversized block: without pinning the budget would drop
-	// everything and the model would receive no context at all.
+	if pressure <= raw || raw < 1000 {
+		t.Fatalf("pressure lost discarded history or summaries: raw=%d pressure=%d", raw, pressure)
+	}
 	if len(messages) == 0 {
 		t.Fatal("artifact summary must survive a budget that drops the whole tail")
 	}
@@ -293,5 +329,21 @@ func TestBuildMessagesFromPipelineKeepsSummaryUnderBudget(t *testing.T) {
 	}
 	if strings.Contains(joined, strings.Repeat("x", 4000)) {
 		t.Fatalf("oversized tail should have been trimmed, got %d messages", len(messages))
+	}
+}
+
+func TestPipelineCurrentIdentitySurvivesLaterExternalAndSelfMessages(t *testing.T) {
+	pipeline := timeline.NewPipeline(timeline.RenderParams{})
+	pipeline.PushEvent(pipelineTestSessionID, pipelineTextEvent("old", 1000, strings.Repeat("h", 8000)))
+	pipeline.PushEvent(pipelineTestSessionID, pipelineTextEvent("current", 2000, "required input"))
+	pipeline.PushEvent(pipelineTestSessionID, pipelineTextEvent("later", 3000, "later input"))
+	echo := pipelineTextEvent("echo", 4000, "self echo")
+	echo.IsSelfSent = true
+	pipeline.PushEvent(pipelineTestSessionID, echo)
+	svc := &Service{pipeline: pipeline, logger: slog.New(slog.DiscardHandler)}
+	messages, _, _ := svc.buildMessagesFromPipeline(t.Context(), ChatRequest{ThreadID: pipelineTestSessionID, ExternalMessageID: "current"}, 500)
+	index := latestModelUserMessageIndex(messages)
+	if index == nil || !strings.Contains(messages[*index].TextContent(), "required input") {
+		t.Fatalf("wrong current source: index=%v messages=%s", index, messagesDebug(messages))
 	}
 }

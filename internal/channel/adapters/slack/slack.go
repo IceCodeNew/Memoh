@@ -17,7 +17,6 @@ import (
 	"github.com/slack-go/slack/socketmode"
 
 	"github.com/felinics/memoh/internal/channel"
-	"github.com/felinics/memoh/internal/channel/common"
 	"github.com/felinics/memoh/internal/media"
 )
 
@@ -30,6 +29,7 @@ const (
 	slackMaxButtonText          = 75
 	slackMaxButtonURL           = 3000
 	channelNameTTL              = 5 * time.Minute
+	slackVerificationTimeout    = 15 * time.Second
 )
 
 // assetOpener reads stored asset bytes by content hash.
@@ -182,6 +182,16 @@ func (*SlackAdapter) Descriptor() channel.Descriptor {
 	}
 }
 
+func (*SlackAdapter) SelfIdentityPolicy() channel.SelfIdentityPolicy {
+	return channel.SelfIdentityPolicy{
+		RefreshOnCredentialsChange: true,
+		RequireDiscoveryOnEnable:   true,
+		RequiredSelfIdentityKey:    "user_id",
+		DiscoveryErrorMessage:      "slack bot identity discovery failed",
+		MissingIdentityMessage:     "slack bot identity discovery returned no user id",
+	}
+}
+
 func (a *SlackAdapter) newAPIClient(cfg Config, options ...slack.Option) *slack.Client {
 	if a != nil && a.apiFactory != nil {
 		return a.apiFactory(cfg, options...)
@@ -232,7 +242,7 @@ func (a *SlackAdapter) getOrCreateConnection(channelCfg channel.ChannelConfig, c
 
 func (a *SlackAdapter) Connect(ctx context.Context, cfg channel.ChannelConfig, handler channel.InboundHandler) (channel.Connection, error) {
 	if a.logger != nil {
-		a.logger.Info("start", slog.String("config_id", cfg.ID))
+		a.logger.InfoContext(ctx, "start", slog.String("config_id", cfg.ID))
 	}
 
 	slackCfg, err := parseConfig(cfg.Credentials)
@@ -317,7 +327,7 @@ func (a *SlackAdapter) Connect(ctx context.Context, cfg channel.ChannelConfig, h
 				signalStartupError(fmt.Errorf("slack socket mode run: %w", err))
 			}
 			if a.logger != nil && !errors.Is(err, context.Canceled) {
-				a.logger.Error("socket mode run error", slog.String("config_id", cfg.ID), slog.Any("error", err))
+				a.logger.ErrorContext(ctx, "socket mode run error", slog.String("config_id", cfg.ID), slog.Any("error", err))
 			}
 		}
 	}()
@@ -336,7 +346,7 @@ func (a *SlackAdapter) Connect(ctx context.Context, cfg channel.ChannelConfig, h
 
 	stop := func(_ context.Context) error {
 		if a.logger != nil {
-			a.logger.Info("stop", slog.String("config_id", cfg.ID))
+			a.logger.InfoContext(ctx, "stop", slog.String("config_id", cfg.ID))
 		}
 		cancel()
 		a.clearConnection(cfg.ID)
@@ -377,17 +387,17 @@ func (a *SlackAdapter) handleSocketModeEvent(
 
 	case socketmode.EventTypeConnecting:
 		if a.logger != nil {
-			a.logger.Info("connecting to Slack Socket Mode", slog.String("config_id", cfg.ID))
+			a.logger.InfoContext(ctx, "connecting to Slack Socket Mode", slog.String("config_id", cfg.ID))
 		}
 
 	case socketmode.EventTypeConnected:
 		if a.logger != nil {
-			a.logger.Info("connected to Slack Socket Mode", slog.String("config_id", cfg.ID))
+			a.logger.InfoContext(ctx, "connected to Slack Socket Mode", slog.String("config_id", cfg.ID))
 		}
 
 	case socketmode.EventTypeConnectionError:
 		if a.logger != nil {
-			a.logger.Error("Slack Socket Mode connection error", slog.String("config_id", cfg.ID))
+			a.logger.ErrorContext(ctx, "Slack Socket Mode connection error", slog.String("config_id", cfg.ID))
 		}
 
 	case socketmode.EventTypeInteractive:
@@ -496,18 +506,16 @@ func (a *SlackAdapter) handleMessageEvent(
 	}
 
 	if a.logger != nil {
-		a.logger.Info("inbound received",
+		a.logger.InfoContext(ctx, "inbound received",
 			slog.String("config_id", cfg.ID),
 			slog.String("chat_type", chatType),
 			slog.String("user_id", ev.User),
-			slog.String("text", common.SummarizeText(text)),
 		)
 	}
 
 	go func() {
-		if err := handler(ctx, cfg, msg); err != nil && a.logger != nil {
-			a.logger.Error("handle inbound failed", slog.String("config_id", cfg.ID), slog.Any("error", err))
-		}
+		// The inbound unit writes the result line of the message.
+		_ = handler(ctx, cfg, msg)
 	}()
 }
 
@@ -578,17 +586,15 @@ func (a *SlackAdapter) handleAppMentionEvent(
 	}
 
 	if a.logger != nil {
-		a.logger.Info("app mention received",
+		a.logger.InfoContext(ctx, "app mention received",
 			slog.String("config_id", cfg.ID),
 			slog.String("user_id", ev.User),
-			slog.String("text", common.SummarizeText(text)),
 		)
 	}
 
 	go func() {
-		if err := handler(ctx, cfg, msg); err != nil && a.logger != nil {
-			a.logger.Error("handle inbound failed", slog.String("config_id", cfg.ID), slog.Any("error", err))
-		}
+		// The inbound unit writes the result line of the message.
+		_ = handler(ctx, cfg, msg)
 	}()
 }
 
@@ -649,9 +655,6 @@ func (a *SlackAdapter) sendSlackMessage(ctx context.Context, api *slack.Client, 
 	if len(msg.Message.Attachments) > 0 {
 		for _, att := range msg.Message.Attachments {
 			if err := a.uploadPreparedAttachment(ctx, api, channelID, threadTS, att); err != nil {
-				if a.logger != nil {
-					a.logger.Error("upload attachment failed", slog.Any("error", err))
-				}
 				return err
 			}
 		}
@@ -1073,27 +1076,37 @@ func (a *SlackAdapter) resolveOutboundTarget(ctx context.Context, api *slack.Cli
 	return strings.TrimSpace(conversation.ID), nil
 }
 
-func (a *SlackAdapter) DiscoverSelf(_ context.Context, credentials map[string]any) (map[string]any, string, error) {
+func (a *SlackAdapter) DiscoverSelf(ctx context.Context, credentials map[string]any) (map[string]any, string, error) {
 	cfg, err := parseConfig(credentials)
 	if err != nil {
 		return nil, "", err
 	}
 
-	api := a.newAPIClient(cfg)
-	resp, err := api.AuthTest()
+	callCtx, cancel := context.WithTimeout(ctx, slackVerificationTimeout)
+	defer cancel()
+	api := a.newAPIClient(cfg, slack.OptionAppLevelToken(cfg.AppToken))
+	resp, err := api.AuthTestContext(callCtx)
 	if err != nil {
 		return nil, "", fmt.Errorf("slack auth test: %w", err)
 	}
+	if _, socketURL, err := api.StartSocketModeContext(callCtx); err != nil {
+		return nil, "", fmt.Errorf("slack app token test: %w", err)
+	} else if strings.TrimSpace(socketURL) == "" {
+		return nil, "", errors.New("slack app token test returned no socket URL")
+	}
 
+	userID := strings.TrimSpace(resp.UserID)
+	if userID == "" {
+		return nil, "", errors.New("slack auth test returned empty user id")
+	}
 	identity := map[string]any{
-		"user_id":  resp.UserID,
+		"user_id":  userID,
 		"bot_id":   resp.BotID,
 		"team_id":  resp.TeamID,
 		"username": resp.User,
 		"team":     resp.Team,
 	}
-
-	return identity, resp.UserID, nil
+	return identity, userID, nil
 }
 
 func (*SlackAdapter) NormalizeConfig(raw map[string]any) (map[string]any, error) {
@@ -1395,7 +1408,7 @@ func (a *SlackAdapter) lookupConversationInfo(ctx context.Context, api *slack.Cl
 	name, chatType, err := a.fetchConversationInfo(ctx, api, channelID)
 	if err != nil {
 		if a.logger != nil {
-			a.logger.Debug("resolve slack conversation name failed",
+			a.logger.DebugContext(ctx, "resolve slack conversation name failed",
 				slog.String("channel_id", channelID),
 				slog.Any("error", err),
 			)

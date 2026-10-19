@@ -10,26 +10,26 @@ import (
 	"strings"
 	"time"
 
-	"github.com/felinics/memoh/internal/logger"
 	"github.com/felinics/memoh/internal/workspace/bridge"
 )
 
-func startACPToolsProxy(ctx context.Context, handler http.Handler) {
+func startToolsProxy(ctx context.Context, log *slog.Logger, handler http.Handler) {
 	if handler == nil {
 		return
 	}
+	// Keep the legacy environment key for existing workspace configurations.
 	addr := strings.TrimSpace(os.Getenv("MEMOH_ACP_TOOLS_PROXY_ADDR"))
 	if addr == "" {
-		addr = bridge.ACPToolsProxyAddr
+		addr = bridge.ToolsProxyAddr
 	}
 	if !isLoopbackTCPAddr(addr) {
-		logger.FromContext(ctx).Warn("ACP tools proxy skipped; proxy addr must be loopback", slog.String("addr", addr))
+		log.WarnContext(ctx, "Agent tools proxy skipped; proxy addr must be loopback", slog.String("addr", addr))
 		return
 	}
 
 	listener, err := (&net.ListenConfig{}).Listen(ctx, "tcp", addr)
 	if err != nil {
-		logger.FromContext(ctx).Warn("ACP tools proxy listen failed", slog.String("addr", addr), slog.Any("error", err))
+		log.WarnContext(ctx, "Agent tools proxy listen failed", slog.String("addr", addr), slog.Any("error", err))
 		return
 	}
 
@@ -44,9 +44,9 @@ func startACPToolsProxy(ctx context.Context, handler http.Handler) {
 		_ = server.Shutdown(shutdownCtx)
 	}()
 	go func() {
-		logger.FromContext(ctx).Info("ACP tools proxy listening", slog.String("addr", addr))
+		log.InfoContext(ctx, "Agent tools proxy listening", slog.String("addr", addr))
 		if err := server.Serve(listener); err != nil && !errors.Is(err, http.ErrServerClosed) {
-			logger.FromContext(ctx).Warn("ACP tools proxy stopped", slog.Any("error", err))
+			log.WarnContext(ctx, "Agent tools proxy stopped", slog.Any("error", err))
 		}
 	}()
 }

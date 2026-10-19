@@ -4,6 +4,7 @@ import (
 	"errors"
 	"strings"
 
+	"github.com/felinics/memoh/internal/apperror"
 	"github.com/felinics/memoh/internal/commandsyntax"
 )
 
@@ -39,12 +40,12 @@ type SkillIntent struct {
 
 type Decision struct {
 	Kind        DecisionKind
-	Code        string
+	Code        apperror.Code
 	Directed    bool
 	Command     Command
 	SkillIntent SkillIntent
 	Invocation  *commandsyntax.Invocation
-	// AgentCommand is the exact ACP agent-command selector a live-runtime
+	// AgentCommand is the exact runtime command selector a live-runtime
 	// admission check matched for a NormalChat decision. Carried so the
 	// session pool can re-validate it against the final runtime at prompt
 	// time; empty for every other decision source.

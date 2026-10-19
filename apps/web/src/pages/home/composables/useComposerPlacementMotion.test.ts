@@ -11,7 +11,7 @@ it('moves from the welcome position and cleans up when returning to welcome', as
   const el = document.createElement('div')
   const welcome = ref(true)
   let top = 300
-  el.getBoundingClientRect = () => ({ left: 0, top }) as DOMRect
+  el.getBoundingClientRect = () => ({ left: 0, top, width: 0 }) as DOMRect
   const scope = effectScope()
   scope.run(() => useComposerPlacementMotion(ref(el), welcome))
   welcome.value = false
@@ -35,6 +35,22 @@ describe('motion accessibility', () => {
     welcome.value = false
     await nextTick()
     expect(animate).not.toHaveBeenCalled()
+    scope.stop()
+  })
+})
+
+describe('navigation gate', () => {
+  it('lands without animating when the flip is not send-initiated', async () => {
+    const el = document.createElement('div')
+    const welcome = ref(true)
+    el.getBoundingClientRect = () => ({ left: 0, top: 300, width: 0 }) as DOMRect
+    const scope = effectScope()
+    scope.run(() => useComposerPlacementMotion(ref(el), welcome, () => false))
+    welcome.value = false
+    await nextTick()
+    await nextTick()
+    expect(animate).not.toHaveBeenCalled()
+    expect(el.style.transform).toBe('')
     scope.stop()
   })
 })

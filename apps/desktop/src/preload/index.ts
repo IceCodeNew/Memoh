@@ -7,7 +7,6 @@ import {
 } from '../shared/keyboard-commands'
 import type { ServerConnectResult, ServerConnectionResult } from '../shared/server-connection'
 import type { DesktopRuntimeConfig, DesktopRuntimeState } from '../shared/remote-runtime'
-import type { DesktopThemeSource } from '../shared/theme'
 import type { DesktopUpdateInfo, DesktopUpdateState } from '../shared/updates'
 
 // Renderer query-cache invalidation payload. Mirrors the subset of
@@ -28,20 +27,21 @@ export interface RendererInvalidatePayload {
 // node-privileged main process.
 const api = {
   desktop: {
+    loadRemoteIcon: (url: string): Promise<string> => ipcRenderer.invoke('desktop:load-remote-icon', url),
     getServerStatus: (): Promise<{
       baseUrl: string
       managed: boolean
     }> =>
       ipcRenderer.invoke('desktop:server-status'),
     apiBaseUrl: (): Promise<string> => ipcRenderer.invoke('desktop:api-base-url'),
-    setThemeSource: (themeSource: DesktopThemeSource): Promise<void> =>
-      ipcRenderer.invoke('desktop:set-theme-source', themeSource),
     probeServer: (): Promise<ServerConnectionResult> => ipcRenderer.invoke('desktop:probe-server'),
     connectServer: (baseUrl: string): Promise<ServerConnectResult> =>
       ipcRenderer.invoke('desktop:connect-server', baseUrl),
     runtimeState: (): Promise<DesktopRuntimeState> => ipcRenderer.invoke('desktop:runtime-state'),
     configureRuntime: (config: DesktopRuntimeConfig | null): Promise<DesktopRuntimeState> =>
       ipcRenderer.invoke('desktop:configure-runtime', config),
+    setRuntimePaused: (paused: boolean): Promise<DesktopRuntimeState> =>
+      ipcRenderer.invoke('desktop:set-runtime-paused', paused),
     onRuntimeStateChanged: (cb: (state: DesktopRuntimeState) => void): (() => void) => {
       const listener = (_event: IpcRendererEvent, state: DesktopRuntimeState) => cb(state)
       ipcRenderer.on('desktop:runtime-state-changed', listener)
@@ -51,7 +51,7 @@ const api = {
       getInfo: (): Promise<DesktopUpdateInfo> => ipcRenderer.invoke('desktop:updates:get-info'),
       getState: (): Promise<DesktopUpdateState> => ipcRenderer.invoke('desktop:updates:get-state'),
       check: (): Promise<DesktopUpdateState> => ipcRenderer.invoke('desktop:updates:check'),
-      download: (): Promise<DesktopUpdateState> => ipcRenderer.invoke('desktop:updates:download'),
+      setAutoUpdate: (enabled: boolean): Promise<DesktopUpdateState> => ipcRenderer.invoke('desktop:updates:set-auto-update', enabled),
       install: (): Promise<DesktopUpdateState> => ipcRenderer.invoke('desktop:updates:install'),
       onStateChanged: (cb: (state: DesktopUpdateState) => void): (() => void) => {
         const listener = (_event: IpcRendererEvent, state: DesktopUpdateState) => cb(state)
@@ -76,6 +76,14 @@ const api = {
     // that can produce this list.
     setTrayBots: (bots: Array<{ id: string, displayName: string }>): Promise<void> =>
       ipcRenderer.invoke('desktop:set-tray-bots', bots),
+    // macOS fullscreen hides the traffic lights; layouts reserving the
+    // traffic-light strip subscribe here to drop the reserve in time.
+    isFullScreen: (): Promise<boolean> => ipcRenderer.invoke('desktop:is-fullscreen'),
+    onFullScreenChanged: (cb: (fullScreen: boolean) => void): (() => void) => {
+      const listener = (_event: IpcRendererEvent, fullScreen: boolean) => cb(fullScreen)
+      ipcRenderer.on('desktop:fullscreen-changed', listener)
+      return () => ipcRenderer.removeListener('desktop:fullscreen-changed', listener)
+    },
     // Subscribe to invalidation events forwarded from sibling renderers.
     // Listener lives for the entire renderer lifetime.
     onInvalidate: (cb: (payload: RendererInvalidatePayload) => void): void => {
@@ -85,6 +93,7 @@ const api = {
     },
   },
   window: {
+    setIgnoreMenuShortcuts: (ignore: boolean): Promise<void> => ipcRenderer.invoke('window:ignore-menu-shortcuts', ignore),
     closeSelf: (): Promise<void> => ipcRenderer.invoke('window:close-self'),
     // Native app/tray menu actions ask the renderer to navigate by route path.
     // Listener lives for the entire renderer lifetime.
@@ -95,7 +104,8 @@ const api = {
     },
     onKeyboardCommand: (cb: (command: AppKeyboardCommand) => void): (() => void) => {
       const listener = (_event: IpcRendererEvent, command: unknown) => {
-        if (isAppKeyboardCommand(command)) cb(command)
+        if (!isAppKeyboardCommand(command)) return
+        cb(command)
       }
       ipcRenderer.on(DESKTOP_KEYBOARD_COMMAND_CHANNEL, listener)
       return () => {

@@ -15,7 +15,9 @@ function withVariants(name: string, variants: string[]): string[] {
 
 const llmProviders: string[] = [
   ...withVariants('acp', []),
+  ...withVariants('memoh', ['color']),
   ...withVariants('openai', []),
+  ...withVariants('opencode-go', []),
   ...withVariants('anthropic', []),
   ...withVariants('google', ['color', 'brand-color']),
   ...withVariants('deepseek', ['color']),
@@ -33,6 +35,7 @@ const llmProviders: string[] = [
   ...withVariants('xai', []),
   ...withVariants('claude', ['color']),
   ...withVariants('claude-code', ['color']),
+  ...withVariants('codex', ['color']),
   ...withVariants('gemini', ['color']),
   ...withVariants('meta', ['color']),
   ...withVariants('cohere', ['color']),
@@ -99,11 +102,12 @@ const channelPlatforms: string[] = [
 ]
 
 // ---------------------------------------------------------------------------
-// Email Providers
+// Social Platforms
 // ---------------------------------------------------------------------------
 
-const emailProviders: string[] = [
-  'gmail',
+const socialPlatforms: string[] = [
+  // x: Simple Icons "x" (https://simpleicons.org), CC0-1.0
+  'x',
 ]
 
 // ---------------------------------------------------------------------------
@@ -114,5 +118,5 @@ export const manifest: string[] = [
   ...llmProviders,
   ...searchProviders,
   ...channelPlatforms,
-  ...emailProviders,
+  ...socialPlatforms,
 ]

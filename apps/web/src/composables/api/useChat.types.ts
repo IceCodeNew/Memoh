@@ -47,10 +47,17 @@ export interface SessionTitleChangedEvent {
 export interface SessionCreatedEvent {
   type: 'session_created'
   session_id: string
-  // `type` here is the session kind (chat | discuss | acp_agent), already
-  // filtered server-side to user-facing types.
+  // `type` here is the session kind (chat | discuss | schedule | acp_agent),
+  // already filtered server-side to user-visible sessions.
   session_type?: string
   title?: string
+}
+
+export interface ScheduleChangedEvent {
+  type: 'schedule_changed'
+  schedule_id: string
+  /** Kept empty by the server for compatibility with older activity clients. */
+  session_id?: string
 }
 
 export interface BotSessionActivityDroppedEvent {
@@ -69,9 +76,12 @@ export interface SessionCompactionEvent {
 }
 
 export type BotSessionActivityEvent =
+  | { type: 'activity_ready', cache_invalidation: boolean }
+  | { type: 'session_invalidated', session_id: string }
   | SessionTouchedEvent
   | SessionTitleChangedEvent
   | SessionCreatedEvent
+  | ScheduleChangedEvent
   | BotSessionActivityDroppedEvent
   | BotSessionActivityPingEvent
   | SessionCompactionEvent
@@ -103,6 +113,7 @@ export interface RequestedSkillRequest {
 }
 
 export interface CommandActionListItem {
+  i18n_key?: string
   id?: string
   title: string
   description?: string
@@ -110,15 +121,13 @@ export interface CommandActionListItem {
 }
 
 export interface CommandActionResult {
+  data?: unknown
+  notice?: string
+  text_key?: string
   kind: string
   title?: string
   text?: string
   items?: CommandActionListItem[]
-}
-
-export interface CommandActionError {
-  code: string
-  message: string
 }
 
 export interface CommandEventResponse {
@@ -129,7 +138,9 @@ export interface CommandEventResponse {
   action_id?: string
   terminal: boolean
   result?: CommandActionResult
-  error?: CommandActionError
+  // A command_error's catalog or slash-command code, and the server's text.
+  code?: string
+  message?: string
 }
 
 export interface UIAttachment {
@@ -188,10 +199,15 @@ export interface UIToolMessage {
   tool_call_id: string
   running: boolean
   progress?: unknown[]
+  /** Last elapsed time reported by the executing runtime. */
+  elapsed_time_seconds?: number
   approval?: UIToolApproval
   execution_location?: UIExecutionLocation
   user_input?: UIUserInput
   background_task?: UIBackgroundTask
+  // UI-only unified diff attached to the tool call at execution time
+  // (edit/write tools). Never part of the model-facing tool result.
+  diff?: string
 }
 
 export interface UIExecutionLocation {
@@ -265,6 +281,7 @@ export interface UIUserInputQuestion {
 }
 
 export interface UIUserInputOption {
+  label_key?: string
   id: string
   label: string
   description?: string
@@ -298,7 +315,21 @@ export interface UINoticeMessage {
   args?: Record<string, string>
 }
 
-export type UIMessage = UITextMessage | UIReasoningMessage | UIToolMessage | UIAttachmentsMessage | UIErrorMessage | UINoticeMessage
+export interface UICommandMessage {
+  id: number
+  type: 'command'
+  name?: string
+  content: string
+}
+
+export interface UIStatusMessage {
+  id: number
+  type: 'status'
+  name?: string
+  args?: Record<string, string>
+}
+
+export type UIMessage = UITextMessage | UIReasoningMessage | UIToolMessage | UIAttachmentsMessage | UIErrorMessage | UINoticeMessage | UICommandMessage | UIStatusMessage
 
 export interface UISkillActivationSkill {
   name: string
@@ -315,9 +346,10 @@ export interface UISkillActivation {
 
 export interface UIUserTurn {
   turn_id: string
-  // Immutable turn-level sequence reserved at admission. Present on the
-  // settled (REST history) path; live runtime turns learn their identity
-  // from run_accepted instead.
+  // Immutable turn-level sequence reserved at admission. Present on both the
+  // settled (REST history) path and live runtime frames: the runtime stamps
+  // the position it allocated onto the run's request turn, and a steer's turn
+  // arrives already numbered from history once its step commits.
   turn_position?: number
   role: 'user'
   text: string
@@ -336,6 +368,7 @@ export interface UIUserTurn {
 }
 
 export interface UIAssistantTurn {
+  runtime_forkable?: boolean
   turn_id: string
   turn_position?: number
   role: 'assistant'
@@ -368,6 +401,10 @@ export interface UIStreamRunAcceptedEvent {
   invocation_id: string
   session_id: string
   turn_id: string
+  // The sequence admission drew for turn_id. Carried with the id so a locally
+  // rendered turn is ordered by the same key the settled page will use, rather
+  // than by when it happened to arrive.
+  turn_position?: number
   // A replay reserved no new observable position; its subscription snapshot is
   // authoritative, so duplicate acceptances may omit the cursor.
   epoch?: string
@@ -392,13 +429,16 @@ export interface UIStreamErrorEvent {
   session_id?: string
   code?: string
   message: string
-  feedback?: unknown
+  args?: Record<string, string>
 }
 
 export interface UIStreamSessionCreatedEvent {
   type: 'session_created'
   invocation_id: string
   session_id: string
+  /** The workdir the session was actually born bound to; absent when it has
+   *  none. A backend that predates in-band workdir binding never sends it. */
+  workdir_id?: string
 }
 
 export type RuntimeRunStatus =
@@ -425,8 +465,13 @@ export interface RuntimeRunOperation {
 }
 
 export interface RuntimeCurrentRunView {
+  configuration_only?: boolean
   run_id: string
   turn_id: string
+  // Immutable sequence of turn_id, allocated at admission. Present on every
+  // live frame so a running turn orders against settled history by position
+  // instead of falling back to timestamps.
+  turn_position?: number
   // The originating send's client-issued id, echoed so live frames can be
   // matched to the local optimistic turn by reading, not by timing inference.
   invocation_id?: string
@@ -445,18 +490,37 @@ export interface RuntimeCurrentRunView {
   // boundary. Claimed entries are provisional; applied entries reference the
   // settled history turn that replaces them.
   steer_turns?: RuntimeSteerTurnView[]
+  // The catalog code of the run's failure. The run view carries no error text;
+  // the client shows the copy for the code.
   error_code?: string
-  error?: string
   proposed_terminal_status?: RuntimeRunStatus
   finish_proposed_at?: string
   operation?: RuntimeRunOperation
+  // Present while the model call waits to be retried; cleared by the next
+  // visible output or when the run leaves execution.
+  retry?: RuntimeRunRetry
+}
+
+export type RuntimeRetryReason = 'rate_limited' | 'server_error' | 'stream_incomplete' | 'network'
+
+export interface RuntimeRunRetry {
+  attempt: number
+  max_attempt: number
+  delay_ms: number
+  reason?: RuntimeRetryReason
+  // Server time the next attempt is planned for, for countdowns.
+  retry_at: string
 }
 
 export interface RuntimeSteerTurnView {
   item_id: string
   status: 'claimed' | 'applied'
   text: string
+  // The durable turn this input opens, drawn when it was claimed. Present from
+  // the first claimed frame, so the live bubble and the settled one share an
+  // identity instead of rendering side by side until the step commits.
   turn_id?: string
+  turn_position?: number
   after_message_id: number
   timestamp: string
 }
@@ -474,9 +538,12 @@ export interface RuntimeCurrentRunPatch {
   run_id: string
   status?: RuntimeRunStatus
   error_code?: string
-  error?: string
   updated_at?: string
   owner_lease_expires_at?: string
+  // retry replaces the run's retry state, clear_retry removes it; with
+  // neither the state is unchanged.
+  retry?: RuntimeRunRetry
+  clear_retry?: boolean
 }
 
 export interface RuntimeMessageAppend {

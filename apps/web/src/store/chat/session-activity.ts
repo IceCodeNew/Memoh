@@ -26,22 +26,28 @@ export function createSessionActivity(deps: {
   updateKnownSessionTitle: (sessionId: string, title: string) => void
   refreshSessionsList: (botId: string) => Promise<void>
   refreshSessionMessages: (botId: string, sessionId: string) => Promise<void>
+  // Staleness signals for cached session views (see view-registry): a touch
+  // marks one view, a dropped frame means events were lost and every hidden
+  // view of the bot becomes unknowable.
+  markSessionViewStale?: (botId: string, sessionId: string) => void
+  markAllSessionViewsStale?: (botId: string) => void
 }) {
   const visibleSummaryRequests = new Map<string, Promise<SessionSummary | null>>()
   const compactingSessions = ref<Record<string, string[]>>({})
+  const scheduleActivityRevisions = ref<Record<string, number>>({})
   const manualCompactions = ref(new Map<string, symbol>())
   let loadMoreRequestVersion = 0
-  const notificationRefreshes = new Map<string, { pending: boolean }>()
+  const persistedSessionRefreshes = new Map<string, { pending: boolean }>()
 
-  function refreshNotification(botId: string, sessionId: string) {
+  function refreshPersistedSession(botId: string, sessionId: string) {
     const key = `${botId}:${sessionId}`
-    const existing = notificationRefreshes.get(key)
+    const existing = persistedSessionRefreshes.get(key)
     if (existing) {
       existing.pending = true
       return
     }
     const state = { pending: false }
-    notificationRefreshes.set(key, state)
+    persistedSessionRefreshes.set(key, state)
     const generation = deps.userScopeGeneration()
     void (async () => {
       do {
@@ -49,15 +55,22 @@ export function createSessionActivity(deps: {
         await deps.refreshSessionMessages(botId, sessionId)
       } while (state.pending && generation === deps.userScopeGeneration())
     })().catch((error) => {
-      console.error('Failed to refresh background notification:', error)
+      console.error('Failed to refresh persisted session:', error)
     }).finally(() => {
-      if (notificationRefreshes.get(key) === state) notificationRefreshes.delete(key)
+      if (persistedSessionRefreshes.get(key) === state) persistedSessionRefreshes.delete(key)
     })
   }
 
   function isSessionCompacting(botId: string, sessionId: string): boolean {
     return manualCompactions.value.has(`${botId}\u0000${sessionId}`)
       || (compactingSessions.value[botId]?.includes(sessionId) ?? false)
+  }
+
+  function markScheduleSnapshotStale(botId: string) {
+    scheduleActivityRevisions.value = {
+      ...scheduleActivityRevisions.value,
+      [botId]: (scheduleActivityRevisions.value[botId] ?? 0) + 1,
+    }
   }
 
   function beginSessionCompaction(botId: string, sessionId: string): (() => void) | null {
@@ -164,19 +177,40 @@ export function createSessionActivity(deps: {
   }
 
   function handleActivity(botId: string, event: BotSessionActivityEvent) {
+    if (event.type === 'activity_ready') return
+    if (event.type === 'session_invalidated') {
+      const sessionId = event.session_id.trim()
+      if (sessionId) deps.markSessionViewStale?.(botId, sessionId)
+      else deps.markAllSessionViewsStale?.(botId)
+      return
+    }
     if (event.type === 'session_compaction') {
       compactingSessions.value[botId] = event.session_ids
       return
     }
     if (event.type === 'ping') return
+    if (event.type === 'schedule_changed') {
+      markScheduleSnapshotStale(botId)
+      return
+    }
     if (event.type === 'dropped') {
+      deps.markAllSessionViewsStale?.(botId)
+      markScheduleSnapshotStale(botId)
       void deps.refreshSessionsList(botId)
       return
     }
     if (event.type === 'session_touched') {
       const sessionId = event.session_id.trim()
       if (!sessionId) return
-      if (event.reason === 'background_task') refreshNotification(botId, sessionId)
+      deps.markSessionViewStale?.(botId, sessionId)
+      const activeScheduleSession = (
+        (deps.currentBotId.value ?? '').trim() === botId
+        && (deps.sessionId.value ?? '').trim() === sessionId
+        && (deps.knownSession(sessionId)?.type ?? '').trim() === 'schedule'
+      )
+      if (event.reason === 'background_task' || activeScheduleSession) {
+        refreshPersistedSession(botId, sessionId)
+      }
       const touched = deps.touchKnownSession(sessionId, event.updated_at)
       if (touched.source === 'listed') return
       if (touched.source === 'remembered') {
@@ -203,13 +237,15 @@ export function createSessionActivity(deps: {
     ensureVisibleSessionSummary,
     loadMoreSessions,
     handleActivity,
+    scheduleActivityRevisions,
     isSessionCompacting,
     beginSessionCompaction,
     reset: () => {
       compactingSessions.value = {}
+      scheduleActivityRevisions.value = {}
       manualCompactions.value.clear()
       visibleSummaryRequests.clear()
-      notificationRefreshes.clear()
+      persistedSessionRefreshes.clear()
       loadMoreRequestVersion += 1
       deps.loadingMoreSessions.value = false
     },

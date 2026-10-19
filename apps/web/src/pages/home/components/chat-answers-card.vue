@@ -3,13 +3,17 @@
        The Q&A record is content the conversation refers back to — unlike the
        muted process capsule, which holds transient tool machinery — so it
        breaks out of the tool-call group (see renderNodes in message-item)
-       and takes a bordered card, never the capsule. bg-card lifts the card
-       off the page in dark mode (0.21 vs 0.152 surface); in light both are
-       effectively white, so the card stays quiet there. Question muted,
+       and takes a card, never the capsule. bg-card lifts the card off the
+       page in dark mode (0.21 vs 0.152 surface), so SurfaceCard drops the
+       hairline there; in light both are effectively white and the hairline
+       is the card's edge. Question muted,
        answer foreground: the Q→A reading without extra chrome.
        Width hugs the Q&A content (w-fit) instead of spanning the column —
        a full-width frame around two short lines reads as scaffolding. -->
-  <div class="w-fit max-w-full rounded-lg border border-border bg-card px-4 py-3">
+  <SurfaceCard
+    padding="row"
+    class="w-fit max-w-full"
+  >
     <div class="space-y-2.5">
       <div
         v-for="entry in entries"
@@ -26,10 +30,11 @@
         </p>
       </div>
     </div>
-  </div>
+  </SurfaceCard>
 </template>
 
 <script setup lang="ts">
+import { SurfaceCard } from '@felinic/ui'
 import { computed } from 'vue'
 import { useI18n } from 'vue-i18n'
 import type { ToolCallBlock } from '@/store/chat-list'
@@ -42,7 +47,7 @@ const { t } = useI18n()
 // display-safe shape, so the card never touches the raw input JSON (#868).
 type ResultAnswer = {
   question?: string
-  selected?: { label?: string }[]
+  selected?: { label?: string, label_key?: string }[]
   custom_text?: string
   text?: string
   skipped?: boolean
@@ -81,7 +86,7 @@ function terminalNote(status?: string): string {
 function answerText(a: ResultAnswer): string {
   if (a.skipped) return t('chat.answers.skipped')
   const parts: string[] = []
-  if (a.selected?.length) parts.push(a.selected.map(s => s.label ?? '').filter(Boolean).join(', '))
+  if (a.selected?.length) parts.push(a.selected.map(s => s.label_key ? t(s.label_key) : s.label ?? '').filter(Boolean).join(', '))
   if (a.custom_text) parts.push(a.custom_text)
   if (a.text) parts.push(a.text)
   return parts.filter(Boolean).join(', ')

@@ -36,11 +36,12 @@ func NewConnectorsHandler(
 func (h *ConnectorsHandler) Register(e *echo.Echo) {
 	e.GET("/connectors/catalog", h.ListCatalog)
 
+	// Connections are created through Apps (/bots/:bot_id/apps); here they
+	// are listed, toggled, reauthorized and disconnected. App updates only
+	// unlink a connection, so disconnecting is the user's explicit action.
 	group := e.Group("/bots/:bot_id/connectors")
 	group.GET("", h.List)
 	group.GET("/:connection_id", h.Get)
-	group.POST("/oauth", h.BeginOAuth)
-	group.POST("/api-key", h.CreateCredential)
 	group.PATCH("/:connection_id", h.SetEnabled)
 	group.DELETE("/:connection_id", h.Delete)
 	group.POST("/:connection_id/reauth", h.Reauthorize)
@@ -53,12 +54,12 @@ func (h *ConnectorsHandler) Register(e *echo.Echo) {
 // @Param bot_id path string true "Bot ID"
 // @Param connection_id path string true "Connect-It connection ID"
 // @Success 200 {object} connectors.Connector
-// @Failure 400 {object} apperror.Problem
-// @Failure 403 {object} ErrorResponse
-// @Failure 404 {object} apperror.Problem
-// @Failure 500 {object} apperror.Problem
-// @Failure 502 {object} apperror.Problem
-// @Failure 503 {object} apperror.Problem
+// @Failure 400 {object} server.Problem
+// @Failure 403 {object} server.Problem
+// @Failure 404 {object} server.Problem
+// @Failure 500 {object} server.Problem
+// @Failure 502 {object} server.Problem
+// @Failure 503 {object} server.Problem
 // @Router /bots/{bot_id}/connectors/{connection_id} [get].
 func (h *ConnectorsHandler) Get(c echo.Context) error {
 	botID, err := h.authorize(c)
@@ -97,11 +98,11 @@ type ConnectorEnabledRequest struct {
 // @Tags connectors
 // @Param bot_id path string true "Bot ID"
 // @Success 200 {object} connectors.ListResponse
-// @Failure 403 {object} ErrorResponse
-// @Failure 404 {object} apperror.Problem
-// @Failure 500 {object} apperror.Problem
-// @Failure 502 {object} apperror.Problem
-// @Failure 503 {object} apperror.Problem
+// @Failure 403 {object} server.Problem
+// @Failure 404 {object} server.Problem
+// @Failure 500 {object} server.Problem
+// @Failure 502 {object} server.Problem
+// @Failure 503 {object} server.Problem
 // @Router /bots/{bot_id}/connectors [get].
 func (h *ConnectorsHandler) List(c echo.Context) error {
 	botID, err := h.authorize(c)
@@ -112,7 +113,11 @@ func (h *ConnectorsHandler) List(c echo.Context) error {
 	if err != nil {
 		return connectorHTTPError(err)
 	}
-	return c.JSON(http.StatusOK, connectors.ListResponse{Items: items})
+	response := connectors.ListResponse{Items: items}
+	if status, ok := h.service.ToolDiscoveryStatus(botID); ok {
+		response.ToolDiscovery = &status
+	}
+	return c.JSON(http.StatusOK, response)
 }
 
 // ListCatalog godoc
@@ -120,92 +125,22 @@ func (h *ConnectorsHandler) List(c echo.Context) error {
 // @Description List providers available from the configured Connect-It deployment.
 // @Tags connectors
 // @Success 200 {array} connectsdk.Connector
-// @Failure 403 {object} ErrorResponse
-// @Failure 502 {object} apperror.Problem
-// @Failure 503 {object} apperror.Problem
+// @Failure 403 {object} server.Problem
+// @Failure 502 {object} server.Problem
+// @Failure 503 {object} server.Problem
 // @Router /connectors/catalog [get].
 func (h *ConnectorsHandler) ListCatalog(c echo.Context) error {
 	if _, err := RequireChannelIdentityID(c); err != nil {
 		return err
 	}
+	// The catalog is the upstream's own shape, so the response keeps the SDK
+	// type the OpenAPI annotation below names.
+	var items []connectsdk.Connector
 	items, err := h.service.ListCatalog(c.Request().Context())
 	if err != nil {
 		return connectorHTTPError(err)
 	}
 	return c.JSON(http.StatusOK, items)
-}
-
-// BeginOAuth godoc
-// @Summary Connect an OAuth provider
-// @Description Create a bot connector and return the end-user authorization URL.
-// @Tags connectors
-// @Param bot_id path string true "Bot ID"
-// @Param payload body ConnectorOAuthRequest true "OAuth request"
-// @Success 201 {object} connectsdk.OAuthAuthorization
-// @Failure 400 {object} apperror.Problem
-// @Failure 403 {object} ErrorResponse
-// @Failure 404 {object} apperror.Problem
-// @Failure 409 {object} apperror.Problem
-// @Failure 500 {object} apperror.Problem
-// @Failure 502 {object} apperror.Problem
-// @Failure 503 {object} apperror.Problem
-// @Router /bots/{bot_id}/connectors/oauth [post].
-func (h *ConnectorsHandler) BeginOAuth(c echo.Context) error {
-	botID, err := h.authorize(c)
-	if err != nil {
-		return err
-	}
-	var request ConnectorOAuthRequest
-	if err := c.Bind(&request); err != nil {
-		return apperror.Wrap(apperror.CodeConnectorRequestInvalid, err, nil)
-	}
-	result, err := h.service.BeginOAuth(
-		c.Request().Context(),
-		botID,
-		request.ConnectorType,
-		request.AuthMethod,
-	)
-	if err != nil {
-		return connectorHTTPError(err)
-	}
-	return c.JSON(http.StatusCreated, result)
-}
-
-// CreateCredential godoc
-// @Summary Connect an API credential provider
-// @Description Send credential fields to Connect-It and store only its connection ID in Memoh.
-// @Tags connectors
-// @Param bot_id path string true "Bot ID"
-// @Param payload body ConnectorCredentialRequest true "Credential request"
-// @Success 201 {object} connectors.Connector
-// @Failure 400 {object} apperror.Problem
-// @Failure 403 {object} ErrorResponse
-// @Failure 404 {object} apperror.Problem
-// @Failure 409 {object} apperror.Problem
-// @Failure 500 {object} apperror.Problem
-// @Failure 502 {object} apperror.Problem
-// @Failure 503 {object} apperror.Problem
-// @Router /bots/{bot_id}/connectors/api-key [post].
-func (h *ConnectorsHandler) CreateCredential(c echo.Context) error {
-	botID, err := h.authorize(c)
-	if err != nil {
-		return err
-	}
-	var request ConnectorCredentialRequest
-	if err := c.Bind(&request); err != nil {
-		return apperror.Wrap(apperror.CodeConnectorRequestInvalid, err, nil)
-	}
-	result, err := h.service.CreateCredential(
-		c.Request().Context(),
-		botID,
-		request.ConnectorType,
-		request.AuthMethod,
-		request.Fields,
-	)
-	if err != nil {
-		return connectorHTTPError(err)
-	}
-	return c.JSON(http.StatusCreated, result)
 }
 
 // SetEnabled godoc
@@ -216,12 +151,12 @@ func (h *ConnectorsHandler) CreateCredential(c echo.Context) error {
 // @Param connection_id path string true "Connect-It connection ID"
 // @Param payload body ConnectorEnabledRequest true "Enabled state"
 // @Success 204
-// @Failure 400 {object} apperror.Problem
-// @Failure 403 {object} ErrorResponse
-// @Failure 404 {object} apperror.Problem
-// @Failure 500 {object} apperror.Problem
-// @Failure 502 {object} apperror.Problem
-// @Failure 503 {object} apperror.Problem
+// @Failure 400 {object} server.Problem
+// @Failure 403 {object} server.Problem
+// @Failure 404 {object} server.Problem
+// @Failure 500 {object} server.Problem
+// @Failure 502 {object} server.Problem
+// @Failure 503 {object} server.Problem
 // @Router /bots/{bot_id}/connectors/{connection_id} [patch].
 func (h *ConnectorsHandler) SetEnabled(c echo.Context) error {
 	botID, err := h.authorize(c)
@@ -245,27 +180,27 @@ func (h *ConnectorsHandler) SetEnabled(c echo.Context) error {
 
 // Delete godoc
 // @Summary Disconnect a connector
-// @Description Delete the Connect-It credential and remove its bot binding.
+// @Description Delete the Connect-It credential, remove its bot binding and unlink it from every App that referenced it; those Apps ask for authorization again.
 // @Tags connectors
 // @Param bot_id path string true "Bot ID"
 // @Param connection_id path string true "Connect-It connection ID"
 // @Success 204
-// @Failure 400 {object} apperror.Problem
-// @Failure 403 {object} ErrorResponse
-// @Failure 404 {object} apperror.Problem
-// @Failure 409 {object} apperror.Problem
-// @Failure 500 {object} apperror.Problem
-// @Failure 502 {object} apperror.Problem
-// @Failure 503 {object} apperror.Problem
+// @Failure 400 {object} server.Problem
+// @Failure 403 {object} server.Problem
+// @Failure 404 {object} server.Problem
+// @Failure 409 {object} server.Problem
+// @Failure 500 {object} server.Problem
+// @Failure 502 {object} server.Problem
+// @Failure 503 {object} server.Problem
 // @Router /bots/{bot_id}/connectors/{connection_id} [delete].
 func (h *ConnectorsHandler) Delete(c echo.Context) error {
 	botID, err := h.authorize(c)
 	if err != nil {
 		return err
 	}
-	if err := h.service.Delete(
-		c.Request().Context(), botID, strings.TrimSpace(c.Param("connection_id")),
-	); err != nil {
+	ctx := c.Request().Context()
+	connectionID := strings.TrimSpace(c.Param("connection_id"))
+	if err := h.service.Delete(ctx, botID, connectionID); err != nil {
 		return connectorHTTPError(err)
 	}
 	return c.NoContent(http.StatusNoContent)
@@ -278,13 +213,13 @@ func (h *ConnectorsHandler) Delete(c echo.Context) error {
 // @Param bot_id path string true "Bot ID"
 // @Param connection_id path string true "Connect-It connection ID"
 // @Success 200 {object} connectsdk.OAuthAuthorization
-// @Failure 400 {object} apperror.Problem
-// @Failure 403 {object} ErrorResponse
-// @Failure 404 {object} apperror.Problem
-// @Failure 409 {object} apperror.Problem
-// @Failure 500 {object} apperror.Problem
-// @Failure 502 {object} apperror.Problem
-// @Failure 503 {object} apperror.Problem
+// @Failure 400 {object} server.Problem
+// @Failure 403 {object} server.Problem
+// @Failure 404 {object} server.Problem
+// @Failure 409 {object} server.Problem
+// @Failure 500 {object} server.Problem
+// @Failure 502 {object} server.Problem
+// @Failure 503 {object} server.Problem
 // @Router /bots/{bot_id}/connectors/{connection_id}/reauth [post].
 func (h *ConnectorsHandler) Reauthorize(c echo.Context) error {
 	botID, err := h.authorize(c)
@@ -329,27 +264,13 @@ func (h *ConnectorsHandler) authorize(c echo.Context) (string, error) {
 
 func connectorHTTPError(err error) error {
 	switch {
-	case errors.Is(err, connectors.ErrInvalidInput):
-		return apperror.Wrap(apperror.CodeConnectorRequestInvalid, err, nil)
 	case errors.Is(err, connectors.ErrNotConfigured):
 		return apperror.New(apperror.CodeConnectorNotConfigured, nil)
 	case errors.Is(err, pgx.ErrNoRows):
 		return apperror.New(apperror.CodeConnectorNotFound, nil)
 	}
-	var apiErr *connectsdk.APIError
-	if errors.As(err, &apiErr) {
-		switch apiErr.StatusCode {
-		case http.StatusBadRequest, http.StatusUnprocessableEntity:
-			return apperror.Wrap(apperror.CodeConnectorRequestRejected, err, nil)
-		case http.StatusNotFound:
-			return apperror.Wrap(apperror.CodeConnectorNotFound, err, nil)
-		case http.StatusConflict:
-			return apperror.Wrap(apperror.CodeConnectorConflict, err, nil)
-		}
-		return apperror.Wrap(apperror.CodeConnectorUpstreamUnavailable, err, nil)
-	}
-	if errors.Is(err, connectors.ErrUpstreamUnavailable) {
-		return apperror.Wrap(apperror.CodeConnectorUpstreamUnavailable, err, nil)
+	if code := connectors.CodeOf(err); code != "" {
+		return apperror.Wrap(code, err, nil)
 	}
 	return apperror.Wrap(apperror.CodeConnectorOperationFailed, err, nil)
 }

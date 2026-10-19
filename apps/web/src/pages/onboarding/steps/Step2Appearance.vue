@@ -7,7 +7,7 @@ import { Button, FieldStack, Select, SelectContent, SelectItem, SelectTrigger, S
 import { Moon, Sun } from 'lucide-vue-next'
 import ColorSchemeCard from '@/components/color-scheme-card/index.vue'
 import { colorSchemes } from '@/constants/color-schemes'
-import type { Locale } from '@/i18n'
+import { LOCALE_OPTIONS, type Locale } from '@/i18n'
 import { useStepTransition } from '../useStepTransition'
 import StepFrame from '../components/step-frame.vue'
 import StepExitShell from '../components/step-exit-shell.vue'
@@ -39,18 +39,19 @@ const { visible, exiting, leave } = useStepTransition()
                 :model-value="language"
                 @update:model-value="(value) => value && setLanguage(value as Locale)"
               >
-                <SelectTrigger class="w-full">
+                <SelectTrigger
+                  class="w-full"
+                  data-hover-lighten
+                >
                   <SelectValue :placeholder="t('settings.languagePlaceholder')" />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="zh">
-                    {{ t('settings.langZh') }}
-                  </SelectItem>
-                  <SelectItem value="en">
-                    {{ t('settings.langEn') }}
-                  </SelectItem>
-                  <SelectItem value="ja">
-                    {{ t('settings.langJa') }}
+                  <SelectItem
+                    v-for="option in LOCALE_OPTIONS"
+                    :key="option.value"
+                    :value="option.value"
+                  >
+                    {{ option.label }}
                   </SelectItem>
                 </SelectContent>
               </Select>

@@ -3,6 +3,7 @@ import type { DependencyItem } from '@/composables/api/useWorkspaceDependencies'
 import {
   dependencyText,
   dependencyIsInstalled,
+  dependencyLastError,
   dependencyMenuActions,
   dependencyNeedsAttention,
   dependencyPrimaryAction,
@@ -11,6 +12,9 @@ import {
   validDependencyVersion,
   dependencyUpdateOperation,
   formatDependencyVersion,
+  missingPrerequisites,
+  prerequisiteOrder,
+  prerequisiteRevisions,
   sortDependencies,
 } from './workspace-dependency'
 
@@ -180,49 +184,43 @@ describe('dependencyPrimaryAction', () => {
     expect(dependencyPrimaryAction(item({ platform_supported: false, actions: ['install'] }), running)).toBeNull()
   })
 
-  it.each(['not_running', 'missing', 'remote_offline', undefined] as const)('disables the button while the workspace is %s', (state) => {
+  it.each(['not_running', 'missing', undefined] as const)('disables the button while the workspace is %s', (state) => {
     expect(dependencyPrimaryAction(item({ actions: ['install'] }), state)).toMatchObject({ kind: 'install', disabled: true })
   })
 })
 
 describe('dependencyMenuActions', () => {
-  it('lists reinstall, rollback, script, and remove for an installed managed row', () => {
+  it('lists reinstall, rollback and script for an installed managed row', () => {
     const actions = dependencyMenuActions(item({
       status: 'installed',
       previous_version: 'v0.147.0',
       actions: ['update', 'reinstall', 'remove', 'rollback'],
     }), 'running')
-    expect(actions.map(action => action.kind)).toEqual(['reinstall', 'rollback', 'viewScript', 'remove'])
+    expect(actions.map(action => action.kind)).toEqual(['reinstall', 'rollback', 'viewScript'])
     expect(actions[1]).toMatchObject({ args: { version: '0.147.0' }, disabled: false })
     expect(actions[2]).toMatchObject({ separatorBefore: true, disabled: false })
-    expect(actions[3]).toMatchObject({ destructive: true, disabled: false })
   })
 
   it('reinstalls a preinstalled copy through install, including when an update is available', () => {
     const actions = dependencyMenuActions(imageCopy(), 'running')
-    expect(actions.map(action => action.kind)).toEqual(['reinstall', 'viewScript', 'remove'])
+    expect(actions.map(action => action.kind)).toEqual(['reinstall', 'viewScript'])
     expect(actions[0]).toMatchObject({ labelKey: 'bots.dependencies.action.reinstall', operation: 'install', disabled: false })
     expect(dependencyMenuActions(imageCopy({ latest_version: '24.15.0' }), 'running')).toEqual(actions)
   })
 
-  it('keeps reinstall and remove beside Update for a managed dependency', () => {
+  it('keeps reinstall beside Update for a managed dependency', () => {
     const updatable = item({ status: 'installed', latest_version: '2', installed_version: '1', actions: ['update', 'reinstall', 'remove'] })
     expect(dependencyPrimaryAction(updatable, 'running')).toMatchObject({ kind: 'update', operation: 'update' })
     expect(dependencyMenuActions(updatable, 'running')).toEqual([
       expect.objectContaining({ kind: 'reinstall', operation: 'reinstall' }),
       expect.objectContaining({ kind: 'viewScript' }),
-      expect.objectContaining({ kind: 'remove', labelKey: 'bots.dependencies.action.remove' }),
     ])
   })
 
-  it('removes an image copy and an overlay with the same menu action', () => {
+  it('never offers removal per dependency: the App that references it removes it', () => {
     const overlay = imageCopy({ source: 'managed', overlay: true, actions: ['update', 'reinstall', 'remove'] })
-    expect(dependencyMenuActions(overlay, 'running').at(-1)).toMatchObject({
-      kind: 'remove', labelKey: 'bots.dependencies.action.remove',
-    })
-    expect(dependencyMenuActions(imageCopy({ latest_version: '24.15.0' }), 'running').at(-1)).toMatchObject({
-      kind: 'remove', labelKey: 'bots.dependencies.action.remove', disabled: false,
-    })
+    expect(dependencyMenuActions(overlay, 'running').map(action => String(action.kind))).not.toContain('remove')
+    expect(dependencyMenuActions(imageCopy({ latest_version: '24.15.0' }), 'running').map(action => String(action.kind))).not.toContain('remove')
     // After removal no copy or record remains, so the installed list drops it.
     expect(dependencyIsInstalled(item({ actions: ['install'] }))).toBe(false)
   })
@@ -239,7 +237,7 @@ describe('dependencyMenuActions', () => {
 
   it('offers script and remove for a missing row, script only for an uninstalled one', () => {
     expect(dependencyMenuActions(item({ status: 'missing', actions: ['install', 'remove'] }), 'running').map(action => action.kind))
-      .toEqual(['viewScript', 'remove'])
+      .toEqual(['viewScript'])
     expect(dependencyMenuActions(item({ actions: ['install'] }), 'running').map(action => action.kind)).toEqual(['viewScript'])
   })
 
@@ -250,7 +248,7 @@ describe('dependencyMenuActions', () => {
   it('hides rollback until the Server lists it, even with a previous version recorded', () => {
     const kinds = dependencyMenuActions(item({ status: 'installed', previous_version: '0.1.0', actions: ['update', 'reinstall', 'remove'] }), 'running')
       .map(action => action.kind)
-    expect(kinds).toEqual(['reinstall', 'viewScript', 'remove'])
+    expect(kinds).toEqual(['reinstall', 'viewScript'])
   })
 
   it('has no menu at all when the Server lists no scripted action', () => {
@@ -335,5 +333,50 @@ describe('validDependencyVersion', () => {
 
   it.each(['../current', '1..2', '/tmp/version', '-latest', 'https://example.com/cli', '1; id', '$(id)', '1\n2', '^1.0.0', 'x'.repeat(129)])('rejects paths, arguments and malformed versions: %j', (version) => {
     expect(validDependencyVersion(version)).toBe(false)
+  })
+})
+
+describe('prerequisites', () => {
+  const requires: Record<string, string[]> = {
+    pandoc: ['python', 'micromamba'],
+    poppler: ['python', 'micromamba'],
+    micromamba: ['python'],
+  }
+
+  it('orders shared prerequisites once, before what needs them', () => {
+    expect(prerequisiteOrder(['pandoc', 'poppler'], id => requires[id])).toEqual(['python', 'micromamba'])
+    expect(prerequisiteOrder(['micromamba', 'pandoc'], id => requires[id])).toEqual(['python'])
+  })
+
+  it('lists only prerequisites the workspace lacks', () => {
+    const items = [
+      item({ id: 'pandoc', requires: requires.pandoc }),
+      item({ id: 'micromamba', status: undefined, requires: requires.micromamba }),
+      item({ id: 'python', status: 'installed' }),
+    ]
+    expect(missingPrerequisites(items[0]!, items).map(entry => entry.id)).toEqual(['micromamba'])
+  })
+
+  it('confirms the revision of every prerequisite the dialog showed', () => {
+    const items = [
+      item({ id: 'pandoc', definition_revision: 'r-pandoc', requires: requires.pandoc }),
+      item({ id: 'micromamba', definition_revision: 'r-mamba', requires: requires.micromamba }),
+      item({ id: 'python', status: 'installed', definition_revision: 'r-python' }),
+    ]
+    expect(prerequisiteRevisions(items[0]!, items)).toEqual({ python: 'r-python', micromamba: 'r-mamba' })
+  })
+})
+
+describe('dependencyLastError', () => {
+  const translate = (key: string) => `t:${key}`
+
+  it('renders the catalog copy when the record carries a code', () => {
+    expect(dependencyLastError(item({ last_error_code: 'workspace_dependency.busy', last_error: 'old sentence' }), translate))
+      .toBe('t:errors.workspace_dependency.busy')
+  })
+
+  it('shows the text of an earlier server when the record has no code', () => {
+    expect(dependencyLastError(item({ last_error: ' download failed ' }), translate)).toBe('download failed')
+    expect(dependencyLastError(item(), translate)).toBe('')
   })
 })

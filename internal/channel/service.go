@@ -22,6 +22,10 @@ import (
 // ErrChannelConfigNotFound indicates the bot has no persisted config for the channel type.
 var ErrChannelConfigNotFound = errors.New("channel config not found")
 
+// ErrChannelIdentityConfigNotFound indicates the channel identity has no
+// binding for the channel type.
+var ErrChannelIdentityConfigNotFound = errors.New("channel user config not found")
+
 // ErrChannelDiscoveryFailed indicates that a platform-side self identity check failed.
 var ErrChannelDiscoveryFailed = errors.New("channel identity discovery failed")
 
@@ -49,6 +53,9 @@ func (s *Store) UpsertConfig(ctx context.Context, botID string, channelType Chan
 	}
 	normalized, err := s.registry.NormalizeConfig(channelType, req.Credentials)
 	if err != nil {
+		if s.registry.SelfIdentityPolicy(channelType).RequireDiscoveryOnEnable {
+			return ChannelConfig{}, fmt.Errorf("%s configuration verification failed: %w: %w", channelType, ErrChannelDiscoveryFailed, err)
+		}
 		return ChannelConfig{}, err
 	}
 	credentialsPayload, err := json.Marshal(normalized)
@@ -250,7 +257,7 @@ func (s *Store) prepareSelfIdentity(
 			if message == "" {
 				message = fmt.Sprintf("%s identity discovery returned no required identity", channelType)
 			}
-			return nil, "", errors.New(message)
+			return nil, "", fmt.Errorf("%s: %w", message, ErrChannelDiscoveryFailed)
 		}
 	}
 	return selfIdentity, externalIdentity, nil
@@ -457,7 +464,7 @@ func (s *Store) GetChannelIdentityConfig(ctx context.Context, channelIdentityID 
 	})
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
-			return ChannelIdentityBinding{}, errors.New("channel user config not found")
+			return ChannelIdentityBinding{}, ErrChannelIdentityConfigNotFound
 		}
 		return ChannelIdentityBinding{}, err
 	}

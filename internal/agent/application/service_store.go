@@ -64,7 +64,7 @@ func (s *Service) storeRoundWithOptionsResult(ctx context.Context, req ChatReque
 	filtered := make([]ModelMessage, 0, len(fullRound))
 	for _, m := range fullRound {
 		if m.Role == "assistant" && isEmptyAssistantMessage(m) && !opts.AllowEmptyAssistantText {
-			s.logger.Warn("skipping empty assistant message in storeRound",
+			s.logger.WarnContext(ctx, "skipping empty assistant message in storeRound",
 				slog.String("bot_id", req.BotID),
 			)
 			continue
@@ -86,7 +86,7 @@ func (s *Service) storeRoundWithOptionsResult(ctx context.Context, req ChatReque
 		if opts.RequireCompletePersist {
 			return persisted, fmt.Errorf("persisted %d of %d messages", len(persisted), len(filtered))
 		}
-		s.logger.Warn("skipping memory extraction for partially persisted round",
+		s.logger.WarnContext(ctx, "skipping memory extraction for partially persisted round",
 			slog.String("bot_id", req.BotID),
 			slog.Int("persisted", len(persisted)),
 			slog.Int("expected", len(filtered)),
@@ -94,7 +94,7 @@ func (s *Service) storeRoundWithOptionsResult(ctx context.Context, req ChatReque
 		return persisted, nil
 	}
 	if !opts.SkipMemory && !req.SkipMemoryExtraction {
-		go s.storeMemory(context.WithoutCancel(ctx), req, persisted)
+		s.storeMemory(context.WithoutCancel(ctx), req, persisted)
 	}
 
 	return persisted, nil
@@ -196,7 +196,7 @@ func (s *Service) StoreRound(ctx context.Context, botID, sessionID, channelIdent
 func (s *Service) storeMessages(ctx context.Context, req ChatRequest, messages []ModelMessage, modelID string, opts storeRoundOptions) []messagepkg.Message {
 	persisted, err := s.storeMessagesResult(ctx, req, messages, modelID, opts)
 	if err != nil {
-		s.logger.Warn("persist message round failed", slog.Any("error", err))
+		s.logger.WarnContext(ctx, "persist message round failed", slog.Any("error", err))
 	}
 	return persisted
 }
@@ -212,9 +212,8 @@ func (s *Service) storeMessagesResult(ctx context.Context, req ChatRequest, mess
 	if err != nil {
 		return nil, fmt.Errorf("prepare messages for persistence: %w", err)
 	}
-	// Persist the complete round and any runtime checkpoint watermark in one
-	// transaction so a staged snapshot cannot become canonical before every
-	// message in its round exists.
+	// Persist the complete round and its runtime publication in one
+	// transaction so warm processes observe only committed rounds.
 	if opts.RequireCompletePersist {
 		atomic, ok := s.messageService.(messagepkg.AtomicRoundPersister)
 		if !ok {
@@ -282,6 +281,7 @@ func (s *Service) buildPersistInputs(ctx context.Context, req ChatRequest, messa
 		turnRequestMessageID = strings.TrimSpace(req.PersistedUserMessageID)
 	}
 	persistInputs := make([]messagepkg.PersistInput, 0, len(messages))
+	originalQueryAvailable := !req.UserMessagePersisted && !req.ReusePersistedUserMessage
 	for i, msg := range messages {
 		msg = normalizeUserMessageContent(msg)
 
@@ -292,6 +292,12 @@ func (s *Service) buildPersistInputs(ctx context.Context, req ChatRequest, messa
 				msg = pruned
 			}
 		}
+
+		// Lift UI-only diffs out of tool-call providerMetadata before the
+		// content column is written: inside content they would count against
+		// the history byte budget; on the row's metadata they still reach the
+		// UI converter via ToolCallDiffsMetadataKey.
+		msg, toolCallDiffs := historyfrag.ExtractToolCallDiffs(msg)
 
 		content, err := historyfrag.MarshalStoredModelMessage(msg)
 		if err != nil {
@@ -310,32 +316,23 @@ func (s *Service) buildPersistInputs(ctx context.Context, req ChatRequest, messa
 		// synthetic mid-turn message that must not claim the turn's identity.
 		turnID := ""
 		var turnPosition *int64
-		if msg.Role == "user" {
+		isInternalFeedback := msg.Source == turnpkg.MessageSourceInternalFeedback
+		if msg.Role == "user" && !isInternalFeedback {
 			messageSenderChannelIdentityID = senderChannelIdentityID
 			messageSenderUserID = senderUserID
 
-			// Only the user message whose text matches req.Query is the
-			// "real" turn-leading query from the user. Other user-role
-			// messages in this round are synthetic — typically:
-			//   1. Mid-turn IM platform injects (the user typed again
-			//      while the bot was working).
-			//   2. The image-only user message that the read-media tool
-			//      decoration appends after a successful image read so
-			//      that the next LLM step can see the image.
-			// For (2) the message has no text content; for both (1) and
-			// (2), splatting req.RawQuery / req.ExternalMessageID /
-			// req.EventID across them was wrong: it forced the UI to
-			// display the original query text on a synthetic image-only
-			// turn (the read-tool case), and falsely linked unrelated
-			// messages to the same inbound IM event.
+			// Apply the inbound event and display metadata only to its original
+			// query; steered user messages retain their own text. Internal model
+			// feedback bypasses this user-message path based on its source.
 			ownText := strings.TrimSpace(msg.TextContent())
 			isOriginalSkillActivation := req.UserMessageKind == UserMessageKindSkillActivation &&
 				strings.TrimSpace(req.Query) == "" &&
 				ownText == "" &&
 				i == 0
-			isOriginalQuery := (ownText != "" && ownText == strings.TrimSpace(req.Query)) || isOriginalSkillActivation
+			isOriginalQuery := originalQueryAvailable && ((ownText != "" && ownText == strings.TrimSpace(req.Query)) || isOriginalSkillActivation)
 
 			if isOriginalQuery {
+				originalQueryAvailable = false
 				externalMessageID = req.ExternalMessageID
 				sourceReplyToMessageID = req.SourceReplyToMessageID
 				messageEventID = req.EventID
@@ -358,17 +355,22 @@ func (s *Service) buildPersistInputs(ctx context.Context, req ChatRequest, messa
 				assets = chatAttachmentsToAssetRefs(req.Attachments)
 				persistMeta = mergeMetadata(meta, buildInteractionMetadata(req))
 			} else {
-				// Use the message's own text as display text. For the
-				// read-media image-only injection this is empty, so
-				// DisplayContent stays empty and ConvertMessagesToUITurns
-				// drops the turn entirely (no text + no assets).
 				displayText = ownText
 			}
-		} else if strings.TrimSpace(req.ExternalMessageID) != "" {
+		} else if !isInternalFeedback && strings.TrimSpace(req.ExternalMessageID) != "" {
 			sourceReplyToMessageID = req.ExternalMessageID
 		}
 		if i == lastAssistantIdx && len(outboundAssets) > 0 {
 			assets = append(assets, outboundAssets...)
+		}
+		if len(toolCallDiffs) > 0 {
+			persistMeta = mergeMetadata(persistMeta, map[string]any{
+				messagepkg.ToolCallDiffsMetadataKey: toolCallDiffs,
+			})
+		}
+		if isInternalFeedback {
+			persistMeta = mergeMetadata(persistMeta, map[string]any{messagepkg.MessageSourceMetadataKey: messagepkg.MessageSourceInternalFeedback})
+			displayText = ""
 		}
 		if extraMeta := opts.MessageMetadataByIndex[i]; len(extraMeta) > 0 {
 			persistMeta = mergeMetadata(persistMeta, extraMeta)
@@ -447,10 +449,10 @@ func (s *Service) persistMessageInputs(ctx context.Context, inputs []messagepkg.
 		}
 		persistedMessage, err := s.messageService.Persist(ctx, input)
 		if err != nil {
-			s.logger.Warn("persist message failed", slog.Any("error", err))
+			s.logger.WarnContext(ctx, "persist message failed", slog.Any("error", err))
 			continue
 		}
-		if strings.EqualFold(strings.TrimSpace(input.Role), "user") && !input.SkipHistoryTurn {
+		if strings.EqualFold(strings.TrimSpace(input.Role), "user") && !input.SkipHistoryTurn && !messagepkg.IsInternalFeedback(input.Metadata) {
 			turnRequestMessageID = persistedMessage.ID
 		}
 		persisted = append(persisted, persistedMessage)
@@ -752,7 +754,7 @@ func (s *Service) LinkOutboundAssets(ctx context.Context, botID, sessionID strin
 		msgs, err = s.messageService.ListLatest(ctx, botID, anchorSearchWindow)
 	}
 	if err != nil {
-		s.logger.Warn("LinkOutboundAssets: list latest failed", slog.Any("error", err))
+		s.logger.WarnContext(ctx, "LinkOutboundAssets: list latest failed", slog.Any("error", err))
 		return
 	}
 
@@ -764,7 +766,7 @@ func (s *Service) LinkOutboundAssets(ctx context.Context, botID, sessionID strin
 		}
 	}
 	if latestAssistantID == "" {
-		s.logger.Warn("LinkOutboundAssets: no assistant message found", slog.String("bot_id", botID))
+		s.logger.WarnContext(ctx, "LinkOutboundAssets: no assistant message found", slog.String("bot_id", botID))
 		return
 	}
 
@@ -776,7 +778,7 @@ func (s *Service) LinkOutboundAssets(ctx context.Context, botID, sessionID strin
 			if id := findAssistantMessageForToolCall(msgs, strings.TrimSpace(toolCallID)); id != "" {
 				targetID = id
 			} else {
-				s.logger.Debug("LinkOutboundAssets: tool call not found in search window, anchoring to latest assistant",
+				s.logger.DebugContext(ctx, "LinkOutboundAssets: tool call not found in search window, anchoring to latest assistant",
 					slog.String("tool_call_id", strings.TrimSpace(toolCallID)))
 			}
 		}
@@ -791,7 +793,7 @@ func (s *Service) LinkOutboundAssets(ctx context.Context, botID, sessionID strin
 			group[i].Ordinal = i
 		}
 		if linkErr := s.messageService.LinkAssets(ctx, id, group); linkErr != nil {
-			s.logger.Warn("LinkOutboundAssets: link failed", slog.Any("error", linkErr))
+			s.logger.WarnContext(ctx, "LinkOutboundAssets: link failed", slog.Any("error", linkErr))
 		}
 	}
 }

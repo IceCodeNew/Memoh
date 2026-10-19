@@ -54,7 +54,7 @@ func TestDisconnectedScriptCompletionRecoversWithoutServerMemory(t *testing.T) {
 				t.Fatal(err)
 			}
 			if action == catalog.ActionRemove {
-				if _, err := f.svc.Install(f.ctx(), testBot, testTarget, "foo", "1.0.0", nil); err != nil {
+				if _, err := f.svc.Install(f.ctx(), testBot, "foo", "1.0.0", nil); err != nil {
 					t.Fatal(err)
 				}
 			}
@@ -68,9 +68,9 @@ func TestDisconnectedScriptCompletionRecoversWithoutServerMemory(t *testing.T) {
 				}
 			})
 			if action == catalog.ActionInstall {
-				_, err = f.svc.Install(ctx, testBot, testTarget, "foo", "1.0.0", sink)
+				_, err = f.svc.Install(ctx, testBot, "foo", "1.0.0", sink)
 			} else {
-				_, err = f.svc.Remove(ctx, testBot, testTarget, "foo", sink)
+				_, err = f.svc.Remove(ctx, testBot, "foo", sink)
 			}
 			if !ready || !errors.Is(err, ErrOperationUncertain) {
 				t.Fatalf("did not disconnect a live script: ready=%v err=%v", ready, err)
@@ -83,7 +83,7 @@ func TestDisconnectedScriptCompletionRecoversWithoutServerMemory(t *testing.T) {
 			// must report the live process, then recover its durable exit receipt.
 			restarted := NewService(Options{Workspace: f.ws, Store: f.store, Catalog: f.cat, Logger: slog.New(slog.DiscardHandler), Now: func() time.Time { return f.now }})
 			restarted.probe = func(context.Context, *bridge.Client) (Platform, error) { return f.platform, nil }
-			result, err := restarted.Refresh(f.ctx(), testBot, testTarget)
+			result, err := restarted.Refresh(f.ctx(), testBot)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -112,7 +112,7 @@ func TestDisconnectedScriptCompletionRecoversWithoutServerMemory(t *testing.T) {
 			if err != nil || drained.ExitCode != 0 {
 				t.Fatalf("wait for owner: %+v %v", drained, err)
 			}
-			_, err = restarted.Refresh(f.ctx(), testBot, testTarget)
+			_, err = restarted.Refresh(f.ctx(), testBot)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -160,7 +160,7 @@ func TestCrossServerClaimAndRecoveryRejectSupersededReceipt(t *testing.T) {
 		}
 		return result, ErrOperationUncertain
 	}
-	if _, err := f.svc.Install(f.ctx(), testBot, testTarget, "foo", "1.0.0", nil); !errors.Is(err, ErrOperationUncertain) {
+	if _, err := f.svc.Install(f.ctx(), testBot, "foo", "1.0.0", nil); !errors.Is(err, ErrOperationUncertain) {
 		t.Fatal(err)
 	}
 	receipt, err := ReadOperationReceipt(f.ctx(), f.client, f.home("foo"), "foo")
@@ -171,10 +171,10 @@ func TestCrossServerClaimAndRecoveryRejectSupersededReceipt(t *testing.T) {
 	other.probe = func(context.Context, *bridge.Client) (Platform, error) { return f.platform, nil }
 	// The script has released its workspace lock but finalization has not run.
 	// A second Server still cannot replace its durable operation ownership.
-	if _, err := other.Install(f.ctx(), testBot, testTarget, "foo", "2.0.0", nil); !errors.Is(err, ErrBusy) {
+	if _, err := other.Install(f.ctx(), testBot, "foo", "2.0.0", nil); !errors.Is(err, ErrBusy) {
 		t.Fatalf("cross-server admission replaced unfinished operation: %v", err)
 	}
-	if _, err := f.svc.Refresh(f.ctx(), testBot, testTarget); err != nil {
+	if _, err := f.svc.Refresh(f.ctx(), testBot); err != nil {
 		t.Fatal(err)
 	}
 	started, proceed := make(chan struct{}), make(chan struct{})
@@ -184,7 +184,7 @@ func TestCrossServerClaimAndRecoveryRejectSupersededReceipt(t *testing.T) {
 		return Run(ctx, client, spec, sink)
 	}
 	done := make(chan error, 1)
-	go func() { _, err := other.Install(f.ctx(), testBot, testTarget, "foo", "2.0.0", nil); done <- err }()
+	go func() { _, err := other.Install(f.ctx(), testBot, "foo", "2.0.0", nil); done <- err }()
 	<-started
 	// Model a stale discovery arriving after another Server has admitted a new
 	// operation. Recovery must compare the durable ID again under the kernel
@@ -231,7 +231,7 @@ func TestReaperFencesPausedClaimBeforeNewOperation(t *testing.T) {
 		return Run(ctx, client, spec, sink)
 	}
 	done := make(chan error, 1)
-	go func() { _, err := f.svc.Install(f.ctx(), testBot, testTarget, "foo", "1.0.0", nil); done <- err }()
+	go func() { _, err := f.svc.Install(f.ctx(), testBot, "foo", "1.0.0", nil); done <- err }()
 	<-claimed
 	old, _ := f.store.get(f.key("foo"))
 	f.now = f.now.Add(2 * time.Minute)
@@ -240,7 +240,7 @@ func TestReaperFencesPausedClaimBeforeNewOperation(t *testing.T) {
 	if count, err := other.ReapStale(f.ctx()); err != nil || count != 1 {
 		t.Fatalf("reap paused claim: count=%d err=%v", count, err)
 	}
-	if _, err := other.Install(f.ctx(), testBot, testTarget, "foo", "2.0.0", nil); err != nil {
+	if _, err := other.Install(f.ctx(), testBot, "foo", "2.0.0", nil); err != nil {
 		t.Fatal(err)
 	}
 	close(resume)

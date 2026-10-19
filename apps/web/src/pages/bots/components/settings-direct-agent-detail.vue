@@ -7,7 +7,7 @@
       >
         <Select
           :model-value="config.auth"
-          :disabled="credentialConnected"
+          :disabled="authModeLocked"
           @update:model-value="setAuthMode"
         >
           <SelectTrigger class="w-full sm:w-56">
@@ -31,47 +31,24 @@
         :description="config.auth === 'api_key' ? $t('bots.agent.apiKeyDescription') : $t('bots.agent.oauthTokenDescription')"
         stack="sm"
       >
-        <div class="flex w-full flex-col gap-2 sm:w-96 sm:flex-row">
-          <PasswordInput
-            v-model="credentialSecret"
-            autocomplete="new-password"
-            class="min-w-0 flex-1"
-            :placeholder="$t('bots.settings.agentCredentialSecretPlaceholder')"
-            @keydown.enter.prevent="saveCredential"
-          />
-          <Button
-            type="button"
-            size="sm"
-            :loading="savingCredential"
-            :disabled="!credentialSecret.trim()"
-            @click="saveCredential"
-          >
-            {{ credentialConnected ? $t('bots.settings.agentCredentialReplace') : $t('bots.settings.agentCredentialSave') }}
-          </Button>
-          <ConfirmPopover
+        <AgentCredentialInput
+          v-model="credentialSecret"
+          :loading="savingCredential"
+          :connected="credentialConnected"
+          :placeholder="config.auth === 'oauth_token' ? $t('bots.agent.oauthToken') : undefined"
+          class="sm:w-96"
+          @save="saveCredential"
+        >
+          <AgentCredentialDisconnect
             v-if="credentialConnected"
-            :title="$t('bots.settings.agentCredentialDisconnectConfirm')"
-            :cancel-text="$t('common.cancel')"
-            :confirm-text="$t('bots.settings.agentCredentialDisconnect')"
-            variant="destructive"
+            :disabled="savingCredential"
             @confirm="disconnectCredential"
-          >
-            <template #trigger>
-              <Button
-                type="button"
-                variant="outline"
-                size="sm"
-                :disabled="savingCredential"
-              >
-                {{ $t('bots.settings.agentCredentialDisconnect') }}
-              </Button>
-            </template>
-          </ConfirmPopover>
-        </div>
+          />
+        </AgentCredentialInput>
       </SettingsRow>
 
       <SettingsRow
-        v-if="config.auth === 'api_key' || config.auth === 'oauth_token'"
+        v-if="baseUrlPlaceholder && (config.auth === 'api_key' || config.auth === 'oauth_token')"
         :label="$t('common.baseUrl')"
         stack="sm"
       >
@@ -97,72 +74,60 @@
           @keydown.enter.prevent="commitConfig"
         />
       </SettingsRow>
+      <SettingsRow
+        v-if="defaultModes?.supported"
+        :label="$t('bots.agent.defaultPermissionMode')"
+        :description="$t('bots.agent.defaultPermissionModeDescription')"
+        stack="sm"
+      >
+        <Select
+          :model-value="config.permission_mode || defaultModes.current_mode_id"
+          @update:model-value="setDefaultPermission"
+        >
+          <SelectTrigger class="w-full sm:w-56">
+            <SelectValue>{{ defaultMode?.name }}</SelectValue>
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem
+              v-for="mode in defaultModes.available_modes"
+              :key="mode.id"
+              :value="mode.id!"
+            >
+              <span :class="mode.warning ? 'text-warning-foreground' : ''">{{ mode.name }}</span>
+            </SelectItem>
+          </SelectContent>
+        </Select>
+      </SettingsRow>
     </SettingsSection>
 
+    <!-- Codex and Grok Build sign their account in on the Agent's own
+         process: the runtime obtains the device code and writes its login,
+         which Memoh then keeps in the credential store. -->
     <SettingsSection
-      v-if="isCodex && config.auth === 'chatgpt'"
+      v-if="deviceLoginAuth"
       :title="$t('bots.agent.account')"
     >
-      <SettingsRow
-        :label="$t('bots.agent.chatgptAccount')"
-        :description="credentialConnected ? $t('bots.agent.chatgptAccountConnectedDescription') : $t('bots.agent.chatgptAccountDescription')"
+      <DeviceLoginPanel
+        :auth="deviceLoginAuth"
+        :authorized="credentialConnected"
+        existing
+        :authorizing="authorizing"
+        :device-login="deviceLogin"
+        @connect="startDeviceLogin"
+        @cancel="cancelDeviceLogin"
       >
-        <div class="flex gap-2">
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            :loading="authorizing"
-            loading-mode="manual"
-            @click="deviceLogin ? cancelDeviceLogin() : startDeviceLogin()"
-          >
-            <template v-if="deviceLogin">
-              {{ $t('common.cancel') }}
-            </template>
-            <template v-else>
-              <KeyRound />
-              {{ credentialConnected ? $t('bots.agent.reconnect') : $t('provider.oauth.connect') }}
-            </template>
-          </Button>
-          <ConfirmPopover
-            v-if="credentialConnected"
-            :title="$t('bots.settings.agentCredentialDisconnectConfirm')"
-            :cancel-text="$t('common.cancel')"
-            :confirm-text="$t('bots.settings.agentCredentialDisconnect')"
-            variant="destructive"
-            @confirm="disconnectCredential"
-          >
-            <template #trigger>
-              <Button
-                type="button"
-                variant="outline"
-                size="sm"
-                :disabled="authorizing"
-              >
-                {{ $t('bots.settings.agentCredentialDisconnect') }}
-              </Button>
-            </template>
-          </ConfirmPopover>
-        </div>
-      </SettingsRow>
-
-      <div
-        v-if="deviceLogin"
-        class="mx-4 border-b border-border py-6 last:border-b-0"
-      >
-        <DeviceCodePanel
-          :code="deviceLogin.user_code"
-          :verification-uri="deviceLogin.verification_url"
-          :hint="$t('bots.agent.codexDeviceHint')"
-          :retry-loading="authorizing"
-          :copy-and-open-label="$t('deviceCode.copyAndOpen')"
-          :retry-label="$t('deviceCode.retry')"
-          :expired-label="$t('deviceCode.codeExpired')"
-          :expires-in-label="(time: string) => $t('deviceCode.expiresIn', { time })"
-          :copy-failed-message="$t('deviceCode.copyFailed')"
-          @retry="startDeviceLogin"
+        <AgentCredentialDisconnect
+          v-if="credentialConnected"
+          :disabled="authorizing"
+          @confirm="disconnectCredential"
         />
-      </div>
+      </DeviceLoginPanel>
+
+      <CodexUsageRows
+        v-if="isCodex && credentialConnected && !deviceLogin"
+        :bot-id="botId"
+        :bot-agent-id="agent.id!"
+      />
     </SettingsSection>
   </div>
 </template>
@@ -171,11 +136,8 @@
 import { computed, onBeforeUnmount, reactive, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRouter } from 'vue-router'
-import { useQueryCache } from '@pinia/colada'
+import { useQuery, useQueryCache } from '@pinia/colada'
 import {
-  Button,
-  ConfirmPopover,
-  DeviceCodePanel,
   Input,
   Select,
   SelectContent,
@@ -186,27 +148,42 @@ import {
   SettingsSection,
   toast,
 } from '@felinic/ui'
-import { KeyRound } from 'lucide-vue-next'
 import {
   deleteBotsByBotIdAgentsByIdCredential,
+  getBotsByBotIdAgentsByIdRuntimeControls,
   patchBotsByBotIdAgentsById,
-  postBotsByBotIdAgentsByIdCodexLoginDeviceAuthorize,
-  postBotsByBotIdAgentsByIdCodexLoginDeviceCancel,
-  postBotsByBotIdAgentsByIdCodexLoginDevicePoll,
+  postBotsByBotIdAgentsByIdLoginDeviceAuthorize,
+  postBotsByBotIdAgentsByIdLoginDeviceCancel,
+  postBotsByBotIdAgentsByIdLoginDevicePoll,
   putBotsByBotIdAgentsByIdCredential,
   type BotagentsBotAgent,
 } from '@memohai/sdk'
-import PasswordInput from '@/components/password-input/index.vue'
+import AgentCredentialDisconnect from './agent-credential-disconnect.vue'
+import AgentCredentialInput from './agent-credential-input.vue'
+import CodexUsageRows from './codex-usage-rows.vue'
+import DeviceLoginPanel from './device-login-panel.vue'
+import { localizeRuntimeControls } from '@/utils/runtime-control-presentation'
 import { isApiErrorCode, resolveApiErrorMessage } from '@/utils/api-error'
 import {
+  AGENT_AUTH_MODE_COPY,
+  BOT_AGENT_RUNTIME_CLAUDE_CODE,
   BOT_AGENT_RUNTIME_CODEX,
+  DEVICE_LOGINS,
+  DIRECT_BOT_AGENT_API_KEY_AUTH_KIND,
+  DIRECT_BOT_AGENT_AUTH_MODES,
+  DIRECT_BOT_AGENT_DEPENDENCY_ID,
+  isAgentAuthMode,
+  isDeviceLoginAuthMode,
+  isDirectBotAgentRuntime,
   normalizeBotAgentRuntime,
 } from '@/utils/bot-agent'
+import { externalAgentDisplayName } from '@/utils/external-agent'
 
 interface DirectAgentConfig {
   auth: string
   base_url: string
   model: string
+  permission_mode: string
   reasoning_effort: string
 }
 
@@ -221,16 +198,44 @@ const props = defineProps<{
   agent: BotagentsBotAgent
 }>()
 const emit = defineEmits<{ authorized: [] }>()
-const { t } = useI18n()
+const { t, te } = useI18n()
 const router = useRouter()
 const queryCache = useQueryCache()
 
 const runtime = computed(() => normalizeBotAgentRuntime(props.agent.runtime))
 const isCodex = computed(() => runtime.value === BOT_AGENT_RUNTIME_CODEX)
-const config = reactive<DirectAgentConfig>({ auth: '', base_url: '', model: '', reasoning_effort: '' })
+const isClaudeCode = computed(() => runtime.value === BOT_AGENT_RUNTIME_CLAUDE_CODE)
+const config = reactive<DirectAgentConfig>({ auth: '', base_url: '', model: '', reasoning_effort: '', permission_mode: '' })
+const defaultControls = useQuery({
+  key: () => ['bot-agent-runtime-controls', props.botId, props.agent.id ?? '', props.agent.metadata?.permission_mode ?? ''],
+  enabled: () => !!props.agent.id,
+  query: async ({ signal }) => {
+    const { data } = await getBotsByBotIdAgentsByIdRuntimeControls({
+      path: { bot_id: props.botId, id: props.agent.id! },
+      signal, throwOnError: true,
+    })
+    return data
+  },
+})
+const defaultModes = computed(() => localizeRuntimeControls(
+  defaultControls.data.value,
+  (key, fallback) => te(key) || te(key, 'en') ? t(key) : fallback,
+)?.modes)
+const defaultMode = computed(() => defaultModes.value?.available_modes?.find(mode => mode.id === (config.permission_mode || defaultModes.value?.current_mode_id)))
+async function setDefaultPermission(value: unknown) {
+  if (typeof value !== 'string') return
+  const previous = config.permission_mode
+  config.permission_mode = value
+  if (!await commitConfig()) config.permission_mode = previous
+}
 const credentialSecret = ref('')
 const savingCredential = ref(false)
 const credentialConnected = computed(() => !!props.agent.agent_credential_id)
+
+const authOptions = computed(() => (isDirectBotAgentRuntime(runtime.value) ? DIRECT_BOT_AGENT_AUTH_MODES[runtime.value] : [])
+  .map(value => ({ value, label: t(AGENT_AUTH_MODE_COPY[value].label) })))
+// The auth mode whose account signs in with a device code on this Agent.
+const deviceLoginAuth = computed(() => isDeviceLoginAuthMode(config.auth) ? config.auth : undefined)
 
 function readConfig() {
   const source = props.agent.metadata ?? {}
@@ -238,31 +243,17 @@ function readConfig() {
   config.base_url = String(source.base_url ?? '')
   config.model = String(source.model ?? '')
   config.reasoning_effort = String(source.reasoning_effort ?? '')
+  config.permission_mode = String(source.permission_mode ?? '')
 }
 
 watch([() => props.agent.metadata, runtime], readConfig, { immediate: true })
 
-const authOptions = computed(() => isCodex.value
-  ? [
-      { value: 'chatgpt', label: t('bots.agent.authChatGPT') },
-      { value: 'api_key', label: t('bots.agent.apiKey') },
-    ]
-  : [
-      { value: 'workspace', label: t('bots.agent.authWorkspace') },
-      { value: 'api_key', label: t('bots.agent.apiKey') },
-      { value: 'oauth_token', label: t('bots.agent.authOAuthToken') },
-    ])
+const authDescription = computed(() => t(AGENT_AUTH_MODE_COPY[isAgentAuthMode(config.auth) ? config.auth : 'api_key'].description))
 
-const authDescription = computed(() => {
-  if (config.auth === 'workspace') return t('bots.agent.authWorkspaceDescription')
-  if (config.auth === 'chatgpt') return t('bots.agent.authChatGPTDescription')
-  if (config.auth === 'oauth_token') return t('bots.agent.authOAuthTokenDescription')
-  return t('bots.agent.authApiKeyDescription')
-})
-
+// Empty for a runtime that takes no base URL override; the row is then hidden.
 const baseUrlPlaceholder = computed(() => isCodex.value
   ? 'https://api.openai.com/v1'
-  : 'https://api.anthropic.com')
+  : isClaudeCode.value ? 'https://api.anthropic.com' : '')
 
 async function refreshAgent() {
   await queryCache.invalidateQueries({ key: ['bot-agents', props.botId] })
@@ -275,11 +266,12 @@ async function commitConfig(): Promise<boolean> {
     provider: runtime.value,
     auth: config.auth,
   }
+  if (config.permission_mode) metadata.permission_mode = config.permission_mode
   if (config.base_url.trim()) metadata.base_url = config.base_url.trim()
   else delete metadata.base_url
   if (config.model.trim()) metadata.model = config.model.trim()
   else delete metadata.model
-  if (isCodex.value && config.reasoning_effort.trim()) metadata.reasoning_effort = config.reasoning_effort.trim()
+  if (!isClaudeCode.value && config.reasoning_effort.trim()) metadata.reasoning_effort = config.reasoning_effort.trim()
   else delete metadata.reasoning_effort
   try {
     await patchBotsByBotIdAgentsById({
@@ -296,7 +288,7 @@ async function commitConfig(): Promise<boolean> {
 }
 
 async function setAuthMode(value: unknown) {
-  if (credentialConnected.value || typeof value !== 'string' || !value || value === config.auth) return
+  if (authModeLocked.value || typeof value !== 'string' || !value || value === config.auth) return
   const previous = config.auth
   config.auth = value
   credentialSecret.value = ''
@@ -307,10 +299,10 @@ async function setAuthMode(value: unknown) {
 
 async function saveCredential() {
   const secret = credentialSecret.value.trim()
-  if (!secret) return
-  const authKind = isCodex.value
-    ? 'openai_api_key'
-    : config.auth === 'oauth_token' ? 'claude_code_oauth' : 'anthropic_api_key'
+  if (!secret || !isDirectBotAgentRuntime(runtime.value)) return
+  const authKind = config.auth === 'oauth_token'
+    ? 'claude_code_oauth'
+    : DIRECT_BOT_AGENT_API_KEY_AUTH_KIND[runtime.value]
   const secretKey = config.auth === 'oauth_token' ? 'oauth_token' : 'api_key'
   savingCredential.value = true
   try {
@@ -345,15 +337,22 @@ const deviceLogin = ref<DeviceLogin | null>(null)
 const authorizing = ref(false)
 let pollTimer: ReturnType<typeof setTimeout> | undefined
 
+// Changing mode while a credential is attached or about to be would strand it.
+const authModeLocked = computed(() => credentialConnected.value || !!deviceLogin.value)
+
 function stopPolling() {
   if (pollTimer === undefined) return
   clearTimeout(pollTimer)
   pollTimer = undefined
 }
 
+// The sign-in copy of the auth mode a login was started under; the mode is
+// locked while one is pending.
+const loginCopy = computed(() => DEVICE_LOGINS[deviceLoginAuth.value ?? 'chatgpt'])
+
 async function pollDeviceLogin(loginId: string) {
   try {
-    const { data } = await postBotsByBotIdAgentsByIdCodexLoginDevicePoll({
+    const { data } = await postBotsByBotIdAgentsByIdLoginDevicePoll({
       path: { bot_id: props.botId, id: props.agent.id! },
       body: { login_id: loginId },
       throwOnError: true,
@@ -363,29 +362,29 @@ async function pollDeviceLogin(loginId: string) {
       stopPolling()
       deviceLogin.value = null
       await refreshAgent()
-      toast.success(t('bots.agent.codexLoginSuccess'))
+      toast.success(t(loginCopy.value.success))
       return
     }
     if (data.status === 'error' || data.status === 'unknown') {
       stopPolling()
       deviceLogin.value = null
-      toast.error(t('bots.agent.codexLoginFailed'))
+      toast.error(t(loginCopy.value.failed))
       return
     }
     pollTimer = setTimeout(() => void pollDeviceLogin(loginId), 2000)
   } catch (error) {
     stopPolling()
     deviceLogin.value = null
-    toast.error(resolveApiErrorMessage(error, t('bots.agent.codexLoginFailed')))
+    toast.error(resolveApiErrorMessage(error, t(loginCopy.value.failed)))
   }
 }
 
 async function startDeviceLogin() {
-  if (authorizing.value) return
+  if (authorizing.value || !isDirectBotAgentRuntime(runtime.value)) return
   stopPolling()
   authorizing.value = true
   try {
-    const { data } = await postBotsByBotIdAgentsByIdCodexLoginDeviceAuthorize({
+    const { data } = await postBotsByBotIdAgentsByIdLoginDeviceAuthorize({
       path: { bot_id: props.botId, id: props.agent.id! },
       throwOnError: true,
     })
@@ -397,20 +396,21 @@ async function startDeviceLogin() {
     void pollDeviceLogin(data.login_id)
   } catch (error) {
     if (isApiErrorCode(error, 'agent_dependency_missing')) {
-      toast.error(t('chat.externalAgent.dependencyMissing', { dep_id: 'Codex' }), {
+      const dependencyId = DIRECT_BOT_AGENT_DEPENDENCY_ID[runtime.value]
+      toast.error(t('chat.externalAgent.dependencyMissing', { dep_id: externalAgentDisplayName(runtime.value, runtime.value) }), {
         action: {
           label: t('chat.externalAgent.dependencyOpen'),
           onClick: () => {
             void router.push({
               name: 'bot-detail',
               params: { botName: props.botId },
-              query: { tab: 'dependencies', dependency_id: 'codex' },
+              query: { tab: 'dependencies', dependency_id: dependencyId },
             }).catch(() => {})
           },
         },
       })
     } else {
-      toast.error(resolveApiErrorMessage(error, t('bots.agent.codexLoginFailed')))
+      toast.error(resolveApiErrorMessage(error, t(loginCopy.value.failed)))
     }
   } finally {
     authorizing.value = false
@@ -423,13 +423,13 @@ async function cancelDeviceLogin() {
   stopPolling()
   deviceLogin.value = null
   try {
-    await postBotsByBotIdAgentsByIdCodexLoginDeviceCancel({
+    await postBotsByBotIdAgentsByIdLoginDeviceCancel({
       path: { bot_id: props.botId, id: props.agent.id! },
       body: { login_id: loginId },
       throwOnError: true,
     })
   } catch (error) {
-    toast.error(resolveApiErrorMessage(error, t('bots.agent.codexLoginFailed')))
+    toast.error(resolveApiErrorMessage(error, t(loginCopy.value.failed)))
   }
 }
 

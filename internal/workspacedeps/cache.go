@@ -5,8 +5,7 @@ import (
 	"time"
 )
 
-// Snapshot caches the probed platform and observed dependencies for a
-// (bot, target) pair.
+// Snapshot caches the probed platform and observed dependencies for a bot.
 type Snapshot struct {
 	CatalogDigest string
 	Platform      Platform
@@ -14,19 +13,14 @@ type Snapshot struct {
 	At            time.Time
 }
 
-type cacheKey struct {
-	botID    string
-	targetID string
-}
-
-// Cache holds discovery snapshots per bot and workspace target. It is safe
+// Cache holds discovery snapshots per bot. It is safe
 // for concurrent use. Wiring Invalidate to the workspace manager's bridge
 // reset hook is the service layer's job; this package does not import
 // internal/workspace.
 type Cache struct {
 	mu      sync.RWMutex
 	ttl     time.Duration
-	entries map[cacheKey]Snapshot
+	entries map[string]Snapshot
 	now     func() time.Time
 }
 
@@ -36,15 +30,15 @@ type Cache struct {
 func NewCache(ttl time.Duration) *Cache {
 	return &Cache{
 		ttl:     ttl,
-		entries: make(map[cacheKey]Snapshot),
+		entries: make(map[string]Snapshot),
 		now:     time.Now,
 	}
 }
 
-// Get returns the snapshot for (botID, targetID). An expired snapshot is a
+// Get returns the snapshot for botID. An expired snapshot is a
 // miss and is evicted.
-func (c *Cache) Get(botID, targetID string) (Snapshot, bool) {
-	key := cacheKey{botID: botID, targetID: targetID}
+func (c *Cache) Get(botID string) (Snapshot, bool) {
+	key := botID
 	c.mu.RLock()
 	snap, ok := c.entries[key]
 	c.mu.RUnlock()
@@ -63,36 +57,32 @@ func (c *Cache) Get(botID, targetID string) (Snapshot, bool) {
 	return snap, true
 }
 
-// Put stores snap for (botID, targetID), stamping At when the caller left it
+// Put stores snap for botID, stamping At when the caller left it
 // zero. The Observed map is copied so later mutation by the caller cannot
 // leak into the cache.
-func (c *Cache) Put(botID, targetID string, snap Snapshot) {
+func (c *Cache) Put(botID string, snap Snapshot) {
 	if snap.At.IsZero() {
 		snap.At = c.now()
 	}
 	snap.Observed = cloneObserved(snap.Observed)
 	c.mu.Lock()
-	c.entries[cacheKey{botID: botID, targetID: targetID}] = snap
+	c.entries[botID] = snap
 	c.mu.Unlock()
 }
 
-// Invalidate drops every target's snapshot for botID. Call it whenever the
+// Invalidate drops the snapshot for botID. Call it whenever the
 // bot's container is restarted or rebuilt.
 func (c *Cache) Invalidate(botID string) {
 	c.mu.Lock()
-	for key := range c.entries {
-		if key.botID == botID {
-			delete(c.entries, key)
-		}
-	}
+	delete(c.entries, botID)
 	c.mu.Unlock()
 }
 
-// ObserveVersion overwrites the cached version of depID for (botID,
-// targetID), for callers that learned the real version out of band such as
+// ObserveVersion overwrites the cached version of depID for botID,
+// for callers that learned the real version out of band such as
 // the runtime handshake. It is a no-op when nothing is cached.
-func (c *Cache) ObserveVersion(botID, targetID, depID, version string) {
-	key := cacheKey{botID: botID, targetID: targetID}
+func (c *Cache) ObserveVersion(botID, depID, version string) {
+	key := botID
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	snap, ok := c.entries[key]
@@ -122,8 +112,8 @@ func (c *Cache) ObserveVersion(botID, targetID, depID, version string) {
 // copy actually ran (the launcher resolver) use it so a handshake-reported
 // version is never attributed to a different copy. It is a no-op when
 // nothing is cached or no candidate has that path.
-func (c *Cache) ObserveVersionAt(botID, targetID, depID, path, version string) {
-	key := cacheKey{botID: botID, targetID: targetID}
+func (c *Cache) ObserveVersionAt(botID, depID, path, version string) {
+	key := botID
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	snap, ok := c.entries[key]

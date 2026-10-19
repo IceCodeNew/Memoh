@@ -11,8 +11,9 @@ import (
 	"strings"
 	"testing"
 
-	agentfeedback "github.com/felinics/memoh/internal/agent/decision/feedback"
+	"github.com/felinics/memoh/internal/apperror"
 	"github.com/felinics/memoh/internal/models"
+	"github.com/felinics/memoh/internal/server"
 )
 
 type fakeGatewayAssetLoader struct {
@@ -42,7 +43,7 @@ func TestPrepareGatewayAttachments_InlineAssetToBase64(t *testing.T) {
 				if contentHash != "asset-1" {
 					t.Fatalf("unexpected content hash: %s", contentHash)
 				}
-				return io.NopCloser(strings.NewReader("image-binary")), "image/png", nil
+				return io.NopCloser(bytes.NewReader(rasterPNG(t))), "image/png", nil
 			},
 		},
 	}
@@ -56,7 +57,7 @@ func TestPrepareGatewayAttachments_InlineAssetToBase64(t *testing.T) {
 		},
 	}
 
-	prepared := resolver.prepareGatewayAttachments(context.Background(), req)
+	prepared := resolver.prepareGatewayAttachments(context.Background(), req, true)
 	if len(prepared) != 1 {
 		t.Fatalf("expected 1 attachment, got %d", len(prepared))
 	}
@@ -81,7 +82,7 @@ func TestPrepareRuntimeImagesInlineStoredAsset(t *testing.T) {
 				if botID != "bot-1" || contentHash != "asset-1" {
 					t.Fatalf("unexpected asset lookup: bot=%q hash=%q", botID, contentHash)
 				}
-				return io.NopCloser(strings.NewReader("image-binary")), "image/png", nil
+				return io.NopCloser(bytes.NewReader(rasterPNG(t))), "image/png", nil
 			},
 		},
 	}
@@ -100,7 +101,7 @@ func TestPrepareRuntimeImagesInlineStoredAsset(t *testing.T) {
 	if len(images) != 1 {
 		t.Fatalf("prepareRuntimeAttachments().Images = %#v, want one image", images)
 	}
-	if !bytes.Equal(images[0].Data, []byte("image-binary")) || images[0].MimeType != "image/png" {
+	if !bytes.Equal(images[0].Data, rasterPNG(t)) || images[0].MimeType != "image/png" {
 		t.Fatalf("prepared image = %#v, want inline PNG", images[0])
 	}
 }
@@ -116,7 +117,7 @@ func TestPrepareGatewayAttachments_DataURLFromURLFieldIsNativeInline(t *testing.
 		},
 	}
 
-	prepared := resolver.prepareGatewayAttachments(context.Background(), req)
+	prepared := resolver.prepareGatewayAttachments(context.Background(), req, true)
 	if len(prepared) != 1 {
 		t.Fatalf("expected 1 attachment, got %d", len(prepared))
 	}
@@ -142,7 +143,7 @@ func TestPrepareGatewayAttachments_PublicURLFromURLFieldIsNativePublic(t *testin
 		},
 	}
 
-	prepared := resolver.prepareGatewayAttachments(context.Background(), req)
+	prepared := resolver.prepareGatewayAttachments(context.Background(), req, true)
 	if len(prepared) != 1 {
 		t.Fatalf("expected 1 attachment, got %d", len(prepared))
 	}
@@ -205,7 +206,7 @@ func TestPrepareGatewayAttachments_IncludesReplyAttachments(t *testing.T) {
 		},
 	}
 
-	prepared := resolver.prepareGatewayAttachments(context.Background(), req)
+	prepared := resolver.prepareGatewayAttachments(context.Background(), req, true)
 	if len(prepared) != 2 {
 		t.Fatalf("expected current and reply attachments, got %d", len(prepared))
 	}
@@ -237,7 +238,7 @@ func TestPrepareGatewayAttachments_ResolvesStoredFileAccessPath(t *testing.T) {
 		}},
 	}
 
-	prepared := resolver.prepareGatewayAttachments(context.Background(), req)
+	prepared := resolver.prepareGatewayAttachments(context.Background(), req, true)
 	if len(prepared) != 1 || prepared[0].FallbackPath != "/data/.memoh/media/aa/asset.pdf" {
 		t.Fatalf("prepared attachments = %#v, want reachable PDF path", prepared)
 	}
@@ -358,7 +359,7 @@ func TestPrepareACPAttachments_RejectsInvalidOrUnreachableData(t *testing.T) {
 		name     string
 		resolver *Service
 		input    ChatAttachment
-		wantCode string
+		wantCode apperror.Code
 	}{
 		{
 			name:     "invalid image base64",
@@ -368,7 +369,7 @@ func TestPrepareACPAttachments_RejectsInvalidOrUnreachableData(t *testing.T) {
 				Name:   "broken.png",
 				Base64: "data:image/png;base64,not-valid***",
 			},
-			wantCode: agentfeedback.CodeAttachmentInvalid,
+			wantCode: apperror.CodeACPAttachmentInvalid,
 		},
 		{
 			name: "stored file without reachable path",
@@ -385,7 +386,7 @@ func TestPrepareACPAttachments_RejectsInvalidOrUnreachableData(t *testing.T) {
 				Name:        "missing.pdf",
 				ContentHash: "missing",
 			},
-			wantCode: agentfeedback.CodeAttachmentUnavailable,
+			wantCode: apperror.CodeACPAttachmentUnavailable,
 		},
 	}
 	for _, tt := range tests {
@@ -395,9 +396,9 @@ func TestPrepareACPAttachments_RejectsInvalidOrUnreachableData(t *testing.T) {
 				BotID:       "bot-1",
 				Attachments: []ChatAttachment{tt.input},
 			})
-			var feedback *agentfeedback.Error
-			if !errors.As(err, &feedback) || feedback.Code != tt.wantCode || feedback.HTTPStatus != 400 {
-				t.Fatalf("error = %#v, want feedback code %q with status 400", err, tt.wantCode)
+			problem, _ := server.ProblemFrom(err, "")
+			if apperror.CodeOf(err) != tt.wantCode || problem.Status != 400 {
+				t.Fatalf("error = %#v, want code %q with status 400", err, tt.wantCode)
 			}
 		})
 	}
@@ -426,7 +427,7 @@ func TestPrepareGatewayAttachments_DetectsImageMimeWhenOctetStream(t *testing.T)
 		},
 	}
 
-	prepared := resolver.prepareGatewayAttachments(context.Background(), req)
+	prepared := resolver.prepareGatewayAttachments(context.Background(), req, true)
 	if len(prepared) != 1 {
 		t.Fatalf("expected 1 attachment, got %d", len(prepared))
 	}
@@ -490,7 +491,7 @@ func TestEncodeReaderAsDataURL_DetectsImageMime(t *testing.T) {
 }
 
 func TestEncodeReaderAsDataURL_RejectsOversizedPayload(t *testing.T) {
-	_, _, err := encodeReaderAsDataURL(strings.NewReader("12345"), 4, "image", "image/png")
+	_, _, err := encodeReaderAsDataURL(strings.NewReader("12345"), 4, "file", "text/plain")
 	if err == nil {
 		t.Fatal("expected error for oversized payload")
 	}

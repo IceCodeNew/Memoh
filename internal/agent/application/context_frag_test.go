@@ -11,6 +11,7 @@ import (
 	contextfrag "github.com/felinics/memoh/internal/agent/context/fragment"
 	"github.com/felinics/memoh/internal/agent/runtime/native"
 	"github.com/felinics/memoh/internal/agent/sessionmode"
+	"github.com/felinics/memoh/internal/agent/toolexec"
 	"github.com/felinics/memoh/internal/agent/turn"
 	"github.com/felinics/memoh/internal/contextview"
 	"github.com/felinics/memoh/internal/hooks"
@@ -126,8 +127,8 @@ func TestPrepareRunConfigDoesNotDoubleCountPipelineInlineImages(t *testing.T) {
 		t.Fatalf("memory index = %#v, want 1", got.ContextMemoryMessageIndex)
 	}
 	wantMessages := []sdk.Message{
-		sdk.UserMessage("pipeline current user"),
-		sdk.UserMessage("memory recall", image),
+		sdk.UserMessage("pipeline current user", image),
+		sdk.UserMessage("memory recall"),
 	}
 	if !reflect.DeepEqual(got.Messages, wantMessages) {
 		t.Fatalf("provider messages changed: got %#v want %#v", got.Messages, wantMessages)
@@ -189,7 +190,7 @@ func TestNormalizeContextMessagesRemapsCurrentAndMemory(t *testing.T) {
 		}},
 	}})[0]
 	webResult := sdkMessagesToModelMessages([]sdk.Message{sdk.ToolMessage(sdk.ToolResultPart{
-		ToolCallID: "web-call", ToolName: "web_fetch", Result: "discarded",
+		ToolCallID: "web-call", ToolName: "web_fetch", Result: toolexec.OutputFromValue("discarded"),
 	})})[0]
 	askCall := sdkMessagesToModelMessages([]sdk.Message{{
 		Role: sdk.MessageRoleAssistant,
@@ -216,21 +217,17 @@ func TestNormalizeContextMessagesRemapsCurrentAndMemory(t *testing.T) {
 	memoryIndex := 12
 
 	want := sanitizeMessages(messages)
-	if len(want) <= 10 {
-		t.Fatalf("fixture did not activate tool stripping: %d messages", len(want))
-	}
-	want = stripToolMessages(want)
 	want = repairToolCallClosures(want, syntheticToolClosureError)
 	got, gotCurrent, gotMemory := normalizeContextMessages(messages, &currentIndex, &memoryIndex)
 
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("normalized messages changed: got %#v want %#v", got, want)
 	}
-	if gotCurrent == nil || *gotCurrent != 9 || got[*gotCurrent].TextContent() != "pipeline current" {
-		t.Fatalf("current index = %#v in %#v, want pipeline current at 9", gotCurrent, got)
+	if gotCurrent == nil || *gotCurrent != 11 || got[*gotCurrent].TextContent() != "pipeline current" {
+		t.Fatalf("current index = %#v in %#v, want pipeline current at 11", gotCurrent, got)
 	}
-	if gotMemory == nil || *gotMemory != 10 || got[*gotMemory].TextContent() != "memory recall" {
-		t.Fatalf("memory index = %#v in %#v, want memory recall at 10", gotMemory, got)
+	if gotMemory == nil || *gotMemory != 12 || got[*gotMemory].TextContent() != "memory recall" {
+		t.Fatalf("memory index = %#v in %#v, want memory recall at 12", gotMemory, got)
 	}
 }
 

@@ -2,10 +2,8 @@ package acp
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"log/slog"
 	"net"
 	"os"
@@ -23,11 +21,10 @@ import (
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/test/bufconn"
 
-	contextfrag "github.com/felinics/memoh/internal/agent/context/fragment"
 	toolapproval "github.com/felinics/memoh/internal/agent/decision/approval"
-	"github.com/felinics/memoh/internal/agent/decision/feedback"
 	userinput "github.com/felinics/memoh/internal/agent/decision/input"
 	"github.com/felinics/memoh/internal/agent/event"
+	"github.com/felinics/memoh/internal/agent/partmeta"
 	"github.com/felinics/memoh/internal/agent/runtime/acp/client"
 	acpprofile "github.com/felinics/memoh/internal/agent/runtime/acp/profile"
 	"github.com/felinics/memoh/internal/agent/runtime/agentstate"
@@ -195,11 +192,11 @@ func TestSessionPoolPromptForceFreshRuntimeReplacesBoundRuntime(t *testing.T) {
 	}
 }
 
-func TestSessionPoolRecordsResetHeadAfterSuccessfulPrompt(t *testing.T) {
+func TestSessionPoolRecordsHeadAfterSuccessfulPrompt(t *testing.T) {
 	pool := newFakeScriptPool(t)
 	pool.timeout = time.Hour
-	store := &recordingSessionStateStore{}
-	pool.SetSessionStateStore(store)
+	store := &emptyRuntimeStateStore{}
+	pool.SetRuntimeStateStore(store)
 
 	runID := uuid.NewString()
 	if _, err := pool.Prompt(context.Background(), PromptInput{
@@ -220,16 +217,10 @@ func TestSessionPoolRecordsResetHeadAfterSuccessfulPrompt(t *testing.T) {
 	handle.state.Lock()
 	nativeHead, nativeHeadFound := handle.nativeHead, handle.nativeHeadFound
 	handle.state.Unlock()
-	// No snapshots are captured: every completed turn records a reset head so
+	// No snapshots are captured: every completed turn records a head so
 	// warm-handle fencing still tracks canonical history per turn.
-	if !nativeHeadFound || nativeHead.RunID != runID || nativeHead.Kind != agentstate.SessionPublicationReset {
-		t.Fatalf("native head = %#v found=%v, want reset head for run", nativeHead, nativeHeadFound)
-	}
-	store.mu.Lock()
-	replaceCalls := store.replaceCalls
-	store.mu.Unlock()
-	if replaceCalls != 0 {
-		t.Fatalf("store.Replace was called %d times, want none", replaceCalls)
+	if !nativeHeadFound || nativeHead.RunID != runID {
+		t.Fatalf("native head = %#v found=%v, want head for run", nativeHead, nativeHeadFound)
 	}
 }
 
@@ -658,7 +649,7 @@ func TestSessionPoolCloseBotAgentRuntimesDoesNotWaitForActivePrompt(t *testing.T
 
 	done := make(chan error, 1)
 	go func() {
-		done <- pool.CloseBotAgentRuntimes("bot-1", acpprofile.AgentACPID)
+		done <- pool.CloseBotAgentRuntimes("bot-1", "")
 	}()
 
 	select {
@@ -1425,8 +1416,7 @@ func TestSessionPoolSetupModeResolution(t *testing.T) {
 		Prompt:                "run",
 		RuntimeOwnerAccountID: "user-1",
 	})
-	var feedbackErr *feedback.Error
-	if !errors.As(err, &feedbackErr) || feedbackErr.Code != feedback.CodeAgentNotConfigured || !strings.Contains(feedbackErr.Message, "command required") {
+	if !errors.Is(err, ErrAgentNotConfigured) || !strings.Contains(err.Error(), "command required") {
 		t.Fatalf("missing command error = %v", err)
 	}
 
@@ -1506,7 +1496,7 @@ func TestProfileSupportsBackend(t *testing.T) {
 
 func TestSessionPoolUsesSessionMetadataAsRuntimeTruth(t *testing.T) {
 	runner := &recordingRunner{
-		info:     bridge.WorkspaceInfo{Backend: bridge.WorkspaceBackendContainer, DefaultWorkDir: "/data", ACPToolsHTTPURL: "http://127.0.0.1:18732/mcp"},
+		info:     bridge.WorkspaceInfo{Backend: bridge.WorkspaceBackendContainer, DefaultWorkDir: "/data", ToolsHTTPURL: "http://127.0.0.1:18732/mcp"},
 		startErr: errors.New("started"),
 	}
 	pool := newSessionPool(
@@ -1546,7 +1536,7 @@ func TestSessionPoolUsesSessionMetadataAsRuntimeTruth(t *testing.T) {
 
 func TestSessionPoolBakesOnlyStableRuntimeIdentity(t *testing.T) {
 	runner := &recordingRunner{
-		info:     bridge.WorkspaceInfo{Backend: bridge.WorkspaceBackendContainer, DefaultWorkDir: "/data", ACPToolsHTTPURL: "http://127.0.0.1:18732/mcp"},
+		info:     bridge.WorkspaceInfo{Backend: bridge.WorkspaceBackendContainer, DefaultWorkDir: "/data", ToolsHTTPURL: "http://127.0.0.1:18732/mcp"},
 		startErr: errors.New("started"),
 	}
 	pool := newSessionPool(
@@ -1597,8 +1587,8 @@ func TestSessionPoolUsesWorkspaceACPToolsEndpointForContainer(t *testing.T) {
 	pool.SetToolGateway(mcp.NewToolGatewayService(nil, nil))
 
 	got, err := pool.resolveToolHTTPURL("", bridge.WorkspaceInfo{
-		Backend:         bridge.WorkspaceBackendContainer,
-		ACPToolsHTTPURL: "http://127.0.0.1:18732/mcp",
+		Backend:      bridge.WorkspaceBackendContainer,
+		ToolsHTTPURL: "http://127.0.0.1:18732/mcp",
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -1631,26 +1621,24 @@ func TestRuntimeHandleToolContextOverlaysActivePrompt(t *testing.T) {
 	}
 
 	// During a prompt the live per-prompt fields overlay.
-	policy := &contextfrag.ToolExchangePolicy{MinMessages: 7}
 	wantFence := runtimefence.Fence{BotID: "bot-1", SessionID: "session-1", Token: 29}
 	runCtx, cancelRun := context.WithCancel(context.Background())
 	defer cancelRun()
 	guardCalls := 0
 	active := client.ToolSessionContext{
-		ChatID:                    "chat-1",
-		SessionID:                 "session-1",
-		RunID:                     "stream-7",
-		SessionToken:              "token-7",
-		CurrentPlatform:           "web",
-		ReplyTarget:               "reply-7",
-		ConversationType:          "private",
-		ReasoningStoredEffort:     "low",
-		ReasoningRequestedEffort:  "high",
-		SupportsImageInput:        true,
-		ContextBudgetMaxTokens:    128000,
-		ContextToolExchangePolicy: policy,
-		RuntimeFence:              wantFence,
-		RunContext:                runCtx,
+		ChatID:                   "chat-1",
+		SessionID:                "session-1",
+		RunID:                    "stream-7",
+		SessionToken:             "token-7",
+		CurrentPlatform:          "web",
+		ReplyTarget:              "reply-7",
+		ConversationType:         "private",
+		ReasoningStoredEffort:    "low",
+		ReasoningRequestedEffort: "high",
+		SupportsImageInput:       true,
+		ContextBudgetMaxTokens:   128000,
+		RuntimeFence:             wantFence,
+		RunContext:               runCtx,
 		RuntimeGuard: func(context.Context) error {
 			guardCalls++
 			return nil
@@ -1679,9 +1667,6 @@ func TestRuntimeHandleToolContextOverlaysActivePrompt(t *testing.T) {
 	if ctx.ContextBudgetMaxTokens != 128000 {
 		t.Fatalf("active tool context lost context budget: %#v", ctx)
 	}
-	if ctx.ContextToolExchangePolicy != policy {
-		t.Fatalf("active tool context lost tool exchange policy: %#v", ctx)
-	}
 	if ctx.RuntimeFence != wantFence {
 		t.Fatalf("active tool context fence = %#v, want %#v", ctx.RuntimeFence, wantFence)
 	}
@@ -1698,26 +1683,21 @@ func TestRuntimeHandleToolContextOverlaysActivePrompt(t *testing.T) {
 	if ctx.RunID != "" || ctx.SessionToken != "" || ctx.ChatID != "bot-1" || ctx.RuntimeActive || ctx.SupportsImageInput || !ctx.CanListUserInput || ctx.RunContext != nil || ctx.RuntimeGuard != nil || ctx.ReasoningStoredEffort != "" || ctx.ReasoningRequestedEffort != "" {
 		t.Fatalf("cleared tool context = %#v", ctx)
 	}
-	if ctx.ContextBudgetMaxTokens != 0 || ctx.ContextToolExchangePolicy != nil {
+	if ctx.ContextBudgetMaxTokens != 0 {
 		t.Fatalf("cleared tool context leaks context budget fields: %#v", ctx)
 	}
 }
 
 func TestToolSessionContextCopiesContextBudgetFields(t *testing.T) {
 	h := &runtimeHandle{id: "rt_test", botID: "bot-1"}
-	policy := &contextfrag.ToolExchangePolicy{MinMessages: 3}
 
 	got := toolSessionContext(context.Background(), PromptInput{
-		BotID:                     "bot-1",
-		ContextBudgetMaxTokens:    5000,
-		ContextToolExchangePolicy: policy,
+		BotID:                  "bot-1",
+		ContextBudgetMaxTokens: 5000,
 	}, h)
 
 	if got.ContextBudgetMaxTokens != 5000 {
 		t.Fatalf("ContextBudgetMaxTokens = %d, want 5000", got.ContextBudgetMaxTokens)
-	}
-	if got.ContextToolExchangePolicy != policy {
-		t.Fatalf("ContextToolExchangePolicy = %#v, want %#v", got.ContextToolExchangePolicy, policy)
 	}
 }
 
@@ -1833,7 +1813,7 @@ func TestPromptToolEventSinkPreservesACPAndHTTPToolEventOrder(t *testing.T) {
 	if !ok {
 		t.Fatalf("output[0] = %#v, want tool call", result.Output[0])
 	}
-	approval, ok := toolCall.ProviderMetadata["approval"].(map[string]any)
+	approval, ok := partmeta.Object(toolCall.ProviderMetadata, partmeta.KeyApproval)
 	if !ok || approval["approval_id"] != "approval-1" || approval["status"] != toolapproval.StatusPending {
 		t.Fatalf("tool call approval metadata = %#v", toolCall.ProviderMetadata)
 	}
@@ -2148,117 +2128,18 @@ func (g fakeSessionGetter) Get(context.Context, string) (SessionDescriptor, erro
 	return g.session, g.err
 }
 
-type recordingSessionStateStore struct {
-	mu              sync.Mutex
-	head            agentstate.SessionPublicationHead
-	headSet         bool
-	headFound       bool
-	headErr         error
-	headCalls       int
-	epoch           agentstate.RuntimeConfigEpoch
-	epochErr        error
-	epochCalls      int
-	state           agentstate.PersistedSessionState
-	records         []agentstate.SessionStateRecord
-	found           bool
-	loadErr         error
-	replaceErr      error
-	loadCalls       int
-	replaceCalls    int
-	replaced        agentstate.PersistedSessionState
-	replacedRecords []agentstate.SessionStateRecord
-	replaceFence    runtimefence.Fence
-	guardCalls      int
-	guardErr        error
+type emptyRuntimeStateStore struct{}
+
+func (*emptyRuntimeStateStore) RuntimeConfigEpoch(context.Context, string, string) (agentstate.RuntimeConfigEpoch, error) {
+	return agentstate.RuntimeConfigEpoch{}, nil
 }
 
-func (s *recordingSessionStateStore) RuntimeConfigEpoch(context.Context, string, string) (agentstate.RuntimeConfigEpoch, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.epochCalls++
-	return s.epoch, s.epochErr
-}
-
-func (s *recordingSessionStateStore) GuardRuntimeSync(ctx context.Context, _ string, _ int64, fn func(context.Context) error) error {
-	s.mu.Lock()
-	s.guardCalls++
-	err := s.guardErr
-	s.mu.Unlock()
-	if err != nil {
-		return err
-	}
+func (*emptyRuntimeStateStore) GuardRuntimeSync(ctx context.Context, _ string, _ int64, fn func(context.Context) error) error {
 	return fn(ctx)
 }
 
-func (s *recordingSessionStateStore) CanonicalShape(context.Context, string, string) (map[string]agentstate.SessionStateFileShape, bool, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if !s.found {
-		return nil, false, nil
-	}
-	shapes := make(map[string]agentstate.SessionStateFileShape, len(s.state.Files))
-	for _, file := range s.state.Files {
-		shapes[file.Path] = file.SessionStateFileShape
-	}
-	return shapes, true, nil
-}
-
-func (s *recordingSessionStateStore) Head(context.Context, string, string) (agentstate.SessionPublicationHead, bool, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.headCalls++
-	if s.headSet {
-		return s.head, s.headFound, s.headErr
-	}
-	if s.found {
-		return agentstate.SessionPublicationHead{
-			RunID: s.state.ThroughRunID,
-			Kind:  agentstate.SessionPublicationCheckpoint,
-		}, true, s.headErr
-	}
-	return agentstate.SessionPublicationHead{}, false, s.headErr
-}
-
-func (s *recordingSessionStateStore) Load(ctx context.Context, _, _ string, consume agentstate.SessionStateRecordConsumer) (bool, error) {
-	s.mu.Lock()
-	s.loadCalls++
-	state, found, loadErr := s.state, s.found, s.loadErr
-	records := append([]agentstate.SessionStateRecord(nil), s.records...)
-	s.mu.Unlock()
-	if loadErr != nil || !found {
-		return found, loadErr
-	}
-	index := 0
-	reader := func(context.Context) (agentstate.SessionStateRecord, error) {
-		if index == len(records) {
-			return agentstate.SessionStateRecord{}, io.EOF
-		}
-		record := records[index]
-		index++
-		return record, nil
-	}
-	return true, consume(ctx, state, reader)
-}
-
-func (s *recordingSessionStateStore) Replace(ctx context.Context, _, _ string, state agentstate.PersistedSessionState, reader agentstate.SessionStateRecordReader) error {
-	var records []agentstate.SessionStateRecord
-	for {
-		record, err := reader(ctx)
-		if errors.Is(err, io.EOF) {
-			break
-		}
-		if err != nil {
-			return err
-		}
-		records = append(records, record)
-	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.replaceCalls++
-	s.replaced = state
-	s.replacedRecords = records
-	s.replaceFence, _ = runtimefence.FromContext(ctx)
-	return s.replaceErr
+func (*emptyRuntimeStateStore) Head(context.Context, string, string) (agentstate.SessionPublicationHead, bool, error) {
+	return agentstate.SessionPublicationHead{}, false, nil
 }
 
 type fakeToolApprovalService struct {
@@ -2631,65 +2512,6 @@ func (a *sessionPoolFakeAgent) Prompt(ctx context.Context, p acp.PromptRequest) 
 		image := p.Prompt[0].Image
 		if image.Data != "aW1hZ2U=" || image.MimeType != "image/png" {
 			return acp.PromptResponse{}, fmt.Errorf("image block = %#v, want inline PNG", image)
-		}
-	}
-	if os.Getenv("MEMOH_ACP_SESSION_POOL_FAKE_AGENT_WRITE_STATE") == "1" {
-		home := strings.TrimSpace(os.Getenv("CODEX_HOME"))
-		if home == "" {
-			return acp.PromptResponse{}, errors.New("CODEX_HOME is missing")
-		}
-		dir := filepath.Join(home, "sessions", "2026", "08", "12")
-		if err := os.MkdirAll(dir, 0o700); err != nil { //nolint:gosec // fake agent writes beneath its process-owned test home.
-			return acp.PromptResponse{}, err
-		}
-		var promptText strings.Builder
-		for _, block := range p.Prompt {
-			if block.Text != nil {
-				promptText.WriteString(block.Text.Text)
-			}
-		}
-		meta, err := json.Marshal(map[string]any{
-			"type":    "session_meta",
-			"payload": map[string]string{"id": string(p.SessionId)},
-		})
-		if err != nil {
-			return acp.PromptResponse{}, err
-		}
-		line, err := json.Marshal(map[string]string{"type": "message", "prompt": promptText.String()})
-		if err != nil {
-			return acp.PromptResponse{}, err
-		}
-		transcript := filepath.Join(dir, "rollout-"+string(p.SessionId)+".jsonl")
-		terminal, err := json.Marshal(map[string]any{
-			"type": "event_msg",
-			"payload": map[string]string{
-				"type": "task_complete",
-			},
-		})
-		if err != nil {
-			return acp.PromptResponse{}, err
-		}
-		data := make([]byte, 0, len(meta)+len(line)+len(terminal)+3)
-		if _, statErr := os.Stat(transcript); errors.Is(statErr, os.ErrNotExist) { //nolint:gosec // fake session ID is generated by the in-process test agent.
-			data = append(data, meta...)
-			data = append(data, '\n')
-		} else if statErr != nil {
-			return acp.PromptResponse{}, statErr
-		}
-		data = append(data, line...)
-		data = append(data, '\n')
-		data = append(data, terminal...)
-		data = append(data, '\n')
-		file, err := os.OpenFile(transcript, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600) //nolint:gosec // fake agent writes its process-owned test transcript.
-		if err != nil {
-			return acp.PromptResponse{}, err
-		}
-		if _, err := file.Write(data); err != nil {
-			_ = file.Close()
-			return acp.PromptResponse{}, err
-		}
-		if err := file.Close(); err != nil {
-			return acp.PromptResponse{}, err
 		}
 	}
 	a.appendConfigLog(fmt.Sprintf("prompt:model=%s,reasoning=%s", a.modelID, a.reasoningEffort))

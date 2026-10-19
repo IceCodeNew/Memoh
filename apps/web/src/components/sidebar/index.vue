@@ -47,7 +47,7 @@
          doesn't budge. ml and pl animate on the SAME curve, so icon-x is constant
          across the whole tween: the pill visibly opens left+right around a still
          icon. (Inter-tab gap must exceed the 3px bleed so the second tab's
-         leftward growth never overlaps the first — hence gap-1.5. The nav is also
+         leftward growth never overlaps the first — hence gap-1. The nav is also
          indented pl-3 so the active pill's 3px left bleed still clears the
          sidebar edge instead of kissing it.)
 
@@ -56,40 +56,50 @@
          track min width and break the circle. The icon→label gap lives on the
          INNER label span (clipped with the text when collapsed); the grid item
          is a bare overflow-hidden wrapper. -->
-    <nav class="flex shrink-0 items-center gap-1.5 pl-3 pr-2 py-1.5">
-      <button
-        v-for="view in availableViews"
-        :key="view.id"
-        type="button"
-        class="inline-flex h-8 shrink-0 cursor-pointer items-center justify-start rounded-full px-2 text-muted-foreground outline-none transition-[margin,padding,color,background-color] duration-200 ease-[cubic-bezier(0.32,0.72,0,1)] hover:bg-[color:var(--sidebar-hover)] hover:text-foreground dark:hover:text-[color:oklch(0.96_0_0)] focus-visible:ring-2 focus-visible:ring-ring data-[active=true]:-ml-[3px] data-[active=true]:bg-sidebar-accent data-[active=true]:pl-2.5 data-[active=true]:pr-3.5 data-[active=true]:text-foreground/90 dark:data-[active=true]:text-[color:oklch(0.96_0_0)]"
-        :data-active="sidebarView === view.id"
-        :title="view.label"
-        :aria-pressed="sidebarView === view.id"
-        @click="store.selectSidebarView(view.id)"
-      >
-        <span class="relative shrink-0">
-          <component
-            :is="view.icon"
-            :stroke-width="1.75"
-            class="size-[18px] shrink-0"
-          />
-          <!-- Unsaved files live on the Files view, so a count here surfaces them
-               even while the user is in Chat. -->
-          <BadgeCount
-            v-if="view.id === 'files' && dirtyFileCount > 0"
-            :count="dirtyFileCount"
-            class="pointer-events-none absolute -right-1.5 -top-1"
-          />
-        </span>
-        <span
-          class="grid transition-[grid-template-columns] duration-200 ease-[cubic-bezier(0.32,0.72,0,1)]"
-          :class="sidebarView === view.id ? 'grid-cols-[1fr]' : 'grid-cols-[0fr]'"
+    <nav class="flex min-w-0 shrink-0 items-center gap-1 pl-3 pr-2 py-1.5">
+      <TooltipProvider>
+        <Tooltip
+          v-for="view in availableViews"
+          :key="view.id"
         >
-          <span class="min-w-0 overflow-hidden">
-            <span class="whitespace-nowrap pl-2 text-control font-[550]">{{ view.label }}</span>
-          </span>
-        </span>
-      </button>
+          <TooltipTrigger as-child>
+            <button
+              type="button"
+              class="inline-flex h-8 min-w-0 shrink-0 cursor-pointer items-center justify-start rounded-full px-2 text-muted-foreground outline-none transition-[margin,padding,color,background-color] duration-200 ease-[cubic-bezier(0.32,0.72,0,1)] hover:bg-[color:var(--sidebar-hover)] hover:text-foreground dark:hover:text-[color:oklch(0.96_0_0)] focus-visible:ring-2 focus-visible:ring-ring data-[active=true]:-ml-[3px] data-[active=true]:bg-sidebar-accent data-[active=true]:pl-2.5 data-[active=true]:pr-3.5 data-[active=true]:text-foreground/90 dark:data-[active=true]:text-[color:oklch(0.96_0_0)]"
+              :data-active="sidebarView === view.id"
+              :aria-label="view.label"
+              :aria-pressed="sidebarView === view.id"
+              @click="store.selectSidebarView(view.id)"
+            >
+              <span class="relative shrink-0">
+                <component
+                  :is="view.icon"
+                  :stroke-width="1.75"
+                  class="size-[18px] shrink-0"
+                />
+                <!-- Unsaved files live on the Files view, so a count here surfaces them
+                     even while the user is in Chat. -->
+                <BadgeCount
+                  v-if="view.id === 'files' && dirtyFileCount > 0"
+                  :count="dirtyFileCount"
+                  class="pointer-events-none absolute -right-1.5 -top-1"
+                />
+              </span>
+              <span
+                class="grid min-w-0 transition-[grid-template-columns] duration-200 ease-[cubic-bezier(0.32,0.72,0,1)]"
+                :class="sidebarView === view.id ? 'grid-cols-[1fr]' : 'grid-cols-[0fr]'"
+              >
+                <span class="min-w-0 overflow-hidden">
+                  <span class="block whitespace-nowrap pl-2 text-control font-[550]">{{ view.label }}</span>
+                </span>
+              </span>
+            </button>
+          </TooltipTrigger>
+          <TooltipContent side="bottom">
+            {{ view.label }}
+          </TooltipContent>
+        </Tooltip>
+      </TooltipProvider>
 
       <div class="flex-1" />
 
@@ -109,8 +119,8 @@
     </nav>
 
     <!-- Active view (mutually exclusive). A bottom fade dissolves the list into
-         the footer so Settings reads as floating just below it — instead of a
-         hard rule above Settings, which would be lopsided since the nav above
+         the footer so the account row reads as floating just below it — instead
+         of a hard rule above it, which would be lopsided since the nav above
          the list has no divider of its own. -->
     <div class="relative min-h-0 flex-1 overflow-hidden">
       <PanelSessions
@@ -126,30 +136,47 @@
         v-show="sidebarView === 'schedule'"
         class="h-full"
       />
+      <PanelSupermarket
+        v-if="supermarketMounted"
+        v-show="sidebarView === 'supermarket'"
+        :bot-id="currentBotId || ''"
+        :can-manage="hasBotPermission(currentBot?.current_user_permissions, 'manage')"
+        class="h-full"
+      />
       <div
         class="pointer-events-none absolute inset-x-0 bottom-0 h-6 bg-gradient-to-t from-sidebar to-transparent"
         data-native-sidebar-fade
       />
     </div>
 
-    <!-- Settings, pinned below the scrollable panel. Solid bg + z-index keep
-         list rows behind the footer on Web; the native-surface hook lets macOS
-         Desktop expose the same sidebar material as the surrounding rail. -->
+    <!-- Usage-example entry on the sidebar floor, directly above the account
+         row, so it stays reachable whichever panel is active. It copies the
+         footer's px-2.5 inset and surface, so its row, tile and label line up
+         with the account row's. -->
     <div
-      class="relative z-1 shrink-0 bg-sidebar px-2 pt-1 pb-2"
+      class="relative z-1 shrink-0 bg-sidebar px-2.5 pt-1"
       data-native-sidebar-surface
     >
-      <SidebarNavButton
-        :active="isSettingsActive"
-        :aria-label="t('sidebar.settings')"
-        @click="router.push('/settings')"
-      >
-        <Settings
-          :stroke-width="1.75"
-          class="size-[18px]"
-        />
-        {{ t('sidebar.settings') }}
-      </SidebarNavButton>
+      <SidebarExamplesEntry beside-account />
+    </div>
+
+    <!-- Footer: account menu + update chip, pinned below the scrollable panel.
+         The user block is min-w-0/flex-1 so the chip's hover expansion eats its
+         slack instead of overlapping it. px-2.5/pb-2.5 keep the row's hover
+         chip equidistant from the window's left and bottom edges — a notch
+         wider than the panel's px-2 column above, deliberately. Solid bg +
+         z-index keep list rows behind the footer on Web; the native-surface
+         hook lets macOS Desktop expose the same sidebar material as the
+         surrounding rail. -->
+    <div
+      class="relative z-1 flex shrink-0 items-center gap-2.5 bg-sidebar px-2.5 pt-1 pb-2.5"
+      data-native-sidebar-surface
+    >
+      <!-- DropdownMenu has no DOM root; the flex sizing belongs on a real wrapper. -->
+      <div class="min-w-0 flex-1">
+        <UserMenu />
+      </div>
+      <UpdateChip />
     </div>
 
     <!-- Width resize handle -->
@@ -169,19 +196,22 @@
 
 <script setup lang="ts">
 import { computed, onBeforeUnmount, ref, watch, type Component } from 'vue'
-import { useRouter, useRoute } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { storeToRefs } from 'pinia'
-import { Files, MessageCircle, Search, Settings, Calendar } from 'lucide-vue-next'
-import { BadgeCount, Button } from '@felinic/ui'
+import { Files, MessageCircle, Search, Calendar, Blocks } from 'lucide-vue-next'
+import { BadgeCount, Button, Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@felinic/ui'
+import { useSettingsStore } from '@/store/settings'
 import { useChatStore } from '@/store/chat-list'
 import { useWorkspaceTabsStore, type SidebarView } from '@/store/workspace-tabs'
 import { hasBotPermission } from '@/utils/bot-permissions'
 import BotSwitcher from './bot-switcher.vue'
-import SidebarNavButton from './nav-button.vue'
+import SidebarExamplesEntry from './examples-entry.vue'
+import UserMenu from './user-menu.vue'
+import UpdateChip from './update-chip.vue'
 import PanelSessions from './panel-sessions.vue'
 import PanelFiles from './panel-files.vue'
 import PanelSchedule from './panel-schedule.vue'
+import PanelSupermarket from './panel-supermarket.vue'
 import SessionSearchDialog from './session-search-dialog.vue'
 
 defineProps<{
@@ -194,13 +224,22 @@ interface ActivityView {
   icon: Component
 }
 
-const router = useRouter()
-const route = useRoute()
-const { t } = useI18n()
+const { t, locale } = useI18n()
 const store = useWorkspaceTabsStore()
 const { sidebarView, sidebarWidth, workbenchOpen, dirtyFileCount } = storeToRefs(store)
+const settingsStore = useSettingsStore()
 const chatStore = useChatStore()
 const { currentBotId, bots } = storeToRefs(chatStore)
+
+// 按当前语言最长的导航标签保留最小空间，避免所有语言都为日文标签预留宽度。
+// 同一语言下切换选项不改变下限；放大界面字号时同步扩大。
+const minWidth = computed(() => {
+  const baseWidth = locale.value === 'ja' ? 344 : locale.value === 'zh' ? 256 : 304
+  return Math.ceil(baseWidth * Math.max(1, settingsStore.uiFontSizePx / 16))
+})
+const MAX_WIDTH = 480
+// 旧的持久化宽度也须遵守新下限，收起位移和拖拽起点使用同一实际宽度。
+const effectiveWidth = computed(() => Math.min(MAX_WIDTH, Math.max(minWidth.value, sidebarWidth.value)))
 
 // Push/pull rail. Fixed WIDTH (driven 1:1 by the resize handle), and a
 // margin-left that parks it off-screen left when closed so its flex footprint
@@ -208,8 +247,8 @@ const { currentBotId, bots } = storeToRefs(chatStore)
 // stays untransitioned so a resize tracks the pointer exactly; and margin-left
 // never changes during a resize (it's 0 while open), so the resize is clean.
 const asideStyle = computed<Record<string, string>>(() => ({
-  width: `${sidebarWidth.value}px`,
-  marginLeft: workbenchOpen.value ? '0px' : `-${sidebarWidth.value}px`,
+  width: `${effectiveWidth.value}px`,
+  marginLeft: workbenchOpen.value ? '0px' : `-${effectiveWidth.value}px`,
   transition: 'margin-left 300ms cubic-bezier(0.32, 0.72, 0, 1)',
   // Sidebar-scoped: lighten EVERY ghost button's hover (New Session, Settings,
   // Search) to the subtle sidebar tint so nothing on the rail uses the heavy
@@ -219,6 +258,11 @@ const asideStyle = computed<Record<string, string>>(() => ({
 }))
 
 const searchOpen = ref(false)
+const supermarketMounted = ref(false)
+/** Keep installation dialogs alive when switching sidebar views after the first visit. */
+watch(sidebarView, (view) => {
+  if (view === 'supermarket') supermarketMounted.value = true
+}, { immediate: true })
 
 const currentBot = computed(() =>
   bots.value.find(bot => bot.id === currentBotId.value) ?? null,
@@ -235,6 +279,7 @@ const availableViews = computed<ActivityView[]>(() => {
     views.push({ id: 'files', label: t('chat.activityBar.files'), icon: Files })
   }
   views.push({ id: 'schedule', label: t('chat.activityBar.schedule'), icon: Calendar })
+  views.push({ id: 'supermarket', label: t('supermarket.title'), icon: Blocks })
   return views
 })
 
@@ -245,22 +290,17 @@ watch(availableViews, (views) => {
   }
 }, { immediate: true })
 
-const isSettingsActive = computed(() => route.path.startsWith('/settings'))
-
-const MIN_WIDTH = 220
-const MAX_WIDTH = 480
-
 const isResizing = ref(false)
 
 function onResizeStart(e: MouseEvent) {
   e.preventDefault()
   isResizing.value = true
   const startX = e.clientX
-  const startWidth = sidebarWidth.value
+  const startWidth = effectiveWidth.value
 
   function onMouseMove(ev: MouseEvent) {
     const delta = ev.clientX - startX
-    sidebarWidth.value = Math.min(MAX_WIDTH, Math.max(MIN_WIDTH, startWidth + delta))
+    sidebarWidth.value = Math.min(MAX_WIDTH, Math.max(minWidth.value, startWidth + delta))
   }
 
   function onMouseUp() {

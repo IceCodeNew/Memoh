@@ -7,8 +7,8 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
-	"net/http"
 	"strings"
+	"time"
 	"unicode/utf8"
 
 	sdk "github.com/felinics/twilight/sdk"
@@ -19,6 +19,20 @@ import (
 
 const (
 	gatewayInlineAttachmentMaxBytes int64 = 20 * 1024 * 1024
+
+	// attachmentPreparationTimeout bounds preparing one turn's attachments.
+	// Rendering an animated sticker has its own, tighter deadline; this is the
+	// ceiling on a turn that carries a lot of them, so a batch of pathological
+	// media cannot hold a conversation open indefinitely.
+	attachmentPreparationTimeout = 30 * time.Second
+
+	// maxTurnVisionImages caps how many images one turn hands the model.
+	//
+	// A discussion turn gathers attachments from every new message, and an
+	// animated sticker expands into several images, so the two multiply. Past
+	// the cap an attachment contributes its first frame only — every
+	// attachment stays visible, and it is the expansion that is shed first.
+	maxTurnVisionImages = 20
 )
 
 // routeAndMergeAttachments applies CapabilityFallbackPolicy to split
@@ -28,13 +42,13 @@ func (s *Service) routeAndMergeAttachments(ctx context.Context, model models.Get
 	if len(req.Attachments) == 0 && len(req.ReplyAttachments) == 0 {
 		return []any{}
 	}
-	typed := s.prepareGatewayAttachments(ctx, req)
+	typed := s.prepareGatewayAttachments(ctx, req, modelAcceptsImages(model))
 	routed := routeAttachmentsByCapability(model.Config.Compatibilities, typed)
 	for i := range routed.Fallback {
 		fallbackPath := strings.TrimSpace(routed.Fallback[i].FallbackPath)
 		if fallbackPath == "" {
 			if s != nil && s.logger != nil {
-				s.logger.Warn(
+				s.logger.WarnContext(ctx,
 					"drop attachment without fallback path",
 					slog.String("type", strings.TrimSpace(routed.Fallback[i].Type)),
 					slog.String("transport", strings.TrimSpace(routed.Fallback[i].Transport)),
@@ -63,7 +77,15 @@ func (s *Service) routeAndMergeAttachments(ctx context.Context, model models.Get
 	return merged
 }
 
-func (s *Service) prepareGatewayAttachments(ctx context.Context, req ChatRequest) []gatewayAttachment {
+// prepareGatewayAttachments materializes request attachments for the gateway.
+//
+// acceptsImages says whether inline images can be used at all. Preparing an
+// image is not free — an animated sticker is rasterised, any stored image is
+// read and encoded — and a model without vision routes every one of them to a
+// file reference regardless, so the work is skipped rather than thrown away.
+func (s *Service) prepareGatewayAttachments(ctx context.Context, req ChatRequest, acceptsImages bool) []gatewayAttachment {
+	ctx, cancel := context.WithTimeout(ctx, attachmentPreparationTimeout)
+	defer cancel()
 	attachments := requestAttachmentsForGateway(req)
 	if len(attachments) == 0 {
 		return nil
@@ -114,7 +136,7 @@ func (s *Service) prepareGatewayAttachments(ctx context.Context, req ChatRequest
 		if item.ContentHash != "" && strings.TrimSpace(item.FallbackPath) == "" {
 			if accessPath, err := s.assetAccessPath(ctx, strings.TrimSpace(req.BotID), item.ContentHash); err != nil {
 				if s != nil && s.logger != nil {
-					s.logger.Warn(
+					s.logger.WarnContext(ctx,
 						"resolve gateway attachment access path failed",
 						slog.Any("error", err),
 						slog.String("bot_id", strings.TrimSpace(req.BotID)),
@@ -126,7 +148,9 @@ func (s *Service) prepareGatewayAttachments(ctx context.Context, req ChatRequest
 			}
 		}
 		item = normalizeGatewayAttachmentPayload(item)
-		item = s.inlineImageAttachmentAssetIfNeeded(ctx, strings.TrimSpace(req.BotID), item)
+		if acceptsImages {
+			item = s.inlineImageAttachmentAssetIfNeeded(ctx, strings.TrimSpace(req.BotID), item)
+		}
 		item = s.inlineFileAttachmentAssetIfNeeded(ctx, strings.TrimSpace(req.BotID), item)
 		prepared = append(prepared, item)
 	}
@@ -263,33 +287,29 @@ func inlineTextAttachmentPart(ga gatewayAttachment) (sdk.TextPart, bool) {
 
 // inlineInjectAttachments converts image attachments from an injected message
 // into sdk.ImagePart values for direct vision input. Non-image attachments and
-// images that cannot be inlined are silently skipped.
+// media the model cannot parse are skipped; the message text still carries the
+// attachment, so the agent keeps a usable reference to the original.
 func (s *Service) inlineInjectAttachments(ctx context.Context, botID string, atts []ChatAttachment) []sdk.ImagePart {
+	ctx, cancel := context.WithTimeout(ctx, attachmentPreparationTimeout)
+	defer cancel()
 	var parts []sdk.ImagePart
+	var budget visionBudget
+	seen := make(map[string]bool, len(atts))
 	for _, att := range atts {
 		if strings.ToLower(strings.TrimSpace(att.Type)) != "image" {
 			continue
 		}
 		contentHash := strings.TrimSpace(att.ContentHash)
-		if contentHash == "" {
+		if contentHash == "" || seen[contentHash] {
 			continue
 		}
-		dataURL, mime, err := s.inlineAssetAsDataURL(ctx, botID, contentHash, "image", strings.TrimSpace(att.Mime))
+		seen[contentHash] = true
+		framed, err := s.inlineStoredImageParts(ctx, botID, contentHash, att.Mime)
 		if err != nil {
-			if s != nil && s.logger != nil {
-				s.logger.Warn(
-					"inline inject image attachment failed",
-					slog.Any("error", err),
-					slog.String("bot_id", botID),
-					slog.String("content_hash", contentHash),
-				)
-			}
+			s.logImageInputRejected(err, botID, contentHash)
 			continue
 		}
-		parts = append(parts, sdk.ImagePart{
-			Image:     dataURL,
-			MediaType: mime,
-		})
+		parts = append(parts, budget.take(framed)...)
 	}
 	return parts
 }
@@ -298,32 +318,77 @@ func (s *Service) inlineImageAttachmentAssetIfNeeded(ctx context.Context, botID 
 	if item.Type != "image" {
 		return item
 	}
-	if strings.TrimSpace(item.Payload) != "" &&
-		(item.Transport == gatewayTransportInlineDataURL || item.Transport == gatewayTransportPublicURL) {
+	if strings.TrimSpace(item.Payload) != "" && item.Transport == gatewayTransportInlineDataURL {
+		// Bytes are already here, so check them rather than trusting the label
+		// the uploader attached to them.
+		payload, mime, err := normalizeInlineImageDataURL(item.Payload)
+		if err != nil {
+			s.logImageInputRejected(err, botID, item.ContentHash)
+			return demoteNonImageAttachment(item)
+		}
+		item.Payload, item.Mime = payload, mime
+		return item
+	}
+	if strings.TrimSpace(item.Payload) != "" && item.Transport == gatewayTransportPublicURL {
+		// Remote bytes cannot be sniffed here; the raster allowlist on the
+		// declared MIME is all the capability router has to go on.
 		return item
 	}
 	contentHash := strings.TrimSpace(item.ContentHash)
 	if contentHash == "" {
 		return item
 	}
-	dataURL, mime, err := s.inlineAssetAsDataURL(ctx, botID, contentHash, item.Type, item.Mime)
+	dataURLs, mime, err := s.inlineStoredImageDataURLs(ctx, botID, contentHash, item.Mime)
 	if err != nil {
-		if s != nil && s.logger != nil {
-			s.logger.Warn(
-				"inline gateway image attachment failed",
-				slog.Any("error", err),
-				slog.String("bot_id", botID),
-				slog.String("content_hash", contentHash),
-			)
+		s.logImageInputRejected(err, botID, contentHash)
+		if errors.Is(err, errUnsupportedImageBytes) {
+			return demoteNonImageAttachment(item)
 		}
 		return item
 	}
 	item.Transport = gatewayTransportInlineDataURL
-	item.Payload = dataURL
-	if strings.TrimSpace(item.Mime) == "" {
-		item.Mime = mime
+	item.Payload = dataURLs[0]
+	item.Mime = mime
+	if len(dataURLs) > 1 {
+		item.Frames = dataURLs
+		// Size drives the per-request media budget, so it has to account for
+		// every frame the model will actually receive.
+		item.Size = totalInlineDataURLBytes(dataURLs)
 	}
 	return item
+}
+
+// totalInlineDataURLBytes estimates the decoded size of a set of data URLs.
+func totalInlineDataURLBytes(dataURLs []string) int64 {
+	var total int64
+	for _, dataURL := range dataURLs {
+		body, _ := splitInlineDataURL(dataURL)
+		total += int64(len(body)) * 3 / 4
+	}
+	return total
+}
+
+// demoteNonImageAttachment keeps media the model cannot parse out of the vision
+// lane. The capability router turns it into a file reference, so the agent can
+// still reach the original through workspace tools.
+func demoteNonImageAttachment(item gatewayAttachment) gatewayAttachment {
+	item.Mime = "application/octet-stream"
+	return item
+}
+
+// logImageInputRejected records why an attachment was withheld from vision
+// input. content_hash is the handle support needs to find the stored original;
+// the bytes themselves and any credentialed source URL stay out of the log.
+func (s *Service) logImageInputRejected(err error, botID, contentHash string) {
+	if s == nil || s.logger == nil {
+		return
+	}
+	s.logger.Warn(
+		"attachment withheld from vision input; original still reachable as a file",
+		slog.Any("error", err),
+		slog.String("bot_id", strings.TrimSpace(botID)),
+		slog.String("content_hash", strings.TrimSpace(contentHash)),
+	)
 }
 
 // inlineFileAttachmentAssetIfNeeded mirrors inlineImageAttachmentAssetIfNeeded
@@ -349,7 +414,7 @@ func (s *Service) inlineFileAttachmentAssetIfNeeded(ctx context.Context, botID s
 	dataURL, mime, err := s.inlineAssetAsDataURL(ctx, botID, contentHash, item.Type, item.Mime)
 	if err != nil {
 		if s != nil && s.logger != nil {
-			s.logger.Warn(
+			s.logger.WarnContext(ctx,
 				"inline gateway file attachment failed",
 				slog.Any("error", err),
 				slog.String("bot_id", botID),
@@ -397,19 +462,22 @@ func encodeReaderAsDataURL(reader io.Reader, maxBytes int64, attachmentType, fal
 	}
 	limited := &io.LimitedReader{R: reader, N: maxBytes + 1}
 	head := make([]byte, 512)
-	n, err := limited.Read(head)
-	if err != nil && !errors.Is(err, io.EOF) {
+	// A Reader may return fewer bytes than asked for without being at the end
+	// of the stream, and a short prefix cannot be told apart from arbitrary
+	// binary. Fill the sniff window before deciding anything about the format.
+	n, err := io.ReadFull(limited, head)
+	if err != nil && !errors.Is(err, io.EOF) && !errors.Is(err, io.ErrUnexpectedEOF) {
 		return "", "", fmt.Errorf("read asset: %w", err)
 	}
 	head = head[:n]
 
 	mime := strings.TrimSpace(fallbackMime)
-	if strings.EqualFold(strings.TrimSpace(attachmentType), "image") &&
-		(strings.TrimSpace(mime) == "" || strings.EqualFold(strings.TrimSpace(mime), "application/octet-stream")) {
-		detected := strings.TrimSpace(http.DetectContentType(head))
-		if strings.HasPrefix(strings.ToLower(detected), "image/") {
-			mime = detected
+	if strings.EqualFold(strings.TrimSpace(attachmentType), "image") {
+		detected, err := modelImageMimeFromBytes(head)
+		if err != nil {
+			return "", "", err
 		}
+		mime = detected
 	}
 	if mime == "" {
 		mime = "application/octet-stream"

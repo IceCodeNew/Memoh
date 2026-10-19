@@ -98,22 +98,30 @@ func (c *apiClient) getAccessToken(ctx context.Context) (string, error) {
 		return "", err
 	}
 	defer func() { _ = resp.Body.Close() }()
-	var out map[string]any
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("wechatoa get token: HTTP status %d", resp.StatusCode)
+	}
+	var out struct {
+		AccessToken string `json:"access_token"` //nolint:gosec // G117: WeChat API response field; token remains in the in-memory client cache.
+		ExpiresIn   int64  `json:"expires_in"`
+		ErrCode     int    `json:"errcode"`
+		ErrMsg      string `json:"errmsg"`
+	}
 	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
 		return "", err
 	}
-	accessToken := strings.TrimSpace(fmt.Sprint(out["access_token"]))
-	errMsg := strings.TrimSpace(fmt.Sprint(out["errmsg"]))
-	errCode, _ := out["errcode"].(float64)
-	expiresIn, _ := out["expires_in"].(float64)
-	if accessToken == "" {
-		return "", fmt.Errorf("wechatoa get token failed: %s (code: %d)", errMsg, int(errCode))
+	if out.ErrCode != 0 {
+		return "", fmt.Errorf("wechatoa get token failed: %s (code: %d)", strings.TrimSpace(out.ErrMsg), out.ErrCode)
 	}
-	if expiresIn <= 0 {
-		expiresIn = 7200
+	accessToken := strings.TrimSpace(out.AccessToken)
+	if accessToken == "" {
+		return "", errors.New("wechatoa get token: empty access token")
+	}
+	if out.ExpiresIn <= 0 {
+		out.ExpiresIn = 7200
 	}
 	c.tokenCache = accessToken
-	c.expiresAt = time.Now().Add(time.Duration(int64(expiresIn)) * time.Second)
+	c.expiresAt = time.Now().Add(time.Duration(out.ExpiresIn) * time.Second)
 	return c.tokenCache, nil
 }
 

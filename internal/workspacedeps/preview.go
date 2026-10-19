@@ -61,7 +61,7 @@ var secretEnvMarkers = []string{"TOKEN", "SECRET", "PASSWORD", "PASSWD", "CREDEN
 // given (bot, target): the dependency home follows the target's data root
 // and the platform entries come from the last probe when there is one.
 // Nothing is executed and the workspace is never started.
-func (s *Service) ScriptPreviewDetails(ctx context.Context, botID, targetID, depID string, action catalog.Action) (ScriptPreview, error) {
+func (s *Service) ScriptPreviewDetails(ctx context.Context, botID, depID string, action catalog.Action) (ScriptPreview, error) {
 	if action == ActionRollback {
 		offline, _, err := s.prepareCatalog(ctx, false, true)
 		if err != nil {
@@ -83,14 +83,13 @@ func (s *Service) ScriptPreviewDetails(ctx context.Context, botID, targetID, dep
 	if err != nil {
 		return ScriptPreview{}, err
 	}
-	targetID = normalizeTargetID(targetID)
 
 	dataRoot := config.DefaultDataMount
-	if root, err := s.workspace.DataRoot(ctx, botID, targetID); err == nil && strings.TrimSpace(root) != "" {
+	if root, err := s.workspace.DataRoot(ctx, botID); err == nil && strings.TrimSpace(root) != "" {
 		dataRoot = root
 	}
 	platform := Platform{OS: previewProbedAtRunTime, Arch: previewProbedAtRunTime, Libc: previewProbedAtRunTime}
-	if snap, ok := s.cache.Get(botID, targetID); ok {
+	if snap, ok := s.cache.Get(botID); ok {
 		platform = snap.Platform
 	}
 	tmpDir := strings.TrimSpace(platform.TmpDir)
@@ -100,15 +99,15 @@ func (s *Service) ScriptPreviewDetails(ctx context.Context, botID, targetID, dep
 	timeout := previewTimeout(dep, action)
 
 	spec := RunSpec{
-		DepID:             dep.ID,
-		Action:            action,
-		WorkspaceTargetID: targetID,
-		Home:              Home(dataRoot, dep.ID),
-		ShimDir:           ShimDir(dataRoot),
-		Version:           previewVersion(dep, action),
-		CurrentVersion:    previewCurrentVersion(action),
-		Platform:          platform,
-		Timeout:           timeout,
+		DepID:  dep.ID,
+		Action: action,
+
+		Home:           Home(dataRoot, dep.ID),
+		ShimDir:        ShimDir(dataRoot),
+		Version:        previewVersion(dep, action),
+		CurrentVersion: previewCurrentVersion(action),
+		Platform:       platform,
+		Timeout:        timeout,
 	}
 	if s.scriptEnv != nil {
 		spec.ExtraEnv = s.scriptEnv(ctx)

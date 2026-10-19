@@ -31,11 +31,11 @@ func sampleSnapshot() Snapshot {
 
 func TestCacheGetPutAndExpiry(t *testing.T) {
 	c, now := newTestCache(time.Minute)
-	if _, ok := c.Get("bot", "target"); ok {
+	if _, ok := c.Get("bot"); ok {
 		t.Fatal("empty cache reported a hit")
 	}
-	c.Put("bot", "target", sampleSnapshot())
-	snap, ok := c.Get("bot", "target")
+	c.Put("bot", sampleSnapshot())
+	snap, ok := c.Get("bot")
 	if !ok || snap.Observed["codex"].Version != "0.150.0" || snap.Platform.OS != "linux" {
 		t.Fatalf("Get = %+v, %v; want the stored snapshot", snap, ok)
 	}
@@ -43,48 +43,45 @@ func TestCacheGetPutAndExpiry(t *testing.T) {
 		t.Errorf("At = %s, want stamped with now %s", snap.At, *now)
 	}
 	*now = now.Add(time.Minute)
-	if _, ok := c.Get("bot", "target"); ok {
+	if _, ok := c.Get("bot"); ok {
 		t.Error("expired snapshot reported a hit")
 	}
-	if _, ok := c.Get("bot", "other"); ok {
+	if _, ok := c.Get("bot"); ok {
 		t.Error("unrelated target reported a hit")
 	}
 }
 
 func TestCacheZeroTTLNeverExpires(t *testing.T) {
 	c, now := newTestCache(0)
-	c.Put("bot", "target", sampleSnapshot())
+	c.Put("bot", sampleSnapshot())
 	*now = now.Add(365 * 24 * time.Hour)
-	if _, ok := c.Get("bot", "target"); !ok {
+	if _, ok := c.Get("bot"); !ok {
 		t.Error("snapshot expired with a zero ttl")
 	}
 }
 
-func TestCacheInvalidateDropsEveryTargetOfBot(t *testing.T) {
+func TestCacheInvalidatePreservesOtherBots(t *testing.T) {
 	c, _ := newTestCache(time.Hour)
-	c.Put("bot", "native", sampleSnapshot())
-	c.Put("bot", "remote-1", sampleSnapshot())
-	c.Put("other", "native", sampleSnapshot())
+	c.Put("bot", sampleSnapshot())
+	c.Put("other", sampleSnapshot())
 	c.Invalidate("bot")
-	for _, target := range []string{"native", "remote-1"} {
-		if _, ok := c.Get("bot", target); ok {
-			t.Errorf("bot/%s survived Invalidate", target)
-		}
+	if _, ok := c.Get("bot"); ok {
+		t.Error("bot survived Invalidate")
 	}
-	if _, ok := c.Get("other", "native"); !ok {
+	if _, ok := c.Get("other"); !ok {
 		t.Error("Invalidate removed another bot's snapshot")
 	}
 }
 
 func TestCacheObserveVersion(t *testing.T) {
 	c, _ := newTestCache(time.Hour)
-	c.ObserveVersion("bot", "native", "codex", "0.151.0") // nothing cached: no-op
+	c.ObserveVersion("bot", "codex", "0.151.0") // nothing cached: no-op
 	original := sampleSnapshot()
-	c.Put("bot", "native", original)
-	c.ObserveVersion("bot", "native", "codex", "0.151.0")
-	c.ObserveVersion("bot", "native", "unknown", "1.0.0")
+	c.Put("bot", original)
+	c.ObserveVersion("bot", "codex", "0.151.0")
+	c.ObserveVersion("bot", "unknown", "1.0.0")
 
-	snap, ok := c.Get("bot", "native")
+	snap, ok := c.Get("bot")
 	if !ok {
 		t.Fatal("snapshot missing")
 	}
@@ -112,9 +109,9 @@ func TestCacheConcurrentAccess(t *testing.T) {
 		go func(i int) {
 			defer wg.Done()
 			bot := string(rune('a' + i%4))
-			c.Put(bot, "native", sampleSnapshot())
-			c.Get(bot, "native")
-			c.ObserveVersion(bot, "native", "codex", "0.151.0")
+			c.Put(bot, sampleSnapshot())
+			c.Get(bot)
+			c.ObserveVersion(bot, "codex", "0.151.0")
 			if i%2 == 0 {
 				c.Invalidate(bot)
 			}
@@ -123,7 +120,7 @@ func TestCacheConcurrentAccess(t *testing.T) {
 	wg.Wait()
 	// Odd-numbered bots (b, d) are never invalidated and must still be there.
 	for _, bot := range []string{"b", "d"} {
-		if snap, ok := c.Get(bot, "native"); !ok || snap.Observed["codex"].Version != "0.151.0" {
+		if snap, ok := c.Get(bot); !ok || snap.Observed["codex"].Version != "0.151.0" {
 			t.Errorf("bot %s: Get = %+v, %v; want the observed version after concurrent updates", bot, snap.Observed["codex"], ok)
 		}
 	}
@@ -136,17 +133,17 @@ func TestCacheSnapshotsDoNotShareMutableState(t *testing.T) {
 		Candidates:  []Candidate{{Path: "/original"}},
 		State:       &State{Entrypoints: map[string]string{"tool": "/original"}, Previous: &PreviousInstallation{Entrypoints: map[string]string{"tool": "/previous"}}},
 	}}}
-	cache.Put("bot", "target", snapshot)
+	cache.Put("bot", snapshot)
 	// Put and Get must each detach all nested values, including the top-level
 	// entrypoints map that callers use directly when choosing a command.
 	snapshot.Observed["tool"].Entrypoints["tool"] = "/changed-on-put"
-	first, _ := cache.Get("bot", "target")
+	first, _ := cache.Get("bot")
 	first.Observed["tool"].Entrypoints["tool"] = "/changed-on-get"
 	first.Observed["tool"].Candidates[0].Path = "/changed-candidate"
 	first.Observed["tool"].State.Entrypoints["tool"] = "/changed-state"
 	first.Observed["tool"].State.Previous.Entrypoints["tool"] = "/changed-previous"
 	delete(first.Observed, "missing")
-	second, _ := cache.Get("bot", "target")
+	second, _ := cache.Get("bot")
 	got := second.Observed["tool"]
 	if got.Entrypoints["tool"] != "/original" || got.Candidates[0].Path != "/original" || got.State.Entrypoints["tool"] != "/original" || got.State.Previous.Entrypoints["tool"] != "/previous" {
 		t.Fatalf("caller mutation leaked into cached discovery: %+v", got)

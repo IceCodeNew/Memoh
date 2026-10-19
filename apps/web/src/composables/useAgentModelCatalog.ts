@@ -13,7 +13,7 @@ import {
 } from '@memohai/sdk'
 import {
   BOT_AGENT_RUNTIME_CLAUDE_CODE,
-  BOT_AGENT_RUNTIME_CODEX,
+  isDirectBotAgentRuntime,
 } from '@/utils/bot-agent'
 
 const ACP_SESSION_RUNTIME = 'acp_agent'
@@ -30,6 +30,7 @@ export interface AgentModelCatalog {
   defaultModelId: string
   defaultReasoningEffort: string
   reasoningEfforts?: AcpclientReasoningEffortInfo[]
+  unavailablePermissionModes?: string[]
 }
 
 interface UseAgentModelCatalogOptions {
@@ -37,6 +38,7 @@ interface UseAgentModelCatalogOptions {
   botAgentId: MaybeRefOrGetter<string | null | undefined>
   runtime: MaybeRefOrGetter<string | null | undefined>
   selectedModelId: MaybeRefOrGetter<string | null | undefined>
+  projectPath: MaybeRefOrGetter<string | null | undefined>
   acpModels: MaybeRefOrGetter<AcpclientModelInfo[]>
   acpCurrentModelId: MaybeRefOrGetter<string | null | undefined>
   acpReasoningEfforts: MaybeRefOrGetter<AcpclientReasoningEffortInfo[]>
@@ -46,14 +48,14 @@ interface UseAgentModelCatalogOptions {
 }
 
 function normalizePickerModels(
-  models: Array<Pick<ExternalModelOption, 'id' | 'name' | 'description'>>,
+  models: Array<Pick<ExternalModelOption, 'id' | 'resolved_model_id' | 'name' | 'description'>>,
 ): ModelsGetResponse[] {
   return models.flatMap((model) => {
     const id = model.id?.trim() ?? ''
     if (!id) return []
     return [{
       id,
-      model_id: id,
+      model_id: model.resolved_model_id?.trim() || id,
       name: model.name?.trim() || id,
       provider_id: '',
       type: 'chat' as const,
@@ -72,7 +74,7 @@ function externalCatalog(
   const defaultModelId = models.find(model => model.default)?.id?.trim() ?? ''
   const configuredModelId = source?.configured_model_id?.trim() ?? ''
   const effectiveModelId = selectedModelId || configuredModelId || defaultModelId
-  const selectedModel = models.find(model => model.id?.trim() === effectiveModelId)
+  const selectedModel = models.find(model => model.id?.trim() === effectiveModelId || model.resolved_model_id?.trim() === effectiveModelId)
   return {
     models: normalizePickerModels(models),
     providers: [],
@@ -81,56 +83,74 @@ function externalCatalog(
     defaultModelId,
     defaultReasoningEffort: selectedModel?.default_reasoning_effort?.trim() ?? '',
     reasoningEfforts: selectedModel?.reasoning_efforts ?? [],
+    unavailablePermissionModes: selectedModel?.unavailable_permission_modes ?? [],
   }
 }
 
 // useAgentModelCatalog is the single frontend boundary for model discovery.
 // Each runtime keeps its native transport, while consumers always receive the
 // same picker-oriented catalog shape.
+// A catalog request that never settles (server restarting, a stalled proxy)
+// would otherwise keep the picker loading until the connection itself gives
+// up. Past this it fails, and the picker offers a retry.
+const CATALOG_TIMEOUT_MS = 15_000
+
+function withCatalogTimeout(signal: AbortSignal): AbortSignal {
+  return AbortSignal.any([signal, AbortSignal.timeout(CATALOG_TIMEOUT_MS)])
+}
+
 export function useAgentModelCatalog(options: UseAgentModelCatalogOptions) {
   const runtime = computed(() => toValue(options.runtime)?.trim() || 'model')
   const botId = computed(() => toValue(options.botId)?.trim() ?? '')
   const botAgentId = computed(() => toValue(options.botAgentId)?.trim() ?? '')
-  const isNative = computed(() => ![
-    ACP_SESSION_RUNTIME,
-    BOT_AGENT_RUNTIME_CODEX,
-    BOT_AGENT_RUNTIME_CLAUDE_CODE,
-  ].includes(runtime.value))
+  const projectPath = computed(() => runtime.value === BOT_AGENT_RUNTIME_CLAUDE_CODE ? toValue(options.projectPath)?.trim() ?? '' : '')
+  const source = computed(() => runtime.value === ACP_SESSION_RUNTIME
+    ? 'acp'
+    : isDirectBotAgentRuntime(runtime.value) ? 'direct' : 'native')
+  const isNative = computed(() => source.value === 'native')
 
   const nativeModelsQuery = useQuery({
     key: ['models'],
-    query: async () => {
-      const { data } = await getModels({ throwOnError: true })
+    query: async ({ signal }) => {
+      const { data } = await getModels({ signal: withCatalogTimeout(signal), throwOnError: true })
       return data
     },
     enabled: () => isNative.value,
   })
   const nativeProvidersQuery = useQuery({
     key: ['providers'],
-    query: async () => {
-      const { data } = await getProviders({ throwOnError: true })
+    query: async ({ signal }) => {
+      const { data } = await getProviders({ signal: withCatalogTimeout(signal), throwOnError: true })
       return data
     },
     enabled: () => isNative.value,
   })
+  const selectedModelId = computed(() => toValue(options.selectedModelId)?.trim() ?? '')
+  const defaultsModelId = computed(() => runtime.value === BOT_AGENT_RUNTIME_CLAUDE_CODE ? selectedModelId.value : '')
+  const directScope = computed(() => JSON.stringify([runtime.value, botId.value, botAgentId.value, projectPath.value]))
   const directQuery = useQuery({
-    key: () => externalAgentModelsQueryKey(runtime.value, botId.value, botAgentId.value),
-    query: async () => {
+    key: () => [...externalAgentModelsQueryKey(runtime.value, botId.value, botAgentId.value), projectPath.value, defaultsModelId.value],
+    query: async ({ signal }) => {
+      const target = directScope.value
       const { data } = await getBotsByBotIdAgentsByIdModels({
         path: { bot_id: botId.value, id: botAgentId.value },
+        query: { project_path: projectPath.value || undefined, model_id: defaultsModelId.value || undefined },
+        signal: withCatalogTimeout(signal),
         throwOnError: true,
       })
-      return data
+      return { target, catalog: data }
     },
-    enabled: () => [BOT_AGENT_RUNTIME_CODEX, BOT_AGENT_RUNTIME_CLAUDE_CODE].includes(runtime.value) && !!botId.value && !!botAgentId.value,
+    enabled: () => source.value === 'direct' && !!botId.value && !!botAgentId.value,
     refetchOnWindowFocus: false,
+    // Keep the same Agent's capabilities visible while resolving another
+    // model's defaults; never carry a catalog across workspaces or Agents.
+    placeholderData: previous => previous?.target === directScope.value ? previous : undefined,
   })
 
   const nativeModels = computed<ModelsGetResponse[]>(() => nativeModelsQuery.data.value ?? [])
-  const selectedModelId = computed(() => toValue(options.selectedModelId)?.trim() ?? '')
   const catalog = computed<AgentModelCatalog>(() => {
-    switch (runtime.value) {
-      case ACP_SESSION_RUNTIME:
+    switch (source.value) {
+      case 'acp':
         return {
           models: normalizePickerModels(toValue(options.acpModels)),
           providers: [],
@@ -140,9 +160,8 @@ export function useAgentModelCatalog(options: UseAgentModelCatalogOptions) {
           defaultReasoningEffort: '',
           reasoningEfforts: toValue(options.acpReasoningEfforts),
         }
-      case BOT_AGENT_RUNTIME_CODEX:
-      case BOT_AGENT_RUNTIME_CLAUDE_CODE:
-        return externalCatalog(directQuery.data.value, selectedModelId.value)
+      case 'direct':
+        return externalCatalog(directQuery.data.value?.target === directScope.value ? directQuery.data.value.catalog : undefined, selectedModelId.value)
       default:
         return {
           models: nativeModels.value,
@@ -156,22 +175,20 @@ export function useAgentModelCatalog(options: UseAgentModelCatalogOptions) {
   })
 
   const isLoading = computed(() => {
-    switch (runtime.value) {
-      case ACP_SESSION_RUNTIME:
+    switch (source.value) {
+      case 'acp':
         return toValue(options.acpLoading)
-      case BOT_AGENT_RUNTIME_CODEX:
-      case BOT_AGENT_RUNTIME_CLAUDE_CODE:
+      case 'direct':
         return directQuery.isLoading.value
       default:
         return nativeModelsQuery.isLoading.value || nativeProvidersQuery.isLoading.value
     }
   })
   const error = computed(() => {
-    switch (runtime.value) {
-      case BOT_AGENT_RUNTIME_CODEX:
-      case BOT_AGENT_RUNTIME_CLAUDE_CODE:
+    switch (source.value) {
+      case 'direct':
         return directQuery.error.value
-      case ACP_SESSION_RUNTIME:
+      case 'acp':
         return null
       default:
         return nativeModelsQuery.error.value ?? nativeProvidersQuery.error.value
@@ -179,12 +196,11 @@ export function useAgentModelCatalog(options: UseAgentModelCatalogOptions) {
   })
 
   async function refresh() {
-    switch (runtime.value) {
-      case ACP_SESSION_RUNTIME:
+    switch (source.value) {
+      case 'acp':
         await options.refreshACP?.()
         return
-      case BOT_AGENT_RUNTIME_CODEX:
-      case BOT_AGENT_RUNTIME_CLAUDE_CODE:
+      case 'direct':
         await directQuery.refetch()
         return
       default:

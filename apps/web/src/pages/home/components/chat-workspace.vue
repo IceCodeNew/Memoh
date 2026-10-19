@@ -7,7 +7,6 @@
     <DockviewVue
       class="h-full w-full"
       :components="panelComponents"
-      :tab-components="tabComponents"
       :watermark-component="watermarkComponent"
       :default-tab-component="defaultTabComponent"
       :prefix-header-actions-component="prefixHeaderActionsComponent"
@@ -41,7 +40,8 @@ import 'dockview-vue/dist/styles/dockview.css'
 import '@/styles/dockview-theme.css'
 import { useWorkspaceTabsStore } from '@/store/workspace-tabs'
 import { openInFileManagerKey, openAssetPreviewKey } from '../composables/useFileManagerProvider'
-import { DesktopShellKey } from '@/lib/desktop-shell'
+import { normalizeFileManagerPath } from './file-manager-path'
+import { DesktopShellKey, DesktopWindowKey } from '@/lib/desktop-shell'
 import PanelChat from './dockview/panel-chat.vue'
 import PanelFile from './dockview/panel-file.vue'
 import PanelPreview from './dockview/panel-preview.vue'
@@ -51,8 +51,7 @@ import PanelBrowser from './dockview/panel-browser.vue'
 import PanelDisplay from './dockview/panel-display.vue'
 import PanelSchedule from './dockview/panel-schedule.vue'
 import WorkspaceWatermark from './dockview/workspace-watermark.vue'
-import WorkspaceTabHost from './dockview/workspace-tab-host.vue'
-import TerminalTab from './dockview/terminal-tab.vue'
+import WorkspaceTab from './dockview/workspace-tab.vue'
 import GroupActions from './dockview/group-actions.vue'
 import HeaderAddActions from './dockview/header-add-actions.vue'
 import PrefixHeaderActions from './dockview/prefix-header-actions.vue'
@@ -133,10 +132,7 @@ const panelComponents: Record<string, VueComponent> = {
 }
 
 const watermarkComponent = WorkspaceWatermark as unknown as VueComponent
-const tabComponents: Record<string, VueComponent> = {
-  terminalTab: TerminalTab as unknown as VueComponent,
-}
-const defaultTabComponent = WorkspaceTabHost as unknown as VueComponent
+const defaultTabComponent = WorkspaceTab as unknown as VueComponent
 // "+" cluster: leftActions renders right after the tabs (so it hugs the last
 // tab, Chrome-style), while Preview pins to rightActions at the strip's far
 // right. The growing void between them is dockview's droppable empty header.
@@ -181,21 +177,6 @@ function onReady(event: DockviewReadyEvent) {
   applyLayout()
 }
 
-const FILE_MANAGER_ROOT = '/data'
-
-function normalizeFileManagerPath(path: string): string {
-  const trimmedPath = path.trim()
-  if (!trimmedPath) return FILE_MANAGER_ROOT
-  if (trimmedPath === FILE_MANAGER_ROOT || trimmedPath.startsWith(`${FILE_MANAGER_ROOT}/`)) {
-    return trimmedPath
-  }
-  if (trimmedPath === '/') return FILE_MANAGER_ROOT
-  if (trimmedPath.startsWith('/')) {
-    return `${FILE_MANAGER_ROOT}${trimmedPath}`
-  }
-  return `${FILE_MANAGER_ROOT}/${trimmedPath}`
-}
-
 // dockview-vue renders panel/tab/header-action components by mounting fresh
 // vNodes whose appContext.provides is rebuilt from THIS component's own
 // instance.provides (it spreads parent.provides). A plain `inject` in a child
@@ -208,6 +189,11 @@ function normalizeFileManagerPath(path: string): string {
 // Re-inject + re-provide so the value survives the dockview mount boundary.
 const desktopShell = inject(DesktopShellKey, false)
 provide(DesktopShellKey, desktopShell)
+// Same boundary for the fullscreen bridge: without re-providing, the dock's
+// header-actions read no DesktopWindowKey and keep the traffic-light gutter
+// in fullscreen (see useMacTrafficReserve).
+const desktopWindow = inject(DesktopWindowKey, undefined)
+provide(DesktopWindowKey, desktopWindow)
 
 provide(openInFileManagerKey, (path: string, isDir = false) => {
   const normalizedPath = normalizeFileManagerPath(path)

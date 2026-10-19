@@ -19,7 +19,7 @@ func removalScript(dep catalog.Dependency, script, toolkitRoot string) string {
 	b.WriteString("rm -rf -- \"$MEMOH_DEP_HOME\"\n")
 	// Remote targets own their software layout through the reviewed recipe.
 	// Only a native workspace has an isolated, writable image filesystem.
-	fmt.Fprintf(&b, "if [ \"${MEMOH_DEP_WORKSPACE_TARGET:-}\" = %s ]; then\n", shellQuote(TargetNative))
+	fmt.Fprintf(&b, "if [ \"${MEMOH_DEP_WORKSPACE_TARGET:-}\" = %s ]; then\n", shellQuote("native"))
 	// Never follow a replaced ancestor into a different tree. rm removes
 	// individual symlinks themselves, not their targets.
 	fmt.Fprintf(&b, "  [ ! -L %s ] && [ ! -L %s ] || exit 1\n", shellQuote(toolkitRoot), shellQuote(path.Join(toolkitRoot, "bin")))

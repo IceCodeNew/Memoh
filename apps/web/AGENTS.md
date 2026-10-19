@@ -47,7 +47,8 @@ patterns, and the verification checklist for every surface in this package.
 src/
 ├── App.vue                    # Root component (RouterView + Toaster + settings init)
 ├── main.ts                    # App entry (plugins, global components, API client setup)
-├── router.ts                  # Route definitions, auth guard, chunk error recovery
+├── routes.ts                  # Shared Web/Desktop business route factory
+├── router.ts                  # Web history, auth guard, chunk error recovery
 ├── style.css                  # Tailwind imports (delegates to @felinic/ui/style.css)
 ├── i18n.ts                    # vue-i18n configuration
 ├── assets/                    # Static assets (logo.svg)
@@ -174,7 +175,6 @@ src/
 │   │       ├── bot-memory.vue         # Memory configuration tab
 │   │       ├── bot-mcp.vue            # MCP connections tab
 │   │       ├── bot-schedule.vue       # Schedule management tab
-│   │       ├── bot-email.vue          # Email configuration tab
 │   │       ├── bot-container.vue      # Container management tab
 │   │       ├── bot-network.vue        # Workspace network tab
 │   │       ├── bot-tool-approval.vue  # Tool approval settings tab
@@ -187,11 +187,10 @@ src/
 │   │       ├── reasoning-effort-select.vue  # Reasoning effort selector
 │   │       ├── reasoning-effort.ts    # Reasoning effort constants
 │   │       ├── search-provider-select.vue   # Search provider selector
-│   │       ├── memory-provider-select.vue   # Memory provider selector
 │   │       ├── tts-model-select.vue         # TTS model selector
 │   │       ├── channel-settings-panel.vue   # Channel settings panel
 │   │       ├── container-create-progress.vue # Container creation progress
-│   │       ├── bot-dependencies.vue         # Workspace dependencies tab (target select, check updates, grouped rows, dialogs)
+│   │       ├── bot-apps.vue                 # Bot Apps in its isolated workspace (check updates, details, dialogs)
 │   │       ├── dependency-row.vue           # One dependency row: icon, version/status badges, primary action + menu
 │   │       ├── dependency-kv-list.vue       # Read-only key/value block shared by the dependency dialogs
 │   │       ├── dependency-confirm-dialog.vue # Confirm install / update / align / reinstall of a workspace dependency
@@ -199,16 +198,15 @@ src/
 │   │       ├── dependency-script-dialog.vue # Preview of the exact script a dependency action runs
 │   │       ├── dependency-rollback-dialog.vue # Confirm rolling a dependency back to its previous version
 │   │       └── weixin-qr-login.vue          # WeChat QR login
-│   ├── providers/             #   LLM provider & model management
-│   ├── web-search/            #   Web search provider management
-│   ├── memory/                #   Memory provider management
+│   ├── providers/             #   Providers page: scope rail (Models / Web Search / Voice / Video); models-panel.vue = LLM providers & models
+│   ├── web-search/            #   Web Search scope panel (rendered inside Providers)
 │   ├── speech/                #   Legacy TTS page (redirects to voice)
 │   ├── transcription/         #   Legacy transcription page (redirects to voice)
-│   ├── voice/                 #   TTS + transcription provider management
+│   ├── voice/                 #   Voice scope panel: TTS + transcription providers (rendered inside Providers)
+│   ├── video/                 #   Video scope panel (rendered inside Providers)
 │   ├── people/                #   User management (admin only)
 │   ├── onboarding/            #   First-run setup wizard
 │   ├── dev/components/        #   Dev-only component wall (see § Dev Component Wall)
-│   ├── email/                 #   Email provider management
 │   ├── supermarket/           #   Supermarket (template/skill marketplace)
 │   ├── usage/                 #   Token usage statistics
 │   ├── appearance/            #   Theme / language / appearance settings
@@ -249,6 +247,11 @@ src/
 
 ## Routes
 
+Business routes are defined once in `src/routes.ts` through
+`createAppRoutes('web' | 'desktop')`. Add or rename shared pages there so both
+hosts receive the same route names, params, lazy imports, and metadata. Keep
+router creation and host-specific guards in each host's bootstrap.
+
 The app uses a two-section layout architecture:
 
 ### Chat Section (`/`)
@@ -269,15 +272,16 @@ Chat routes register **null stub components** in the router. The real UI (`MainS
 | `/settings/bots/new` | bot-new | `bots/new.vue` | Create bot flow |
 | `/settings/bots/new/progress` | bot-create-progress | `bots/new-progress.vue` | Bot creation progress (SSE) |
 | `/settings/bots/:botName` | bot-detail | `bots/detail.vue` | Bot detail with tabs |
-| `/settings/providers` | providers | `providers/index.vue` | LLM provider & model management |
-| `/settings/web-search` | web-search | `web-search/index.vue` | Web search provider management |
-| `/settings/memory` | memory | `memory/index.vue` | Memory provider management |
-| `/settings/voice` | voice | `voice/index.vue` | TTS + transcription providers |
-| `/settings/speech` | — | redirect | Legacy alias → `voice` |
-| `/settings/transcription` | — | redirect | Legacy alias → `voice` |
-| `/settings/email` | email | `email/index.vue` | Email provider management |
+| `/settings/providers` | providers | `providers/index.vue` | Provider family; `?tab=` selects models / web-search / voice / video |
+| `/settings/web-search` | web-search | redirect | Legacy alias → `providers?tab=web-search` (query and hash kept) |
+| `/settings/memory` | — | redirect | Legacy alias → `bots` (memory settings moved to the bot Memories tab's Advanced dialog) |
+| `/settings/voice` | voice | redirect | Legacy alias → `providers?tab=voice` |
+| `/settings/video` | video | redirect | Legacy alias → `providers?tab=video` |
+| `/settings/speech` | — | redirect | Legacy alias → `providers?tab=voice` |
+| `/settings/transcription` | — | redirect | Legacy alias → `providers?tab=voice` |
 | `/settings/supermarket` | supermarket | `supermarket/index.vue` | Template/skill marketplace |
-| `/settings/supermarket/skills/:registryId/:packageId` | supermarket-package-detail | `supermarket/package-detail.vue` | Registry Skill Package detail |
+| `/settings/supermarket/category/:categoryId` | supermarket-category | `supermarket/category.vue` | App category |
+| `/settings/supermarket/:registryId/:appId` | supermarket-app-detail | `supermarket/app-detail.vue` | App detail |
 | `/settings/usage` | usage | `usage/index.vue` | Token usage statistics |
 | `/settings/people` | people | `people/index.vue` | User management (admin only) |
 | `/settings/appearance` | appearance | `appearance/index.vue` | Theme, locale, and appearance settings |
@@ -286,7 +290,7 @@ Chat routes register **null stub components** in the router. The real UI (`MainS
 | `/settings/platform` | platform | `platform/index.vue` | Platform management |
 | `/settings/about` | about | `about/index.vue` | About page |
 
-`/settings` redirects to `/settings/bots` by default.
+`/settings` remains addressable as the mobile navigation list on Web; Desktop redirects it to `/settings/bots`.
 
 ### Standalone Routes
 
@@ -318,7 +322,7 @@ The shell splits into three layers (`App.vue` is the orchestrator):
    - **ChatWorkspace** (`pages/home/components/chat-workspace.vue`) — [dockview-vue](https://dockview.dev) host for the center area.
 
 3. **Settings section** — `pages/settings-section/` renders in a fixed full-screen layer (visibility toggle, not v-if). Uses `MainLayout` with:
-   - **SettingsSidebar** (`components/settings-sidebar/`) — Collapsible `/settings` route sidebar. Top has a "back to chat" button that restores the last selected bot/session. Menu items include Bots, Providers, Web Search, Memory, Voice, Email, Supermarket, Usage, People (admin), Appearance, Keyboard, Profile, Platform, and About.
+   - **SettingsSidebar** (`components/settings-sidebar/`) — Collapsible `/settings` route sidebar. Top has a "back to chat" button that restores the last selected bot/session. Menu items include Bots, Providers, Web Search, Memory, Voice, Supermarket, Usage, People (admin), Appearance, Keyboard, Profile, Platform, and About.
    - **SidebarInset** — `<KeepAlive>` wrapped `<RouterView>` for settings pages.
 
 4. **Auth-boundary pages** (`/login`, `/onboarding`, `/oauth/*`, `/dev/*`) — Neither `MainSection` nor the settings section mounts; `<RouterView>` renders them full-screen alone.
@@ -328,7 +332,7 @@ The shell splits into three layers (`App.vue` is the orchestrator):
    - **ChatPane** — Message list with scroll and input area with attachments (KeepAlive-cached per session inside the chat panel).
    - **SessionInfoRing** — Session info display in the composer.
 
-Several settings pages use **MasterDetailSidebarLayout** (`components/master-detail-sidebar-layout/`) for left-sidebar + detail-panel patterns (providers, web search, email, memory, voice).
+Several settings pages use **MasterDetailSidebarLayout** (`components/master-detail-sidebar-layout/`) for left-sidebar + detail-panel patterns (providers, web search, memory, voice).
 
 ### Dev Component Wall
 
@@ -414,6 +418,8 @@ const form = useForm({
 ```
 
 ### Icon Usage
+
+Memoh 图标层的目标契约见 [`packages/icons/README.md`](../../packages/icons/README.md)。下述 Lucide / 品牌图标划分描述现有接入方式；新增光学校准或定制图标遵循该契约，在图标层实现，不在页面或菜单调用处补偿。现有直接导入在迁移期间保留。
 
 - **Lucide** (primary): Direct component imports from `lucide-vue-next`. Example: `import { Plus, Search, Bot } from 'lucide-vue-next'` → `<Plus class="size-4" />`. Used for all UI icons (actions, navigation, status indicators, etc.).
 - **`@memohai/icon`** (brand icons): Workspace package (`packages/icons/`) providing AI provider, search engine, and channel platform SVG icons as Vue components. Example: `import { Openai, Claude } from '@memohai/icon'`.
@@ -503,7 +509,11 @@ Live conversation turns are read over the **WebSocket**. SSE carries identifiers
 
 #### Sessions activity SSE
 - **Endpoint**: `GET /bots/{bot_id}/sessions/events` — bot-wide lightweight activity stream; `session_touched` / `session_title_changed` / `session_created` for sidebar live-sort. Never carries message bodies.
+- **First frame**: `activity_ready {cache_invalidation}` — sent right after subscription so events racing connection setup are queued behind it. `cache_invalidation: true` declares the server emits `session_invalidated` for every runtime admission and history deletion; `false` (or a missing ready frame on older servers) means no coverage and every revisit must reload under the mask.
+- `session_invalidated {session_id}` — a session's visible projection changed while another tab/client could have been holding a cached copy; empty `session_id` invalidates all sessions of the bot. Marks the transcript stale so the next revisit reloads instead of trusting its cache.
+- `dropped` — emitted when the server's per-subscriber buffer overflowed; the client conservatively marks all sessions stale because it cannot know which events were lost.
 - `session_touched` with `reason: background_task` also refreshes persisted messages for an already loaded session. Notifications can arrive without a live turn; use the transcript merge path so active output survives. Coalesce pending notifications and perform a trailing refresh for the final outcome.
+- **Optimistic revisit contract**: a hidden session's cached transcript may render immediately on revisit only while coverage holds (ready frame declared `cache_invalidation`, stream still connected, no `dropped`, no pending `session_invalidated`). Any disconnect or capability gap revokes coverage until the next ready frame — there is no client-side grace window.
 - **Parsing**: handled by the generated SDK (`@memohai/sdk` `sse.get`); wrappers live in `composables/api/useChat.message-api.ts`.
 - **Retry**: `useRetryingStream` composable drives reconnection with exponential backoff.
 - There is no per-session SSE. A session's messages and run state come from the session runtime over the WebSocket, so that every subscriber of a session — this tab, another tab, another device — is reading the same projection instead of each building its own.
@@ -532,10 +542,10 @@ Live conversation turns are read over the **WebSocket**. SSE carries identifiers
 
 ### Error Handling
 
-- **Global**: `utils/api-error.ts` — `resolveApiErrorMessage()` extracts error from `message`, `error`, `detail` fields
+- **Global**: `utils/api-error.ts` — `resolveApiErrorMessage()` looks up `errors.<code>` (with the error's `args`) in the stored locale. With no copy for the code, it falls back by HTTP status (`errors.http.*` for 4xx including 429, `errors.http.bad_request` for a 4xx without its own entry, `errors.internal` for 5xx, nothing for 499), then by stream error event (`errors.internal`, nothing when `fault` is `canceled`), then to the caller's fallback. It never shows the server's `message`/`detail`; only a `UserFacingError` shows its own message.
 - **Mutations**: `useDialogMutation` composable wraps mutations with automatic `toast.error()` on failure
 - **SDK**: All calls use `throwOnError: true`; try/catch at component level
-- **Streams**: `processing_failed` / `error` events appended to message blocks
+- **Streams**: `error` events appended to message blocks
 
 ## i18n
 
@@ -543,7 +553,7 @@ Live conversation turns are read over the **WebSocket**. SSE carries identifiers
 - Locales: `en` (English, default), `zh` (Chinese)
 - Files: `src/i18n/locales/en.json`, `src/i18n/locales/zh.json`
 - Usage: `const { t } = useI18n()` → `t('bots.title')`
-- Key namespaces: `common`, `auth`, `sidebar`, `breadcrumb`, `settings`, `about`, `chat`, `models`, `provider`, `webSearch`, `memory`, `speech`, `transcription`, `email`, `mcp`, `home`, `bots`, `usage`, `appearance`, `supermarket`
+- Key namespaces: `common`, `auth`, `sidebar`, `breadcrumb`, `settings`, `about`, `chat`, `models`, `provider`, `webSearch`, `memory`, `speech`, `transcription`, `mcp`, `home`, `bots`, `usage`, `appearance`, `supermarket`
 
 ## Vite Configuration
 

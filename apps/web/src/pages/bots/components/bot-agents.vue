@@ -55,7 +55,6 @@
           v-for="agent in agents"
           :key="agent.id"
           :label="botAgentName(agent)"
-          :description="providerLabel(agent)"
         >
           <template #leading>
             <span class="flex size-9 items-center justify-center">
@@ -74,15 +73,6 @@
               <Spinner class="size-3" />
               {{ t('bots.agent.dependencyChecking') }}
             </span>
-
-            <Badge
-              v-if="agentDependency(agent)"
-              variant="outline"
-              size="sm"
-              font="mono"
-            >
-              {{ agentDependency(agent)?.dependencyId }}
-            </Badge>
 
             <Badge
               v-if="agent.enabled !== false && agentNeedsConfig(agent)"
@@ -132,20 +122,6 @@
         </SettingsRow>
       </SettingsSection>
 
-      <AddBotAgentDialog
-        v-model:open="addOpen"
-        :bot-id="botId"
-        :profiles="profiles"
-        :agents="agents"
-        :bot-metadata="botMetadata"
-        @created="onAgentCreated"
-      />
-
-      <DependencyEnableFlow
-        ref="enableFlow"
-        :bot-id="botId"
-      />
-
       <ConfirmDeleteDialog
         :open="!!deleteTarget"
         :title="t('bots.agent.deleteTitle')"
@@ -183,12 +159,12 @@
           </SettingsSection>
 
           <SettingsAcpDetail
-            v-if="selectedAgent && selectedProfile"
+            v-if="selectedAgent && selectedProfile && selectedSetup"
             :key="`${botId}:${selectedAgent.id}:${selectedProfile.id}`"
             :bot-id="botId"
             :profile="selectedProfile"
-            :form="form"
-            @commit="persistACPForm"
+            :setup="selectedSetup"
+            @commit="persistSetup(selectedAgent)"
           />
 
           <SettingsDirectAgentDetail
@@ -202,10 +178,23 @@
       </SettingsShell>
     </DetailPane>
   </SwapTransition>
+  <DependencyEnableFlow
+    ref="enableFlow"
+    :bot-id="botId"
+  />
+  <AddBotAgentDialog
+    v-model:open="addOpen"
+    :bot-id="botId"
+    :profiles="profiles"
+    :agents="agents"
+    @created="onAgentCreated"
+  />
 </template>
 
 <script setup lang="ts">
-import { computed, reactive, ref, useTemplateRef, watch } from 'vue'
+import { normalizeAgentID } from '@/utils/external-agent'
+import { computed, nextTick, reactive, ref, useTemplateRef, watch } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import { useMutation, useQuery, useQueryCache } from '@pinia/colada'
 import {
@@ -228,19 +217,16 @@ import {
   Switch,
   toast,
 } from '@felinic/ui'
-import { MoreHorizontal, Plus, Settings, Trash2 } from 'lucide-vue-next'
+import { MoreHorizontal, Plus, Trash2 } from 'lucide-vue-next'
+import { SettingsIcon as Settings } from '@memohai/icon/ui'
 import {
   deleteBotsByBotIdAgentsById,
   getAcpProfiles,
   getBotsByBotIdAgents,
-  getBotsById,
   patchBotsByBotIdAgentsById,
-  putBotsById,
   type AcpprofilePublicProfile,
   type BotagentsBotAgent,
-  type BotsUpdateBotRequest,
 } from '@memohai/sdk'
-import { getBotsQueryKey } from '@memohai/sdk/colada'
 import type { Ref } from 'vue'
 import SettingsAcpDetail from './settings-acp-detail.vue'
 import SettingsDirectAgentDetail from './settings-direct-agent-detail.vue'
@@ -251,38 +237,30 @@ import { externalAgentModelsQueryKey } from '@/composables/useAgentModelCatalog'
 import { useViewSwap } from '@/composables/useViewSwap'
 import { resolveApiErrorMessage } from '@/utils/api-error'
 import {
-  acpAgentDisplayName,
-  emptyACPAgentForm,
-  ensureACPAgentForm,
   findMissingRequiredManagedField,
-  normalizeACPAgentID,
-  normalizeACPForm,
-  readACPConfig,
-  withACPMetadata,
+  readACPAgentForm,
+  withACPAgentForm,
   type ACPAgentForm,
-  type ACPForm,
 } from '@/utils/acp'
 import {
-  BOT_AGENT_RUNTIME_CLAUDE_CODE,
-  BOT_AGENT_RUNTIME_CODEX,
   botAgentIcon,
   botAgentName,
   botAgentProvider,
   isDirectBotAgentConfigured,
+  isDirectBotAgentRuntime,
   normalizeBotAgentRuntime,
 } from '@/utils/bot-agent'
-import { useChatStore } from '@/store/chat-list'
 
 const props = defineProps<{ botId: string }>()
 const { t } = useI18n()
 const queryCache = useQueryCache()
-const chatStore = useChatStore()
 const botIdRef = computed(() => props.botId) as Ref<string>
 
-const form = reactive<ACPForm>({ agents: {} })
-const lastPersistedSnapshot = ref('')
-const persistRunning = ref(false)
-const persistQueued = ref(false)
+// Editable copy of each ACP agent's own setup, keyed by agent id: every
+// custom ACP agent shares the one generic profile, so the profile id cannot
+// tell two of them apart. savedSetups holds what the server last confirmed.
+const setups = reactive<Record<string, ACPAgentForm>>({})
+const savedSetups = new Map<string, string>()
 const busyAgentIDs = reactive(new Set<string>())
 const enableFlow = useTemplateRef<InstanceType<typeof DependencyEnableFlow>>('enableFlow')
 const checkingAgentID = ref('')
@@ -293,6 +271,22 @@ const deleting = ref(false)
 const { view, direction, openDetail, backToList } = useViewSwap()
 const selectedID = ref('')
 const selectedName = ref('')
+
+const route = useRoute()
+const router = useRouter()
+const addRequested = computed(() => route.name === 'bot-detail'
+  && route.query.tab === 'agents'
+  && route.query.addAgent === props.botId)
+watch(addRequested, async (requested) => {
+  if (!requested) return
+  // Wait for the existing dialog to mount, including when this tab was cached.
+  await nextTick()
+  if (!addRequested.value) return
+  addOpen.value = true
+  const query = { ...route.query }
+  delete query.addAgent
+  await router.replace({ query })
+}, { immediate: true, flush: 'post' })
 
 const { data: profileData } = useQuery({
   key: () => ['acp-profiles'],
@@ -316,28 +310,37 @@ const { data: agentData, isLoading: agentsLoading } = useQuery({
 })
 const agents = computed<BotagentsBotAgent[]>(() => agentData.value?.items ?? [])
 
-const { data: bot } = useQuery({
-  key: () => ['bot', botIdRef.value],
-  query: async () => {
-    const { data } = await getBotsById({ path: { id: botIdRef.value }, throwOnError: true })
-    return data
-  },
-  enabled: () => !!botIdRef.value,
-})
-const botMetadata = computed(() => bot.value?.metadata as Record<string, unknown> | undefined)
+// `openAgent=<id>` lands on one Agent's detail, as the create flow does for
+// an Agent that still has to sign in; the query is consumed once the list
+// holds the Agent.
+const openRequested = computed(() => route.name === 'bot-detail' && route.query.tab === 'agents'
+  ? String(route.query.openAgent ?? '')
+  : '')
+watch([openRequested, agents], async ([agentId, list]) => {
+  const agent = agentId ? list.find(item => item.id === agentId) : undefined
+  if (!agent) return
+  await nextTick()
+  if (openRequested.value !== agentId) return
+  openAgent(agent)
+  const query = { ...route.query }
+  delete query.openAgent
+  await router.replace({ query })
+}, { immediate: true, flush: 'post' })
 
 const selectedAgent = computed(() => agents.value.find(agent => agent.id === selectedID.value) ?? null)
 const selectedProfile = computed(() => {
   const provider = botAgentProvider(selectedAgent.value)
-  return profiles.value.find(profile => normalizeACPAgentID(profile.id) === provider) ?? null
+  return profiles.value.find(profile => normalizeAgentID(profile.id) === provider) ?? null
 })
 const selectedDirectRuntime = computed(() => {
   const runtime = normalizeBotAgentRuntime(selectedAgent.value?.runtime)
-  return runtime === BOT_AGENT_RUNTIME_CODEX || runtime === BOT_AGENT_RUNTIME_CLAUDE_CODE ? runtime : ''
+  return isDirectBotAgentRuntime(runtime) ? runtime : ''
 })
 
+const selectedSetup = computed(() => setups[selectedID.value] ?? null)
+
 const { mutateAsync: updateAgent } = useMutation({
-  mutation: async ({ agent, body }: { agent: BotagentsBotAgent; body: { name?: string; enabled?: boolean } }) => {
+  mutation: async ({ agent, body }: { agent: BotagentsBotAgent; body: { name?: string; enabled?: boolean; metadata?: Record<string, unknown> } }) => {
     const { data } = await patchBotsByBotIdAgentsById({
       path: { bot_id: props.botId, id: agent.id ?? '' },
       body,
@@ -351,37 +354,7 @@ const { mutateAsync: updateAgent } = useMutation({
   },
 })
 
-const { mutateAsync: updateBot } = useMutation({
-  mutation: async (body: BotsUpdateBotRequest) => {
-    const { data } = await putBotsById({ path: { id: props.botId }, body, throwOnError: true })
-    return data
-  },
-  onSuccess: (data) => {
-    // Both save paths compose the full metadata tree from botMetadata; write
-    // the server's result back immediately so the next save composes on the
-    // fresh tree instead of a stale snapshot (invalidation refetch is async).
-    if (data) queryCache.setQueryData(['bot', props.botId], data)
-  },
-  onSettled: () => {
-    void queryCache.invalidateQueries({ key: ['bot', props.botId] })
-    void queryCache.invalidateQueries({ key: getBotsQueryKey() })
-    void chatStore.refreshBots().catch(() => {})
-  },
-})
-
-// Serializes every bot-metadata save on this page: the ACP form and the
-// direct-agent panel each write the whole metadata tree, so two concurrent
-// PUTs would overwrite each other's subtree with a stale snapshot.
-let botMetadataSaveChain: Promise<unknown> = Promise.resolve()
-function withBotMetadataSaveLock<T>(task: () => Promise<T>): Promise<T> {
-  const run = botMetadataSaveChain.then(task, task)
-  botMetadataSaveChain = run.catch(() => undefined)
-  return run
-}
-
-watch([bot, profiles], ([value, list]) => {
-  applyMetadataToForm(value?.metadata as Record<string, unknown> | undefined, list)
-}, { immediate: true })
+watch([agents, profiles], () => syncSetups(), { immediate: true })
 
 watch(selectedAgent, (agent) => {
   selectedName.value = botAgentName(agent)
@@ -393,17 +366,7 @@ watch(agents, (list) => {
 
 function profileFor(agent: BotagentsBotAgent): AcpprofilePublicProfile | null {
   const provider = botAgentProvider(agent)
-  return profiles.value.find(profile => normalizeACPAgentID(profile.id) === provider) ?? null
-}
-
-function providerLabel(agent: BotagentsBotAgent): string {
-  const profile = profileFor(agent)
-  const provider = botAgentProvider(agent)
-  return profile?.display_name?.trim() || acpAgentDisplayName(provider, provider)
-}
-
-function agentForm(profile: AcpprofilePublicProfile): ACPAgentForm {
-  return ensureACPAgentForm(form, profile)
+  return profiles.value.find(profile => normalizeAgentID(profile.id) === provider) ?? null
 }
 
 function agentNeedsConfig(agent: BotagentsBotAgent): boolean {
@@ -411,7 +374,7 @@ function agentNeedsConfig(agent: BotagentsBotAgent): boolean {
   if (directConfigured !== null) return !directConfigured
   const profile = profileFor(agent)
   if (!profile) return true
-  const config = agentForm(profile)
+  const config = setups[agent.id ?? ''] ?? readACPAgentForm(agent, profile)
   if (config.setup_mode === 'self') return false
   return findMissingRequiredManagedField(profile, config.managed, config.setup_mode) !== null
 }
@@ -507,40 +470,29 @@ async function confirmDelete() {
   }
 }
 
-async function persistACPForm() {
-  if (!bot.value) return
-  if (persistRunning.value) {
-    persistQueued.value = true
-    return
-  }
-  const normalized = normalizeACPForm(form, profiles.value)
-  // Shared ACP credentials outlive individual BotAgent rows. Never turn the
-  // legacy provider bit off when one configured instance is disabled or
-  // deleted. New, incomplete Agents stay disabled until their required setup
-  // is present so partial settings can be saved without failing server checks.
-  for (const agent of agents.value) {
-    const provider = botAgentProvider(agent)
-    const profile = profileFor(agent)
-    const config = provider ? normalized.agents[provider] : undefined
-    if (profile && config && !findMissingRequiredManagedField(profile, config.managed, config.setup_mode)) {
-      config.enabled = true
-    }
-  }
-  const snapshot = JSON.stringify(normalized)
-  if (snapshot === lastPersistedSnapshot.value) return
-  persistRunning.value = true
+// Saves run one at a time and each reads the setup when it starts, so two
+// field commits in quick succession cannot land out of order and leave an
+// older value on the server.
+let setupSaveChain: Promise<unknown> = Promise.resolve()
+function persistSetup(agent: BotagentsBotAgent) {
+  const run = setupSaveChain.then(() => saveSetup(agent))
+  setupSaveChain = run.catch(() => undefined)
+  return run
+}
+
+async function saveSetup(agent: BotagentsBotAgent) {
+  const id = agent.id ?? ''
+  const setup = setups[id]
+  if (!id || !setup) return
+  const snapshot = JSON.stringify(setup)
+  if (snapshot === savedSetups.get(id)) return
   try {
-    await withBotMetadataSaveLock(() => updateBot({ metadata: withACPMetadata(botMetadata.value, normalized, profiles.value) }))
-    lastPersistedSnapshot.value = snapshot
+    await updateAgent({ agent, body: { metadata: withACPAgentForm(agent, setup) } })
+    savedSetups.set(id, snapshot)
   } catch (error) {
     toast.error(resolveApiErrorMessage(error, t('common.saveFailed')))
-    if (!persistQueued.value) applyMetadataToForm(botMetadata.value, profiles.value, true)
-  } finally {
-    persistRunning.value = false
-    if (persistQueued.value) {
-      persistQueued.value = false
-      void persistACPForm()
-    }
+    savedSetups.delete(id)
+    syncSetups()
   }
 }
 
@@ -555,19 +507,26 @@ function closeDetail() {
   backToList()
 }
 
-function applyMetadataToForm(metadata: Record<string, unknown> | undefined, list: AcpprofilePublicProfile[], force = false) {
-  const next = readACPConfig(metadata, list)
-  const nextSnapshot = JSON.stringify(next)
-  const currentSnapshot = JSON.stringify(normalizeACPForm(form, list))
-  if (!force && (persistRunning.value || persistQueued.value || currentSnapshot !== lastPersistedSnapshot.value) && nextSnapshot === lastPersistedSnapshot.value) return
-  for (const key of Object.keys(form.agents)) {
-    if (!next.agents[key]) delete form.agents[key]
+// Every save refetches the agent list. An edit the user has not committed yet
+// must survive that refetch, so a setup is only replaced when the server copy
+// actually moved away from what was last saved.
+function syncSetups() {
+  const live = new Set(agents.value.map(agent => agent.id ?? ''))
+  for (const id of Object.keys(setups)) {
+    if (live.has(id)) continue
+    delete setups[id]
+    savedSetups.delete(id)
   }
-  for (const profile of list) {
-    const id = normalizeACPAgentID(profile.id)
-    if (!id) continue
-    form.agents[id] = next.agents[id] ?? emptyACPAgentForm(profile)
+  for (const agent of agents.value) {
+    const id = agent.id ?? ''
+    const profile = profileFor(agent)
+    if (!id || !profile) continue
+    const server = readACPAgentForm(agent, profile)
+    const serverSnapshot = JSON.stringify(server)
+    const current = setups[id]
+    if (current && serverSnapshot === savedSetups.get(id)) continue
+    setups[id] = server
+    savedSetups.set(id, serverSnapshot)
   }
-  lastPersistedSnapshot.value = nextSnapshot
 }
 </script>

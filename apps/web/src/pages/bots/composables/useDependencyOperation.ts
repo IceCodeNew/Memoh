@@ -13,7 +13,7 @@ import { useDependencyOperationsStore, type DependencyOperation } from '@/store/
 
 let viewerSequence = 0
 
-export function useDependencyOperation(botId: Ref<string>, targetId: Ref<string>) {
+export function useDependencyOperation(botId: Ref<string>) {
   const { t } = useI18n()
   const store = useDependencyOperationsStore()
   const viewerId = `bot-dependencies:${++viewerSequence}`
@@ -50,14 +50,14 @@ export function useDependencyOperation(botId: Ref<string>, targetId: Ref<string>
    * streaming just reopens its log; another dependency streaming for this bot
    * is refused (the Server would answer `workspace_dependency.busy`).
    */
-  function start(item: DependencyItem, action: DependencyOperationAction, options: { version?: string; definitionRevision?: string; sessionId?: string } = {}): boolean {
+  function start(item: DependencyItem, action: DependencyOperationAction, options: { version?: string; definitionRevision?: string; prerequisiteRevisions?: Record<string, string>; sessionId?: string } = {}): boolean {
     const result = store.start({
       botId: botId.value,
-      targetId: targetId.value,
       item,
       action,
       version: options.version,
       definitionRevision: options.definitionRevision,
+      prerequisiteRevisions: options.prerequisiteRevisions,
       sessionId: options.sessionId,
     })
     switch (result.kind) {

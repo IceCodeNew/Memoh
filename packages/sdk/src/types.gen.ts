@@ -227,6 +227,8 @@ export type AdaptersCompactResult = {
     results?: Array<AdaptersMemoryItem>;
 };
 
+export type AdaptersCompactUnavailableReason = 'unsupported' | 'not_configured';
+
 export type AdaptersDeleteResponse = {
     message?: string;
 };
@@ -251,9 +253,24 @@ export type AdaptersIngestResult = {
 
 export type AdaptersMemoryCompactCapability = {
     archive?: boolean;
-    reason?: string;
+    /**
+     * Reason says why Semantic is false.
+     */
+    reason?: AdaptersCompactUnavailableReason;
     rebuild_index?: boolean;
     semantic?: boolean;
+};
+
+export type AdaptersMemoryConfig = {
+    /**
+     * EmbeddingModelID optionally maintains the pgvector semantic seed index
+     * for graph recall. Empty means graph-only recall.
+     */
+    embedding_model_id?: string;
+};
+
+export type AdaptersMemoryConfigUpdateRequest = {
+    embedding_model_id?: string;
 };
 
 export type AdaptersMemoryItem = {
@@ -298,70 +315,6 @@ export type AdaptersMessage = {
     role?: string;
 };
 
-export type AdaptersProviderCollectionStatus = {
-    exists?: boolean;
-    health?: AdaptersHealthStatus;
-    name?: string;
-    points?: number;
-};
-
-export type AdaptersProviderConfigSchema = {
-    fields?: {
-        [key: string]: AdaptersProviderFieldSchema;
-    };
-};
-
-export type AdaptersProviderCreateRequest = {
-    config?: {
-        [key: string]: unknown;
-    };
-    name?: string;
-    provider?: AdaptersProviderType;
-};
-
-export type AdaptersProviderFieldSchema = {
-    description?: string;
-    example?: unknown;
-    required?: boolean;
-    secret?: boolean;
-    title?: string;
-    type?: string;
-};
-
-export type AdaptersProviderGetResponse = {
-    config?: {
-        [key: string]: unknown;
-    };
-    created_at?: string;
-    id?: string;
-    is_default?: boolean;
-    name?: string;
-    provider?: string;
-    updated_at?: string;
-};
-
-export type AdaptersProviderMeta = {
-    config_schema?: AdaptersProviderConfigSchema;
-    display_name?: string;
-    provider?: string;
-};
-
-export type AdaptersProviderStatusResponse = {
-    collections?: Array<AdaptersProviderCollectionStatus>;
-    embedding_model_id?: string;
-    memory_mode?: string;
-    provider_type?: string;
-};
-
-export type AdaptersProviderType = 'builtin' | 'mem0' | 'openviking';
-
-export type AdaptersProviderUpdateRequest = {
-    config?: {
-        [key: string]: unknown;
-    };
-    name?: string;
-};
-
 export type AdaptersRebuildResult = {
     fs_count?: number;
     missing_count?: number;
@@ -383,6 +336,26 @@ export type AdaptersUsageResponse = {
     total_text_bytes?: number;
 };
 
+export type AgentcredentialAuthorization = {
+    auth_kind: string;
+    authorization_url?: string;
+    expires_at: string;
+    id: string;
+    interval_seconds?: number;
+    runtime: string;
+    status: 'pending' | 'ready' | 'claimed';
+    user_code?: string;
+    verification_url?: string;
+};
+
+export type AgentcredentialAuthorizationRequest = {
+    auth_kind: string;
+    runtime: 'codex' | 'claude-code' | 'grok-build';
+    secret?: {
+        [key: string]: string;
+    };
+};
+
 export type AgentcredentialPublicCredential = {
     account_metadata?: {
         [key: string]: unknown;
@@ -399,16 +372,7 @@ export type AgentcredentialPublicCredential = {
     updated_at?: string;
 };
 
-export type ApperrorProblem = {
-    args: {
-        [key: string]: string;
-    };
-    code: string;
-    detail: string;
-    request_id?: string;
-    status: number;
-    type: string;
-};
+export type ApperrorFault = 'client' | 'server' | 'dependency' | 'canceled';
 
 export type AudioConfigSchema = {
     fields?: Array<AudioFieldSchema>;
@@ -681,7 +645,7 @@ export type BotbackupRestorePlan = {
     will_restore_workspace?: boolean;
 };
 
-export type BotbackupSection = 'profile' | 'settings' | 'models' | 'acl' | 'channels' | 'mcp' | 'schedules' | 'email' | 'history' | 'assets' | 'workspace';
+export type BotbackupSection = 'profile' | 'settings' | 'models' | 'acl' | 'channels' | 'mcp' | 'schedules' | 'history' | 'assets' | 'workspace';
 
 export type BotbackupSectionSummary = {
     conflict?: boolean;
@@ -1152,10 +1116,33 @@ export type ConnectorsConnector = {
     connector_type?: string;
     enabled?: boolean;
     status?: string;
+    /**
+     * ToolDiscoveryError is set when the last attempt to load this
+     * connection's tools for the agent failed, even though the connection
+     * itself is authorized. Empty when the tools loaded or were never asked.
+     */
+    tool_discovery_error?: string;
 };
 
 export type ConnectorsListResponse = {
     items?: Array<ConnectorsConnector>;
+    /**
+     * ToolDiscovery reports the last outcome of loading the bot's connector
+     * tools for the agent; absent until the agent has tried.
+     */
+    tool_discovery?: ConnectorsToolDiscoveryStatus;
+};
+
+export type ConnectorsToolDiscoveryFailure = {
+    alias?: string;
+    connection_id?: string;
+    error?: string;
+};
+
+export type ConnectorsToolDiscoveryStatus = {
+    error?: string;
+    failed_connections?: Array<ConnectorsToolDiscoveryFailure>;
+    observed_at?: string;
 };
 
 export type ContextfragCacheClass = 'stable' | 'dynamic' | 'never';
@@ -1275,7 +1262,7 @@ export type ContextfragMemoryRecallTrace = {
     retrieval_mode?: string;
 };
 
-export type ContextfragMutationKind = 'before_model_call_hook' | 'background_summary' | 'mid_task_prune' | 'loop_step_reselection' | 'injected_message' | 'context_view_fallback' | 'context_budget_failure' | 'context_budget_disabled' | 'capability_gate' | 'read_media' | 'renderer_prune' | 'mid_stream_retry' | 'run_abort_observed';
+export type ContextfragMutationKind = 'before_model_call_hook' | 'background_summary' | 'mid_task_prune' | 'loop_step_reselection' | 'injected_message' | 'context_view_fallback' | 'context_budget_failure' | 'context_budget_disabled' | 'capability_gate' | 'read_media' | 'renderer_prune' | 'mid_stream_retry' | 'current_input_omitted' | 'current_input_images_omitted' | 'run_abort_observed';
 
 export type ContextfragMutationRecord = {
     detail?: string;
@@ -1412,9 +1399,10 @@ export type ConversationUiForwardRef = {
 export type ConversationUiMessage = {
     approval?: ConversationUiToolApproval;
     /**
-     * Args are the machine-readable parameters of a notice block: the string
-     * values of the runtime_notice event metadata (dep_id and install_task_id
-     * for a workspace dependency notice, for instance). The client renders
+     * Args are the machine-readable parameters of a notice or error block: the
+     * string values of the runtime_notice event metadata (dep_id and
+     * install_task_id for a workspace dependency notice, for instance), or the
+     * catalog args stored with a failure's code. The client renders text and
      * actions from them instead of parsing Content.
      */
     args?: {
@@ -1424,6 +1412,15 @@ export type ConversationUiMessage = {
     background_task?: ConversationUiBackgroundTask;
     code?: string;
     content?: string;
+    /**
+     * Diff is a UI-only unified diff attached to the tool call at execution
+     * time (edit/write tools). It never reaches the model: rows persist it
+     * under the diffs metadata key — on the assistant row (lifted out of
+     * providerMetadata at store time) or, for the deferred-approval path, on
+     * the tool message row — never inside the tool result.
+     */
+    diff?: string;
+    elapsed_time_seconds?: number;
     execution_location?: ConversationUiExecutionLocation;
     id?: number;
     input?: unknown;
@@ -1437,7 +1434,7 @@ export type ConversationUiMessage = {
     user_input?: ConversationUiUserInput;
 };
 
-export type ConversationUiMessageType = 'text' | 'reasoning' | 'tool' | 'attachments' | 'error' | 'notice';
+export type ConversationUiMessageType = 'text' | 'reasoning' | 'tool' | 'attachments' | 'error' | 'command' | 'status' | 'notice';
 
 export type ConversationUiReasoningTiming = {
     duration_ms?: number;
@@ -1481,6 +1478,11 @@ export type ConversationUiTurn = {
     platform?: string;
     reply?: ConversationUiReplyRef;
     role: 'user' | 'assistant' | 'system';
+    /**
+     * RuntimeForkable means this persisted turn has a runtime fork anchor.
+     * Session-level runtime support and access permissions still apply.
+     */
+    runtime_forkable?: boolean;
     sender_avatar_url?: string;
     sender_display_name?: string;
     sender_user_id?: string;
@@ -1513,106 +1515,34 @@ export type DisplaySessionInfo = {
     state?: string;
 };
 
-export type EmailBindingResponse = {
-    bot_id?: string;
-    can_delete?: boolean;
-    can_read?: boolean;
-    can_write?: boolean;
-    config?: {
-        [key: string]: unknown;
-    };
-    created_at?: string;
-    email_address?: string;
-    email_provider_id?: string;
-    id?: string;
-    updated_at?: string;
+export type ExternalControls = {
+    capabilities?: TurnRuntimeControlCapabilities;
+    commands?: Array<TurnRuntimeCommand>;
+    modes?: TurnRuntimeModeState;
+    plan_mode?: TurnRuntimeModeState;
+    session_id?: string;
 };
 
-export type EmailConfigSchema = {
-    fields?: Array<EmailFieldSchema>;
-};
-
-export type EmailCreateBindingRequest = {
-    can_delete?: boolean;
-    can_read?: boolean;
-    can_write?: boolean;
-    config?: {
-        [key: string]: unknown;
-    };
-    email_address?: string;
-    email_provider_id?: string;
-};
-
-export type EmailCreateProviderRequest = {
-    config?: {
-        [key: string]: unknown;
-    };
-    name?: string;
-    provider?: string;
-};
-
-export type EmailFieldSchema = {
-    description?: string;
-    enum?: Array<string>;
-    example?: unknown;
-    key?: string;
-    order?: number;
-    required?: boolean;
-    title?: string;
-    type?: string;
-};
-
-export type EmailOutboxItemResponse = {
-    attachments?: Array<unknown>;
-    body_html?: string;
-    body_text?: string;
-    bot_id?: string;
-    created_at?: string;
-    error?: string;
-    from?: string;
-    id?: string;
-    message_id?: string;
-    provider_id?: string;
-    sent_at?: string;
+export type ExternalGoal = {
+    objective?: string;
     status?: string;
-    subject?: string;
-    to?: Array<string>;
+    time_used_seconds?: number;
+    token_budget?: number;
+    tokens_used?: number;
 };
 
-export type EmailProviderMeta = {
-    config_schema?: EmailConfigSchema;
-    display_name?: string;
-    provider?: string;
-};
-
-export type EmailProviderResponse = {
-    config?: {
-        [key: string]: unknown;
-    };
-    created_at?: string;
-    id?: string;
-    name?: string;
-    provider?: string;
-    updated_at?: string;
-    user_id?: string;
-};
-
-export type EmailUpdateBindingRequest = {
-    can_delete?: boolean;
-    can_read?: boolean;
-    can_write?: boolean;
-    config?: {
-        [key: string]: unknown;
-    };
-    email_address?: string;
-};
-
-export type EmailUpdateProviderRequest = {
-    config?: {
-        [key: string]: unknown;
-    };
-    name?: string;
-    provider?: string;
+export type ExternalModeState = {
+    /**
+     * Direct runtimes save a preference and apply it when starting the next turn.
+     */
+    apply_on_next_turn?: boolean;
+    available_modes?: Array<TurnRuntimeMode>;
+    current_mode_id?: string;
+    /**
+     * Kind distinguishes permission presets from arbitrary agent session modes.
+     */
+    kind?: string;
+    supported?: boolean;
 };
 
 export type ExternalModelCatalog = {
@@ -1628,6 +1558,15 @@ export type ExternalModelOption = {
     id?: string;
     name?: string;
     reasoning_efforts?: Array<ExternalReasoningEffortOption>;
+    /**
+     * ResolvedModelID preserves a runtime-advertised full model name for
+     * validation without duplicating its alias in the model picker.
+     */
+    resolved_model_id?: string;
+    /**
+     * IDs belong to this runtime's permission menu, not a shared preset enum.
+     */
+    unavailable_permission_modes?: Array<string>;
 };
 
 export type ExternalReasoningEffortOption = {
@@ -1636,17 +1575,31 @@ export type ExternalReasoningEffortOption = {
     name?: string;
 };
 
-export type ExternalagentCodexDeviceLoginAuthorizeResponse = {
+export type ExternalagentCodexUsageResponse = {
+    limit_reached: boolean;
+    windows: Array<ExternalagentCodexUsageWindow>;
+};
+
+export type ExternalagentCodexUsageWindow = {
+    resets_at?: string;
+    used_percent: number;
+    /**
+     * WindowMinutes is 0 when the backend does not report the window length.
+     */
+    window_minutes: number;
+};
+
+export type ExternalagentDeviceLoginAuthorizeResponse = {
     login_id: string;
     user_code: string;
     verification_url: string;
 };
 
-export type ExternalagentCodexDeviceLoginPollRequest = {
+export type ExternalagentDeviceLoginPollRequest = {
     login_id: string;
 };
 
-export type ExternalagentCodexDeviceLoginPollResponse = {
+export type ExternalagentDeviceLoginPollResponse = {
     status: 'pending' | 'success' | 'error' | 'unknown';
 };
 
@@ -1720,6 +1673,175 @@ export type GithubComFelinicsMemohInternalMcpConnection = {
     updated_at?: string;
 };
 
+export type HandlersAgentAuthorizationClaimRequest = {
+    authorization_id: string;
+};
+
+export type HandlersAgentAuthorizationExchangeRequest = {
+    code: string;
+};
+
+export type HandlersAppConnectorCredentialRequest = {
+    auth_method: string;
+    fields?: {
+        [key: string]: string;
+    };
+};
+
+export type HandlersAppConnectorItem = {
+    connection_id?: string;
+    connector?: ConnectorsConnector;
+    required?: boolean;
+    /**
+     * Status is linked once a connection is bound, otherwise needs_auth.
+     */
+    status?: 'linked' | 'needs_auth';
+    type?: string;
+};
+
+export type HandlersAppConnectorOAuthRequest = {
+    auth_method: string;
+};
+
+export type HandlersAppDependencyItem = {
+    dependency?: HandlersWorkspaceDependencyItem;
+    id?: string;
+    /**
+     * Shared is set when another installed App references the same
+     * dependency on this bot workspace.
+     */
+    shared?: boolean;
+};
+
+export type HandlersAppInstallRequest = {
+    app_id: string;
+    registry_id: string;
+    revision: string;
+};
+
+export type HandlersAppItem = {
+    app_id?: string;
+    author?: HandlersSupermarketAuthor;
+    /**
+     * AvailableRevision and AvailableVersion name the registry's newer
+     * release after a check found one.
+     */
+    available_revision?: string;
+    available_version?: string;
+    category?: string;
+    category_name?: string;
+    connectors?: Array<HandlersAppConnectorItem>;
+    dependencies?: Array<HandlersAppDependencyItem>;
+    description?: string;
+    homepage?: string;
+    icon?: HandlersSupermarketSkillIcon;
+    /**
+     * InstallationID is empty for a discovered App: a dependency the
+     * workspace carries that no installed App references, shown through
+     * its canonical App.
+     */
+    installation_id?: string;
+    installed_at?: string;
+    last_checked_at?: string;
+    /**
+     * LastError is text recorded by earlier servers. A failure recorded now
+     * carries LastErrorCode, which clients render as errors.<code>.
+     */
+    last_error?: string;
+    last_error_code?: string;
+    license?: string;
+    name?: string;
+    reason?: 'user' | 'required';
+    registry_id?: string;
+    repository?: string;
+    revision?: string;
+    skills?: Array<HandlersAppSkillItem>;
+    /**
+     * Status is discovered for Apps without an installation record.
+     */
+    status?: 'installed' | 'partial' | 'installing' | 'updating' | 'removing' | 'failed' | 'discovered';
+    tags?: Array<string>;
+    translations?: {
+        [key: string]: HandlersSupermarketAppTranslation;
+    };
+    updated_at?: string;
+    version?: string;
+};
+
+export type HandlersAppListResponse = {
+    dependency_catalog_refreshing?: boolean;
+    dependency_catalog_stale?: boolean;
+    items?: Array<HandlersAppItem>;
+    update_checks_incomplete?: boolean;
+    workspace_state?: 'running' | 'not_running' | 'missing';
+};
+
+export type HandlersAppRemovalPreviewApp = {
+    app_id?: string;
+    installation_id?: string;
+    registry_id?: string;
+    version?: string;
+};
+
+export type HandlersAppRemovalPreviewConnector = {
+    action?: 'disconnect' | 'keep' | 'none';
+    connection_id?: string;
+    reason?: 'shared';
+    type?: string;
+};
+
+export type HandlersAppRemovalPreviewDependency = {
+    action?: 'remove' | 'keep';
+    id?: string;
+    reason?: 'shared' | 'image' | 'absent' | 'required';
+};
+
+export type HandlersAppRemovalPreviewResponse = {
+    connectors?: Array<HandlersAppRemovalPreviewConnector>;
+    dependencies?: Array<HandlersAppRemovalPreviewDependency>;
+    installation_id?: string;
+    required_apps?: Array<HandlersAppRemovalPreviewApp>;
+};
+
+export type HandlersAppSkillItem = {
+    description?: string;
+    icon?: HandlersSupermarketSkillIcon;
+    install_id?: string;
+    name?: string;
+    skill_id?: string;
+};
+
+export type HandlersAppStreamEvent = {
+    args?: {
+        [key: string]: string;
+    };
+    code?: string;
+    data?: string;
+    detail?: string;
+    fault?: ApperrorFault;
+    id?: string;
+    kind?: 'app' | 'dependency' | 'skills' | 'connector';
+    message?: string;
+    request_id?: string;
+    status?: string;
+    stream?: 'stdout' | 'stderr';
+    type?: 'started' | 'step' | 'log' | 'step_done' | 'done' | 'error';
+    version?: string;
+};
+
+export type HandlersAppUpdateRequest = {
+    app_id: string;
+    /**
+     * Dependencies are updated to their latest version.
+     */
+    dependencies?: Array<string>;
+    registry_id: string;
+    /**
+     * Release moves the installation to the registry's current release.
+     */
+    release?: boolean;
+};
+
 export type HandlersBatchDeleteRequest = {
     ids?: Array<string>;
 };
@@ -1750,35 +1872,44 @@ export type HandlersChannelMeta = {
     config_schema?: ChannelConfigSchema;
     configless?: boolean;
     display_name?: string;
+    owner_only?: boolean;
     target_spec?: ChannelTargetSpec;
     type?: string;
     user_config_schema?: ChannelConfigSchema;
 };
 
-export type HandlersCommandActionError = {
-    code?: string;
-    message?: string;
-};
-
 export type HandlersCommandActionListItem = {
     description?: string;
+    i18n_key?: string;
     id?: string;
     kind?: string;
     title?: string;
 };
 
 export type HandlersCommandActionResult = {
+    data?: unknown;
     items?: Array<HandlersCommandActionListItem>;
     kind?: string;
+    notice?: string;
     text?: string;
+    text_key?: string;
     title?: string;
 };
 
 export type HandlersCommandEventResponse = {
     action_id?: string;
+    args?: {
+        [key: string]: string;
+    };
+    /**
+     * Code, Args, Message and Fault describe a command_error, as the error
+     * event of a stream does; the client renders the code.
+     */
+    code?: string;
     composer_scope?: string;
-    error?: HandlersCommandActionError;
+    fault?: ApperrorFault;
     invocation_id?: string;
+    message?: string;
     result?: HandlersCommandActionResult;
     session_id?: string;
     terminal?: boolean;
@@ -1790,14 +1921,6 @@ export type HandlersCompactionInfo = {
     enabled?: boolean;
 };
 
-export type HandlersConnectorCredentialRequest = {
-    auth_method?: string;
-    connector_type?: string;
-    fields?: {
-        [key: string]: string;
-    };
-};
-
 export type HandlersConnectorEnabledRequest = {
     /**
      * Pointer so an empty or mistyped body fails validation instead of
@@ -1806,12 +1929,8 @@ export type HandlersConnectorEnabledRequest = {
     enabled: boolean;
 };
 
-export type HandlersConnectorOAuthRequest = {
-    auth_method?: string;
-    connector_type?: string;
-};
-
 export type HandlersContainerCpuMetricsResponse = {
+    cores?: number;
     kernel_nanoseconds?: number;
     usage_nanocores?: number;
     usage_nanoseconds?: number;
@@ -1866,7 +1985,11 @@ export type HandlersContainerResourceLimitValuesResponse = {
 };
 
 export type HandlersContainerStorageMetricsResponse = {
+    limit_bytes?: number;
     path?: string;
+    /**
+     * UsedBytes is omitted when only the allotment is known.
+     */
     used_bytes?: number;
 };
 
@@ -1932,8 +2055,13 @@ export type HandlersContextUsage = {
 export type HandlersCreateContainerRequest = {
     gpu?: HandlersContainerGpuRequest;
     image?: string;
+    /**
+     * RestoreData imports the preserved /data archive into the new workspace
+     * once it is running. Backends that expose snapshot mounts restore the
+     * archive while starting regardless of this flag; the flag matters for
+     * backends that restore through the bridge.
+     */
     restore_data?: boolean;
-    snapshotter?: string;
 };
 
 export type HandlersCreateContainerResponse = {
@@ -1971,17 +2099,6 @@ export type HandlersDailyTokenUsage = {
     reasoning_tokens?: number;
 };
 
-export type HandlersErrorResponse = {
-    args?: {
-        [key: string]: string;
-    };
-    code?: string;
-    http_status?: number;
-    i18n_key?: string;
-    message?: string;
-    reason?: string;
-};
-
 export type HandlersFsArchiveRequest = {
     paths?: Array<string>;
 };
@@ -2017,6 +2134,10 @@ export type HandlersFsListResponse = {
 
 export type HandlersFsMkdirRequest = {
     path?: string;
+    /**
+     * WorkspaceTargetID overrides the Bot's Primary target for this request.
+     */
+    workspace_target_id?: string;
 };
 
 export type HandlersFsReadResponse = {
@@ -2073,6 +2194,7 @@ export type HandlersGetContainerResponse = {
     image?: string;
     legacy?: boolean;
     namespace?: string;
+    removal?: HandlersWorkspaceRemovalResponse;
     runtime_backend?: string;
     status?: string;
     task_running?: boolean;
@@ -2118,34 +2240,6 @@ export type HandlersHooksEventsResponse = {
     config_path?: string;
     decisions?: Array<string>;
     events?: Array<HandlersHookEventInfo>;
-};
-
-export type HandlersInstallPackageRequest = {
-    package_id: string;
-    registry_id: string;
-    revision: string;
-    workspace_target_id?: string;
-};
-
-export type HandlersInstallRegistryPackageResponse = {
-    installation: SkillpackagesInstallation;
-    ok: boolean;
-    package_id: string;
-    registry_id: string;
-    revision: string;
-    skills: Array<HandlersInstallRegistrySkillResponse>;
-    workspace_target_id: string;
-};
-
-export type HandlersInstallRegistrySkillResponse = {
-    artifact_digest: string;
-    files_written: number;
-    install_id: string;
-    ok: boolean;
-    package_id: string;
-    registry_id: string;
-    skill_id: string;
-    workspace_target_id: string;
 };
 
 export type HandlersListSnapshotsResponse = {
@@ -2237,6 +2331,32 @@ export type HandlersRollbackRequest = {
     version?: number;
 };
 
+export type HandlersRuntimeCommandRequest = {
+    command?: string;
+};
+
+export type HandlersRuntimeCommandResponse = {
+    data?: unknown;
+    notice?: string;
+    text?: string;
+};
+
+export type HandlersRuntimeGoalRequest = {
+    action?: 'pause' | 'clear';
+};
+
+export type HandlersRuntimeGoalResponse = {
+    goal?: ExternalGoal;
+};
+
+export type HandlersRuntimeModeRequest = {
+    mode_id?: string;
+    /**
+     * Omitted means permission; plan changes the independent planning mode.
+     */
+    mode_kind?: 'permission' | 'plan';
+};
+
 export type HandlersSafeSkillsResponse = {
     skills?: Array<SkillsSafeCatalogItem>;
 };
@@ -2248,7 +2368,15 @@ export type HandlersSessionInfoResponse = {
     skills?: Array<string>;
 };
 
+export type HandlersSiteIconResponse = {
+    dark?: string;
+    dark_mask?: string;
+    light?: string;
+    light_mask?: string;
+};
+
 export type HandlersSkillItem = {
+    app_id?: string;
     content?: string;
     deletable?: boolean;
     description?: string;
@@ -2258,7 +2386,6 @@ export type HandlersSkillItem = {
         [key: string]: unknown;
     };
     name?: string;
-    package_id?: string;
     raw?: string;
     registry_id?: string;
     shadowed_by?: string;
@@ -2277,7 +2404,7 @@ export type HandlersSkillsActionRequest = {
 export type HandlersSkillsDeleteRequest = {
     /**
      * SourcePaths are SKILL.md paths reported in the skill list. Deleting by name
-     * cannot address registry skills, which are nested by registry and package.
+     * cannot address registry skills, which are nested by registry and app.
      */
     source_paths?: Array<string>;
 };
@@ -2313,12 +2440,132 @@ export type HandlersSnapshotInfo = {
     version?: number;
 };
 
+export type HandlersStarterPrompt = {
+    prompt: string;
+    title: string;
+};
+
+export type HandlersStarterPromptsRefreshRequest = {
+    /**
+     * Avoid lists the prompts currently shown, which the new set must not repeat.
+     */
+    avoid?: Array<string>;
+    /**
+     * Locale is the BCP 47 language tag the suggestions are written in. Defaults to en.
+     */
+    locale?: string;
+};
+
+export type HandlersStarterPromptsResponse = {
+    hash: string;
+    items: Array<HandlersStarterPrompt>;
+    unchanged: boolean;
+};
+
+export type HandlersSupermarketAppCategory = {
+    app_count: number;
+    id: string;
+    name: string;
+    names: {
+        [key: string]: string;
+    };
+    order: number;
+    registries: Array<HandlersSupermarketAppCategoryRegistry>;
+};
+
+export type HandlersSupermarketAppCategoryListResponse = {
+    data: Array<HandlersSupermarketAppCategory>;
+};
+
+export type HandlersSupermarketAppCategoryRegistry = {
+    count: number;
+    id: string;
+};
+
+export type HandlersSupermarketAppConnector = {
+    required: boolean;
+    type: string;
+};
+
+export type HandlersSupermarketAppDescriptor = {
+    app_id: string;
+    author?: HandlersSupermarketAuthor;
+    categories: Array<HandlersSupermarketAppSkillCategory>;
+    category: string;
+    category_name: string;
+    connector_count: number;
+    connectors: Array<HandlersSupermarketAppConnector>;
+    dependencies: Array<string>;
+    dependency_count: number;
+    description: string;
+    homepage?: string;
+    icon?: HandlersSupermarketSkillIcon;
+    license?: string;
+    name: string;
+    registry_id: string;
+    repository?: string;
+    revision: string;
+    schema_version: string;
+    skill_count: number;
+    skills: Array<HandlersSupermarketCatalogSkill>;
+    tags: Array<string>;
+    translations?: {
+        [key: string]: HandlersSupermarketAppTranslation;
+    };
+    version?: string;
+};
+
+export type HandlersSupermarketAppListResponse = {
+    data: Array<HandlersSupermarketAppSummary>;
+    limit: number;
+    page: number;
+    total: number;
+};
+
+export type HandlersSupermarketAppSkillCategory = {
+    id: string;
+    name: string;
+    skill_count: number;
+};
+
+export type HandlersSupermarketAppSummary = {
+    app_id: string;
+    author?: HandlersSupermarketAuthor;
+    categories: Array<HandlersSupermarketAppSkillCategory>;
+    category: string;
+    category_name: string;
+    connector_count: number;
+    connectors: Array<HandlersSupermarketAppConnector>;
+    dependencies: Array<string>;
+    dependency_count: number;
+    description: string;
+    homepage?: string;
+    icon?: HandlersSupermarketSkillIcon;
+    license?: string;
+    name: string;
+    registry_id: string;
+    repository?: string;
+    schema_version: string;
+    skill_count: number;
+    tags: Array<string>;
+    translations?: {
+        [key: string]: HandlersSupermarketAppTranslation;
+    };
+    version?: string;
+};
+
+export type HandlersSupermarketAppTranslation = {
+    description?: string;
+    name?: string;
+};
+
 export type HandlersSupermarketAuthor = {
     email: string;
     name: string;
 };
 
 export type HandlersSupermarketCatalogSkill = {
+    app_id: string;
     artifact: HandlersSupermarketSkillArtifact;
     author: HandlersSupermarketAuthor;
     category: string;
@@ -2329,7 +2576,6 @@ export type HandlersSupermarketCatalogSkill = {
     icon?: HandlersSupermarketSkillIcon;
     install_id: string;
     name: string;
-    package_id: string;
     registry_id: string;
     schema_version: string;
     skill_id: string;
@@ -2347,16 +2593,16 @@ export type HandlersSupermarketCatalogSkillListResponse = {
 
 export type HandlersSupermarketRegistry = {
     adapter: string;
+    app_count: number;
     category_count: number;
     enabled: boolean;
     id: string;
     name: string;
-    package_count: number;
     priority: number;
     published_at?: string;
     revision?: string;
     skill_count: number;
-    skipped_package_count: number;
+    skipped_app_count: number;
 };
 
 export type HandlersSupermarketRegistryListResponse = {
@@ -2374,22 +2620,6 @@ export type HandlersSupermarketSkillArtifact = {
     uncompressed_size: number;
 };
 
-export type HandlersSupermarketSkillCategory = {
-    count: number;
-    id: string;
-    name: string;
-    registries: Array<HandlersSupermarketSkillCategoryRegistry>;
-};
-
-export type HandlersSupermarketSkillCategoryListResponse = {
-    data: Array<HandlersSupermarketSkillCategory>;
-};
-
-export type HandlersSupermarketSkillCategoryRegistry = {
-    count: number;
-    id: string;
-};
-
 export type HandlersSupermarketSkillIcon = {
     brand_color?: string;
     card?: HandlersSupermarketSkillIconAsset;
@@ -2403,45 +2633,6 @@ export type HandlersSupermarketSkillIconAsset = {
     size: number;
 };
 
-export type HandlersSupermarketSkillPackageCategory = {
-    id: string;
-    name: string;
-    skill_count: number;
-};
-
-export type HandlersSupermarketSkillPackageDescriptor = {
-    categories: Array<HandlersSupermarketSkillPackageCategory>;
-    description: string;
-    icon?: HandlersSupermarketSkillIcon;
-    name: string;
-    package_id: string;
-    registry_id: string;
-    revision: string;
-    schema_version: string;
-    skill_count: number;
-    skills: Array<HandlersSupermarketCatalogSkill>;
-    tags: Array<string>;
-};
-
-export type HandlersSupermarketSkillPackageListResponse = {
-    data: Array<HandlersSupermarketSkillPackageSummary>;
-    limit: number;
-    page: number;
-    total: number;
-};
-
-export type HandlersSupermarketSkillPackageSummary = {
-    categories: Array<HandlersSupermarketSkillPackageCategory>;
-    description: string;
-    icon?: HandlersSupermarketSkillIcon;
-    name: string;
-    package_id: string;
-    registry_id: string;
-    schema_version: string;
-    skill_count: number;
-    tags: Array<string>;
-};
-
 export type HandlersSupermarketSkillSource = {
     path: string;
     repository?: string;
@@ -2452,6 +2643,7 @@ export type HandlersSupermarketSkillSource = {
 export type HandlersTokenUsageRecord = {
     cache_read_tokens?: number;
     created_at?: string;
+    harness?: string;
     id?: string;
     input_tokens?: number;
     model_id?: string;
@@ -2474,6 +2666,11 @@ export type HandlersTokenUsageResponse = {
     by_model?: Array<HandlersModelTokenUsage>;
     chat?: Array<HandlersDailyTokenUsage>;
     discuss?: Array<HandlersDailyTokenUsage>;
+    /**
+     * Memory is usage of the memory LLM (extract / decide / compact), which
+     * runs outside any session.
+     */
+    memory?: Array<HandlersDailyTokenUsage>;
     schedule?: Array<HandlersDailyTokenUsage>;
 };
 
@@ -2524,66 +2721,37 @@ export type HandlersUpdateContainerResourceLimitsRequest = {
 };
 
 export type HandlersWorkspaceDependencyCatalogItem = {
-    /**
-     * ActionsSupported lists the actions the catalog gives the dependency,
-     * before any workspace state is considered.
-     */
-    actions_supported?: Array<'install' | 'update' | 'reinstall' | 'remove' | 'rollback' | 'check_update'>;
-    /**
-     * Category is agent, runtime, or tool.
-     */
-    category?: 'agent' | 'runtime' | 'tool';
-    definition_revision?: string;
     description?: string;
-    /**
-     * HasImageBaseline is set when the workspace image ships a copy of the
-     * dependency; removing a managed overlay returns to that copy.
-     */
-    has_image_baseline?: boolean;
-    icon?: string;
     icon_url?: string;
     id?: string;
-    /**
-     * Installable is set when the catalog has an install script for the
-     * dependency, i.e. it can be installed into a workspace (as a managed
-     * overlay when the image already ships it).
-     */
-    installable?: boolean;
     name?: string;
-    platforms?: Array<HandlersWorkspaceDependencyCatalogPlatform>;
     /**
-     * Provides lists the commands the dependency makes available.
+     * Requires lists the dependency IDs installed first when missing.
      */
-    provides?: Array<string>;
-    registry_id?: string;
-    retired?: boolean;
+    requires?: Array<string>;
     translations?: {
         [key: string]: HandlersWorkspaceDependencyTranslation;
     };
-    /**
-     * VersionPin is the version every install produces when the manifest
-     * locks one; omitted when installs follow the latest release.
-     */
-    version_pin?: string;
-};
-
-export type HandlersWorkspaceDependencyCatalogPlatform = {
-    arch?: Array<string>;
-    /**
-     * Libc is empty when the libc flavour does not matter for the OS.
-     */
-    libc?: string;
-    os?: string;
 };
 
 export type HandlersWorkspaceDependencyCatalogResponse = {
-    catalog_fetched_at?: string;
     catalog_stale?: boolean;
     items?: Array<HandlersWorkspaceDependencyCatalogItem>;
 };
 
 export type HandlersWorkspaceDependencyInstallRequest = {
     definition_revision?: string;
+    /**
+     * PrerequisiteRevisions are the definition revisions the confirmation
+     * showed for the dependency's prerequisites, keyed by dependency id. When
+     * present, a missing prerequisite installs only from its confirmed
+     * revision; one without an entry refuses the operation with
+     * workspace_dependency.prerequisites_changed. Omitted, prerequisites
+     * resolve when the operation starts, like an omitted definition_revision.
+     */
+    prerequisite_revisions?: {
+        [key: string]: string;
+    };
     /**
      * SessionID optionally routes operation progress to its originating conversation.
      */
@@ -2628,7 +2796,15 @@ export type HandlersWorkspaceDependencyItem = {
      */
     installed_version?: string;
     last_checked_at?: string;
+    /**
+     * LastError is text recorded by earlier servers, including the script
+     * output they used to keep. A failure recorded now carries LastErrorCode.
+     */
     last_error?: string;
+    /**
+     * LastErrorCode is the catalog code of a recorded failure, which clients
+     * render as errors.<code>.
+     */
     last_error_code?: string;
     /**
      * LatestVersion is the last upstream check result, omitted until a check
@@ -2656,6 +2832,10 @@ export type HandlersWorkspaceDependencyItem = {
      */
     provides?: Array<string>;
     registry_id?: string;
+    /**
+     * Requires lists the dependency IDs installed first when missing.
+     */
+    requires?: Array<string>;
     retired?: boolean;
     /**
      * Source is image for dependencies shipped with the workspace image and
@@ -2679,6 +2859,11 @@ export type HandlersWorkspaceDependencyItem = {
 
 export type HandlersWorkspaceDependencyListResponse = {
     catalog_fetched_at?: string;
+    /**
+     * CatalogRefreshing is set while the catalog is refreshed in the
+     * background; listing again shortly may show a newer catalog.
+     */
+    catalog_refreshing?: boolean;
     catalog_stale?: boolean;
     /**
      * DiscoveryError is set when the workspace is running but could not be
@@ -2689,7 +2874,12 @@ export type HandlersWorkspaceDependencyListResponse = {
     discovery_error?: string;
     items?: Array<HandlersWorkspaceDependencyItem>;
     platform?: HandlersWorkspaceDependencyPlatform;
-    workspace_state?: 'running' | 'not_running' | 'missing' | 'remote_offline';
+    /**
+     * UpdateChecksIncomplete is set by check-updates when some checks did not
+     * finish in time; those keep their last result.
+     */
+    update_checks_incomplete?: boolean;
+    workspace_state?: 'running' | 'not_running' | 'missing';
 };
 
 export type HandlersWorkspaceDependencyOperationResponse = {
@@ -2718,15 +2908,11 @@ export type HandlersWorkspaceDependencyPreflightItem = {
 
 export type HandlersWorkspaceDependencyPreflightRequest = {
     dependency_ids?: Array<string>;
-    /**
-     * WorkspaceTargetID overrides the query parameter of the same name.
-     */
-    workspace_target_id?: string;
 };
 
 export type HandlersWorkspaceDependencyPreflightResponse = {
     items?: Array<HandlersWorkspaceDependencyPreflightItem>;
-    workspace_state?: 'running' | 'not_running' | 'missing' | 'remote_offline';
+    workspace_state?: 'running' | 'not_running' | 'missing';
 };
 
 export type HandlersWorkspaceDependencyScriptEnv = {
@@ -2761,6 +2947,7 @@ export type HandlersWorkspaceDependencyStreamEvent = {
     entrypoints?: {
         [key: string]: string;
     };
+    fault?: ApperrorFault;
     message?: string;
     request_id?: string;
     stream?: 'stdout' | 'stderr';
@@ -2773,8 +2960,19 @@ export type HandlersWorkspaceDependencyTranslation = {
     name?: string;
 };
 
+export type HandlersWorkspaceRemovalResponse = {
+    preserve_data?: boolean;
+    state?: 'removing' | 'failed';
+    updated_at?: string;
+};
+
 export type HandlersAcpRuntimeCreateRequest = {
     acp_agent_id?: string;
+    /**
+     * BotAgentID names the Agent instance whose setup launches the runtime;
+     * only a session bound to the same instance can later adopt it.
+     */
+    bot_agent_id?: string;
     project_path?: string;
 };
 
@@ -2879,15 +3077,6 @@ export type HandlersDisplayWebRtcOfferResponse = {
     sdp?: string;
     session_id?: string;
     type?: string;
-};
-
-export type HandlersEmailOAuthStatusResponse = {
-    configured?: boolean;
-    email_address?: string;
-    expired?: boolean;
-    expires_at?: string;
-    has_token?: boolean;
-    provider?: string;
 };
 
 export type HandlersEnqueueQueueRequest = {
@@ -3020,6 +3209,25 @@ export type HandlersOauthDiscoverRequest = {
 export type HandlersOauthExchangeRequest = {
     code?: string;
     state?: string;
+};
+
+export type HandlersSessionInvocationResponse = {
+    /**
+     * Found is false when the session has no run for this invocation, which
+     * is an ordinary answer (never admitted, or not yet) rather than an error.
+     */
+    found?: boolean;
+    invocation_id?: string;
+    run_id?: string;
+    session_id?: string;
+    /**
+     * State is the durable run state as the ledger records it, e.g.
+     * accepted, running, waiting_decision, finishing, completed, aborted,
+     * failed or lost.
+     */
+    state?: string;
+    turn_id?: string;
+    turn_position?: number;
 };
 
 export type HandlersSessionQueueResponse = {
@@ -3272,6 +3480,12 @@ export type ModelsModelConfig = {
     description?: string;
     dimensions?: number;
     /**
+     * MaxOutputTokens is the most output tokens the model can produce in one
+     * response; nil means unknown. When set, every turn requests an explicit
+     * limit within it.
+     */
+    max_output_tokens?: number;
+    /**
      * ReasoningDefaultOn reports whether omitting the thinking field leaves the
      * model thinking. Separate from off-ability: Claude 4.6 can be turned off *and*
      * defaults to off, while Opus 5 can be turned off but defaults to on, so
@@ -3310,8 +3524,12 @@ export type ModelsModelConfig = {
 export type ModelsModelType = 'chat' | 'embedding' | 'speech' | 'transcription' | 'video';
 
 export type ModelsTestResponse = {
+    /**
+     * Code is the error catalog code for why the test did not pass. It is
+     * empty on success and when no catalog code describes the failure.
+     */
+    code?: string;
     latency_ms?: number;
-    message?: string;
     reachable?: boolean;
     status?: ModelsTestStatus;
 };
@@ -3418,8 +3636,12 @@ export type ProvidersOAuthStatus = {
 };
 
 export type ProvidersTestResponse = {
+    /**
+     * Code is the error catalog code for why the test did not pass. It is
+     * empty on success and when no catalog code describes the failure.
+     */
+    code?: string;
     latency_ms?: number;
-    message?: string;
     reachable?: boolean;
     status?: ProvidersTestStatus;
 };
@@ -3525,6 +3747,10 @@ export type ScheduleCreateRequest = {
     enabled?: boolean;
     max_calls?: ScheduleNullableInt;
     /**
+     * MaxRunSeconds is the execution budget (300-86400 seconds); zero uses one hour.
+     */
+    max_run_seconds?: number;
+    /**
      * ModelID is a native model UUID override (models.id).
      */
     model_id?: string;
@@ -3571,6 +3797,10 @@ export type ScheduleExecutionConfig = {
      */
     bot_agent_id?: string;
     /**
+     * MaxRunSeconds is the execution budget (300-86400 seconds); zero uses one hour.
+     */
+    max_run_seconds?: number;
+    /**
      * ModelID is a native model UUID override (models.id).
      */
     model_id?: string;
@@ -3608,9 +3838,19 @@ export type ScheduleListResponse = {
     items?: Array<ScheduleSchedule>;
 };
 
+export type ScheduleListRunSessionsResponse = {
+    items?: Array<ScheduleRunSession>;
+    next_cursor?: string;
+};
+
 export type ScheduleLog = {
     bot_id?: string;
     completed_at?: string;
+    error_code?: string;
+    /**
+     * ErrorMessage is the text an earlier server stored; new failures set
+     * ErrorCode and leave it empty.
+     */
     error_message?: string;
     id?: string;
     result_text?: string;
@@ -3624,6 +3864,31 @@ export type ScheduleLog = {
 export type ScheduleNullableInt = {
     set?: boolean;
     value?: number;
+};
+
+export type ScheduleRunSession = {
+    /**
+     * CompletedAt is null while the fire is still running.
+     */
+    completed_at?: string | null;
+    error_code?: string;
+    /**
+     * LogID identifies the fire (schedule_logs.id).
+     */
+    log_id?: string;
+    /**
+     * SessionID is empty when the fire failed before any session existed.
+     */
+    session_id?: string;
+    started_at?: string;
+    /**
+     * Status is running while the fire has not completed, then ok or error.
+     */
+    status?: 'running' | 'ok' | 'error';
+    /**
+     * Title is the session title, empty when there is no session.
+     */
+    title?: string;
 };
 
 export type ScheduleSchedule = {
@@ -3649,6 +3914,10 @@ export type ScheduleSchedule = {
     enabled?: boolean;
     id?: string;
     max_calls?: number;
+    /**
+     * MaxRunSeconds is the execution budget (300-86400 seconds); zero uses one hour.
+     */
+    max_run_seconds?: number;
     /**
      * ModelID is a native model UUID override (models.id).
      */
@@ -3750,6 +4019,19 @@ export type SearchprovidersUpdateRequest = {
     provider?: SearchprovidersProviderName;
 };
 
+export type ServerProblem = {
+    args: {
+        [key: string]: string;
+    };
+    code: string;
+    detail: string;
+    fault: ApperrorFault;
+    request_id?: string;
+    status: number;
+    trace_id?: string;
+    type: string;
+};
+
 export type SessionSession = {
     bot_agent_id?: string;
     bot_id?: string;
@@ -3812,8 +4094,16 @@ export type SettingsSettings = {
     display_enabled?: boolean;
     fetch_provider_id?: string;
     image_model_id?: string;
-    language?: string;
-    memory_provider_id?: string;
+    /**
+     * MemoryEnabled reports whether the bot uses Built-in Memory. It is derived
+     * from MemoryProviderID, which stays internal to the server.
+     */
+    memory_enabled?: boolean;
+    /**
+     * MemoryLLMModelID is the LLM behind memory extract / decide / compact.
+     * Empty falls back to the chat model.
+     */
+    memory_llm_model_id?: string;
     overlay_config?: {
         [key: string]: unknown;
     };
@@ -3882,11 +4172,10 @@ export type SettingsUpsertRequest = {
     fetch_provider_id?: string;
     image_model_id?: string;
     /**
-     * Language follows the same pointer rule; "" normalizes to DefaultLanguage
-     * ("auto") rather than clearing the column.
+     * MemoryEnabled turns Built-in Memory on or off; nil keeps the current state.
      */
-    language?: string;
-    memory_provider_id?: string;
+    memory_enabled?: boolean;
+    memory_llm_model_id?: string;
     overlay_config?: {
         [key: string]: unknown;
     };
@@ -3903,17 +4192,6 @@ export type SettingsUpsertRequest = {
     video_model_id?: string;
 };
 
-export type SkillpackagesInstallation = {
-    bot_id: string;
-    id: string;
-    installed_at: string;
-    package_id: string;
-    registry_id: string;
-    revision: string;
-    updated_at: string;
-    workspace_target_id: string;
-};
-
 export type SkillsSafeCatalogItem = {
     description?: string;
     display_name?: string;
@@ -3922,9 +4200,56 @@ export type SkillsSafeCatalogItem = {
     state?: string;
 };
 
-export type SupermarketUninstallPackageResponse = {
-    installation: SkillpackagesInstallation;
-    ok: boolean;
+export type TurnRuntimeCommand = {
+    completed_text?: string;
+    description?: string;
+    /**
+     * I18nKey identifies host-owned copy. Native descriptions take precedence.
+     */
+    i18n_key?: string;
+    input_hint?: string;
+    kind?: TurnRuntimeCommandKind;
+    name?: string;
+    running_text?: string;
+};
+
+export type TurnRuntimeCommandKind = 'turn' | 'read' | 'operation';
+
+export type TurnRuntimeControlCapabilities = {
+    compact?: boolean;
+    fork_latest_only?: boolean;
+    goal?: boolean;
+    permission_modes?: boolean;
+    plan_mode?: boolean;
+};
+
+export type TurnRuntimeMode = {
+    description?: string;
+    i18n_key?: string;
+    /**
+     * Icon is a presentation hint; clients may fall back for unknown values.
+     */
+    icon?: string;
+    id?: string;
+    name?: string;
+    /**
+     * Warning marks a runtime-declared elevated permission option.
+     */
+    warning?: boolean;
+};
+
+export type TurnRuntimeModeState = {
+    /**
+     * Direct runtimes save a preference and apply it when starting the next turn.
+     */
+    apply_on_next_turn?: boolean;
+    available_modes?: Array<TurnRuntimeMode>;
+    current_mode_id?: string;
+    /**
+     * Kind distinguishes permission presets from arbitrary agent session modes.
+     */
+    kind?: string;
+    supported?: boolean;
 };
 
 export type UserinputUiAnswer = {
@@ -3940,6 +4265,7 @@ export type UserinputUiOption = {
     description?: string;
     id?: string;
     label?: string;
+    label_key?: string;
 };
 
 export type UserinputUiQuestion = {
@@ -4063,6 +4389,27 @@ export type WorkdirCreateRequest = {
     workspace_target_id?: string;
 };
 
+export type WorkdirDirectoriesResponse = {
+    directories?: Array<WorkdirDirectory>;
+    path?: string;
+    workspace_target_id?: string;
+};
+
+export type WorkdirDirectory = {
+    name?: string;
+    path?: string;
+};
+
+export type WorkdirGitBranchResponse = {
+    branch?: string;
+    branches?: Array<string>;
+    busy?: boolean;
+};
+
+export type WorkdirSwitchGitBranchRequest = {
+    branch: string;
+};
+
 export type WorkdirUpdateRequest = {
     name: string;
 };
@@ -4145,6 +4492,207 @@ export type GetAcpProfilesResponses = {
 
 export type GetAcpProfilesResponse = GetAcpProfilesResponses[keyof GetAcpProfilesResponses];
 
+export type PostAgentAuthorizationsData = {
+    /**
+     * Authorization request
+     */
+    body: AgentcredentialAuthorizationRequest;
+    path?: never;
+    query?: never;
+    url: '/agent-authorizations';
+};
+
+export type PostAgentAuthorizationsErrors = {
+    /**
+     * Bad Request
+     */
+    400: ServerProblem;
+    /**
+     * Forbidden
+     */
+    403: ServerProblem;
+    /**
+     * Conflict
+     */
+    409: ServerProblem;
+    /**
+     * Too Many Requests
+     */
+    429: ServerProblem;
+    /**
+     * Service Unavailable
+     */
+    503: ServerProblem;
+};
+
+export type PostAgentAuthorizationsError = PostAgentAuthorizationsErrors[keyof PostAgentAuthorizationsErrors];
+
+export type PostAgentAuthorizationsResponses = {
+    /**
+     * Created
+     */
+    201: AgentcredentialAuthorization;
+};
+
+export type PostAgentAuthorizationsResponse = PostAgentAuthorizationsResponses[keyof PostAgentAuthorizationsResponses];
+
+export type DeleteAgentAuthorizationsByIdData = {
+    body?: never;
+    path: {
+        /**
+         * Authorization ID
+         */
+        id: string;
+    };
+    query?: never;
+    url: '/agent-authorizations/{id}';
+};
+
+export type DeleteAgentAuthorizationsByIdErrors = {
+    /**
+     * Bad Request
+     */
+    400: ServerProblem;
+    /**
+     * Forbidden
+     */
+    403: ServerProblem;
+    /**
+     * Service Unavailable
+     */
+    503: ServerProblem;
+};
+
+export type DeleteAgentAuthorizationsByIdError = DeleteAgentAuthorizationsByIdErrors[keyof DeleteAgentAuthorizationsByIdErrors];
+
+export type DeleteAgentAuthorizationsByIdResponses = {
+    /**
+     * No Content
+     */
+    204: unknown;
+};
+
+export type GetAgentAuthorizationsByIdData = {
+    body?: never;
+    path: {
+        /**
+         * Authorization ID
+         */
+        id: string;
+    };
+    query?: never;
+    url: '/agent-authorizations/{id}';
+};
+
+export type GetAgentAuthorizationsByIdErrors = {
+    /**
+     * Forbidden
+     */
+    403: ServerProblem;
+    /**
+     * Gone
+     */
+    410: ServerProblem;
+    /**
+     * Service Unavailable
+     */
+    503: ServerProblem;
+};
+
+export type GetAgentAuthorizationsByIdError = GetAgentAuthorizationsByIdErrors[keyof GetAgentAuthorizationsByIdErrors];
+
+export type GetAgentAuthorizationsByIdResponses = {
+    /**
+     * OK
+     */
+    200: AgentcredentialAuthorization;
+};
+
+export type GetAgentAuthorizationsByIdResponse = GetAgentAuthorizationsByIdResponses[keyof GetAgentAuthorizationsByIdResponses];
+
+export type PostAgentAuthorizationsByIdExchangeData = {
+    /**
+     * Authorization code
+     */
+    body: HandlersAgentAuthorizationExchangeRequest;
+    path: {
+        /**
+         * Authorization ID
+         */
+        id: string;
+    };
+    query?: never;
+    url: '/agent-authorizations/{id}/exchange';
+};
+
+export type PostAgentAuthorizationsByIdExchangeErrors = {
+    /**
+     * Bad Request
+     */
+    400: ServerProblem;
+    /**
+     * Forbidden
+     */
+    403: ServerProblem;
+    /**
+     * Gone
+     */
+    410: ServerProblem;
+    /**
+     * Service Unavailable
+     */
+    503: ServerProblem;
+};
+
+export type PostAgentAuthorizationsByIdExchangeError = PostAgentAuthorizationsByIdExchangeErrors[keyof PostAgentAuthorizationsByIdExchangeErrors];
+
+export type PostAgentAuthorizationsByIdExchangeResponses = {
+    /**
+     * OK
+     */
+    200: AgentcredentialAuthorization;
+};
+
+export type PostAgentAuthorizationsByIdExchangeResponse = PostAgentAuthorizationsByIdExchangeResponses[keyof PostAgentAuthorizationsByIdExchangeResponses];
+
+export type PostAgentAuthorizationsByIdPollData = {
+    body?: never;
+    path: {
+        /**
+         * Authorization ID
+         */
+        id: string;
+    };
+    query?: never;
+    url: '/agent-authorizations/{id}/poll';
+};
+
+export type PostAgentAuthorizationsByIdPollErrors = {
+    /**
+     * Forbidden
+     */
+    403: ServerProblem;
+    /**
+     * Gone
+     */
+    410: ServerProblem;
+    /**
+     * Service Unavailable
+     */
+    503: ServerProblem;
+};
+
+export type PostAgentAuthorizationsByIdPollError = PostAgentAuthorizationsByIdPollErrors[keyof PostAgentAuthorizationsByIdPollErrors];
+
+export type PostAgentAuthorizationsByIdPollResponses = {
+    /**
+     * OK
+     */
+    200: AgentcredentialAuthorization;
+};
+
+export type PostAgentAuthorizationsByIdPollResponse = PostAgentAuthorizationsByIdPollResponses[keyof PostAgentAuthorizationsByIdPollResponses];
+
 export type PostAuthLoginData = {
     /**
      * Login request
@@ -4159,15 +4707,15 @@ export type PostAuthLoginErrors = {
     /**
      * Bad Request
      */
-    400: HandlersErrorResponse;
+    400: ServerProblem;
     /**
      * Unauthorized
      */
-    401: HandlersErrorResponse;
+    401: ServerProblem;
     /**
      * Internal Server Error
      */
-    500: HandlersErrorResponse;
+    500: ServerProblem;
 };
 
 export type PostAuthLoginError = PostAuthLoginErrors[keyof PostAuthLoginErrors];
@@ -4192,11 +4740,11 @@ export type PostAuthRefreshErrors = {
     /**
      * Unauthorized
      */
-    401: HandlersErrorResponse;
+    401: ServerProblem;
     /**
      * Internal Server Error
      */
-    500: HandlersErrorResponse;
+    500: ServerProblem;
 };
 
 export type PostAuthRefreshError = PostAuthRefreshErrors[keyof PostAuthRefreshErrors];
@@ -4226,15 +4774,15 @@ export type GetBotsErrors = {
     /**
      * Bad Request
      */
-    400: HandlersErrorResponse;
+    400: ServerProblem;
     /**
      * Forbidden
      */
-    403: HandlersErrorResponse;
+    403: ServerProblem;
     /**
      * Internal Server Error
      */
-    500: HandlersErrorResponse;
+    500: ServerProblem;
 };
 
 export type GetBotsError = GetBotsErrors[keyof GetBotsErrors];
@@ -4253,6 +4801,12 @@ export type PostBotsData = {
      * Bot payload
      */
     body: BotsCreateBotRequest;
+    headers?: {
+        /**
+         * Client-generated key for one logical create. A resend with the same key is answered with the bot the first attempt created instead of a second one.
+         */
+        'Idempotency-Key'?: string;
+    };
     path?: never;
     query?: never;
     url: '/bots';
@@ -4262,19 +4816,19 @@ export type PostBotsErrors = {
     /**
      * Bad Request
      */
-    400: HandlersErrorResponse;
+    400: ServerProblem;
     /**
      * Forbidden
      */
-    403: HandlersErrorResponse;
+    403: ServerProblem;
     /**
      * Conflict
      */
-    409: ApperrorProblem;
+    409: ServerProblem;
     /**
      * Internal Server Error
      */
-    500: HandlersErrorResponse;
+    500: ServerProblem;
 };
 
 export type PostBotsError = PostBotsErrors[keyof PostBotsErrors];
@@ -4320,15 +4874,15 @@ export type PostBotsBackupImportErrors = {
     /**
      * Bad Request
      */
-    400: HandlersErrorResponse;
+    400: ServerProblem;
     /**
      * Forbidden
      */
-    403: HandlersErrorResponse;
+    403: ServerProblem;
     /**
      * Internal Server Error
      */
-    500: HandlersErrorResponse;
+    500: ServerProblem;
 };
 
 export type PostBotsBackupImportError = PostBotsBackupImportErrors[keyof PostBotsBackupImportErrors];
@@ -4374,11 +4928,11 @@ export type PostBotsBackupImportPreviewErrors = {
     /**
      * Bad Request
      */
-    400: HandlersErrorResponse;
+    400: ServerProblem;
     /**
      * Internal Server Error
      */
-    500: HandlersErrorResponse;
+    500: ServerProblem;
 };
 
 export type PostBotsBackupImportPreviewError = PostBotsBackupImportPreviewErrors[keyof PostBotsBackupImportPreviewErrors];
@@ -4412,11 +4966,11 @@ export type GetBotsNameAvailabilityErrors = {
     /**
      * Bad Request
      */
-    400: HandlersErrorResponse;
+    400: ServerProblem;
     /**
      * Internal Server Error
      */
-    500: HandlersErrorResponse;
+    500: ServerProblem;
 };
 
 export type GetBotsNameAvailabilityError = GetBotsNameAvailabilityErrors[keyof GetBotsNameAvailabilityErrors];
@@ -4450,11 +5004,11 @@ export type GetBotsUserAccessCandidatesErrors = {
     /**
      * Unauthorized
      */
-    401: HandlersErrorResponse;
+    401: ServerProblem;
     /**
      * Internal Server Error
      */
-    500: HandlersErrorResponse;
+    500: ServerProblem;
 };
 
 export type GetBotsUserAccessCandidatesError = GetBotsUserAccessCandidatesErrors[keyof GetBotsUserAccessCandidatesErrors];
@@ -4493,15 +5047,15 @@ export type GetBotsByBotIdAclChannelIdentitiesErrors = {
     /**
      * Bad Request
      */
-    400: HandlersErrorResponse;
+    400: ServerProblem;
     /**
      * Forbidden
      */
-    403: HandlersErrorResponse;
+    403: ServerProblem;
     /**
      * Internal Server Error
      */
-    500: HandlersErrorResponse;
+    500: ServerProblem;
 };
 
 export type GetBotsByBotIdAclChannelIdentitiesError = GetBotsByBotIdAclChannelIdentitiesErrors[keyof GetBotsByBotIdAclChannelIdentitiesErrors];
@@ -4535,15 +5089,15 @@ export type GetBotsByBotIdAclChannelIdentitiesByChannelIdentityIdConversationsEr
     /**
      * Bad Request
      */
-    400: HandlersErrorResponse;
+    400: ServerProblem;
     /**
      * Forbidden
      */
-    403: HandlersErrorResponse;
+    403: ServerProblem;
     /**
      * Internal Server Error
      */
-    500: HandlersErrorResponse;
+    500: ServerProblem;
 };
 
 export type GetBotsByBotIdAclChannelIdentitiesByChannelIdentityIdConversationsError = GetBotsByBotIdAclChannelIdentitiesByChannelIdentityIdConversationsErrors[keyof GetBotsByBotIdAclChannelIdentitiesByChannelIdentityIdConversationsErrors];
@@ -4577,15 +5131,15 @@ export type GetBotsByBotIdAclChannelTypesByChannelTypeConversationsErrors = {
     /**
      * Bad Request
      */
-    400: HandlersErrorResponse;
+    400: ServerProblem;
     /**
      * Forbidden
      */
-    403: HandlersErrorResponse;
+    403: ServerProblem;
     /**
      * Internal Server Error
      */
-    500: HandlersErrorResponse;
+    500: ServerProblem;
 };
 
 export type GetBotsByBotIdAclChannelTypesByChannelTypeConversationsError = GetBotsByBotIdAclChannelTypesByChannelTypeConversationsErrors[keyof GetBotsByBotIdAclChannelTypesByChannelTypeConversationsErrors];
@@ -4615,15 +5169,15 @@ export type GetBotsByBotIdAclDefaultEffectErrors = {
     /**
      * Bad Request
      */
-    400: HandlersErrorResponse;
+    400: ServerProblem;
     /**
      * Forbidden
      */
-    403: HandlersErrorResponse;
+    403: ServerProblem;
     /**
      * Internal Server Error
      */
-    500: HandlersErrorResponse;
+    500: ServerProblem;
 };
 
 export type GetBotsByBotIdAclDefaultEffectError = GetBotsByBotIdAclDefaultEffectErrors[keyof GetBotsByBotIdAclDefaultEffectErrors];
@@ -4656,15 +5210,15 @@ export type PutBotsByBotIdAclDefaultEffectErrors = {
     /**
      * Bad Request
      */
-    400: HandlersErrorResponse;
+    400: ServerProblem;
     /**
      * Forbidden
      */
-    403: HandlersErrorResponse;
+    403: ServerProblem;
     /**
      * Internal Server Error
      */
-    500: HandlersErrorResponse;
+    500: ServerProblem;
 };
 
 export type PutBotsByBotIdAclDefaultEffectError = PutBotsByBotIdAclDefaultEffectErrors[keyof PutBotsByBotIdAclDefaultEffectErrors];
@@ -4692,15 +5246,15 @@ export type GetBotsByBotIdAclRulesErrors = {
     /**
      * Bad Request
      */
-    400: HandlersErrorResponse;
+    400: ServerProblem;
     /**
      * Forbidden
      */
-    403: HandlersErrorResponse;
+    403: ServerProblem;
     /**
      * Internal Server Error
      */
-    500: HandlersErrorResponse;
+    500: ServerProblem;
 };
 
 export type GetBotsByBotIdAclRulesError = GetBotsByBotIdAclRulesErrors[keyof GetBotsByBotIdAclRulesErrors];
@@ -4733,15 +5287,15 @@ export type PostBotsByBotIdAclRulesErrors = {
     /**
      * Bad Request
      */
-    400: HandlersErrorResponse;
+    400: ServerProblem;
     /**
      * Forbidden
      */
-    403: HandlersErrorResponse;
+    403: ServerProblem;
     /**
      * Internal Server Error
      */
-    500: HandlersErrorResponse;
+    500: ServerProblem;
 };
 
 export type PostBotsByBotIdAclRulesError = PostBotsByBotIdAclRulesErrors[keyof PostBotsByBotIdAclRulesErrors];
@@ -4775,15 +5329,15 @@ export type DeleteBotsByBotIdAclRulesByRuleIdErrors = {
     /**
      * Bad Request
      */
-    400: HandlersErrorResponse;
+    400: ServerProblem;
     /**
      * Forbidden
      */
-    403: HandlersErrorResponse;
+    403: ServerProblem;
     /**
      * Internal Server Error
      */
-    500: HandlersErrorResponse;
+    500: ServerProblem;
 };
 
 export type DeleteBotsByBotIdAclRulesByRuleIdError = DeleteBotsByBotIdAclRulesByRuleIdErrors[keyof DeleteBotsByBotIdAclRulesByRuleIdErrors];
@@ -4818,15 +5372,15 @@ export type PutBotsByBotIdAclRulesByRuleIdErrors = {
     /**
      * Bad Request
      */
-    400: HandlersErrorResponse;
+    400: ServerProblem;
     /**
      * Forbidden
      */
-    403: HandlersErrorResponse;
+    403: ServerProblem;
     /**
      * Internal Server Error
      */
-    500: HandlersErrorResponse;
+    500: ServerProblem;
 };
 
 export type PutBotsByBotIdAclRulesByRuleIdError = PutBotsByBotIdAclRulesByRuleIdErrors[keyof PutBotsByBotIdAclRulesByRuleIdErrors];
@@ -4859,23 +5413,27 @@ export type PostBotsByBotIdAcpRuntimesErrors = {
     /**
      * Bad Request
      */
-    400: ApperrorProblem;
+    400: ServerProblem;
     /**
      * Forbidden
      */
-    403: ApperrorProblem;
+    403: ServerProblem;
     /**
      * Not Found
      */
-    404: ApperrorProblem;
+    404: ServerProblem;
+    /**
+     * Conflict
+     */
+    409: ServerProblem;
     /**
      * Too Many Requests
      */
-    429: ApperrorProblem;
+    429: ServerProblem;
     /**
      * Internal Server Error
      */
-    500: ApperrorProblem;
+    500: ServerProblem;
 };
 
 export type PostBotsByBotIdAcpRuntimesError = PostBotsByBotIdAcpRuntimesErrors[keyof PostBotsByBotIdAcpRuntimesErrors];
@@ -4909,23 +5467,23 @@ export type DeleteBotsByBotIdAcpRuntimesByRuntimeIdErrors = {
     /**
      * Bad Request
      */
-    400: ApperrorProblem;
+    400: ServerProblem;
     /**
      * Forbidden
      */
-    403: ApperrorProblem;
+    403: ServerProblem;
     /**
      * Not Found
      */
-    404: ApperrorProblem;
+    404: ServerProblem;
     /**
      * Conflict
      */
-    409: ApperrorProblem;
+    409: ServerProblem;
     /**
      * Internal Server Error
      */
-    500: ApperrorProblem;
+    500: ServerProblem;
 };
 
 export type DeleteBotsByBotIdAcpRuntimesByRuntimeIdError = DeleteBotsByBotIdAcpRuntimesByRuntimeIdErrors[keyof DeleteBotsByBotIdAcpRuntimesByRuntimeIdErrors];
@@ -4957,23 +5515,23 @@ export type GetBotsByBotIdAcpRuntimesByRuntimeIdErrors = {
     /**
      * Bad Request
      */
-    400: ApperrorProblem;
+    400: ServerProblem;
     /**
      * Forbidden
      */
-    403: ApperrorProblem;
+    403: ServerProblem;
     /**
      * Not Found
      */
-    404: ApperrorProblem;
+    404: ServerProblem;
     /**
      * Conflict
      */
-    409: ApperrorProblem;
+    409: ServerProblem;
     /**
      * Internal Server Error
      */
-    500: ApperrorProblem;
+    500: ServerProblem;
 };
 
 export type GetBotsByBotIdAcpRuntimesByRuntimeIdError = GetBotsByBotIdAcpRuntimesByRuntimeIdErrors[keyof GetBotsByBotIdAcpRuntimesByRuntimeIdErrors];
@@ -5010,27 +5568,27 @@ export type PatchBotsByBotIdAcpRuntimesByRuntimeIdModeErrors = {
     /**
      * Bad Request
      */
-    400: ApperrorProblem;
+    400: ServerProblem;
     /**
      * Forbidden
      */
-    403: ApperrorProblem;
+    403: ServerProblem;
     /**
      * Not Found
      */
-    404: ApperrorProblem;
+    404: ServerProblem;
     /**
      * Conflict
      */
-    409: ApperrorProblem;
+    409: ServerProblem;
     /**
      * Internal Server Error
      */
-    500: ApperrorProblem;
+    500: ServerProblem;
     /**
      * Bad Gateway
      */
-    502: ApperrorProblem;
+    502: ServerProblem;
 };
 
 export type PatchBotsByBotIdAcpRuntimesByRuntimeIdModeError = PatchBotsByBotIdAcpRuntimesByRuntimeIdModeErrors[keyof PatchBotsByBotIdAcpRuntimesByRuntimeIdModeErrors];
@@ -5067,27 +5625,27 @@ export type PatchBotsByBotIdAcpRuntimesByRuntimeIdModelErrors = {
     /**
      * Bad Request
      */
-    400: ApperrorProblem;
+    400: ServerProblem;
     /**
      * Forbidden
      */
-    403: ApperrorProblem;
+    403: ServerProblem;
     /**
      * Not Found
      */
-    404: ApperrorProblem;
+    404: ServerProblem;
     /**
      * Conflict
      */
-    409: ApperrorProblem;
+    409: ServerProblem;
     /**
      * Internal Server Error
      */
-    500: ApperrorProblem;
+    500: ServerProblem;
     /**
      * Bad Gateway
      */
-    502: ApperrorProblem;
+    502: ServerProblem;
 };
 
 export type PatchBotsByBotIdAcpRuntimesByRuntimeIdModelError = PatchBotsByBotIdAcpRuntimesByRuntimeIdModelErrors[keyof PatchBotsByBotIdAcpRuntimesByRuntimeIdModelErrors];
@@ -5124,27 +5682,27 @@ export type PatchBotsByBotIdAcpRuntimesByRuntimeIdReasoningErrors = {
     /**
      * Bad Request
      */
-    400: ApperrorProblem;
+    400: ServerProblem;
     /**
      * Forbidden
      */
-    403: ApperrorProblem;
+    403: ServerProblem;
     /**
      * Not Found
      */
-    404: ApperrorProblem;
+    404: ServerProblem;
     /**
      * Conflict
      */
-    409: ApperrorProblem;
+    409: ServerProblem;
     /**
      * Internal Server Error
      */
-    500: ApperrorProblem;
+    500: ServerProblem;
     /**
      * Bad Gateway
      */
-    502: ApperrorProblem;
+    502: ServerProblem;
 };
 
 export type PatchBotsByBotIdAcpRuntimesByRuntimeIdReasoningError = PatchBotsByBotIdAcpRuntimesByRuntimeIdReasoningErrors[keyof PatchBotsByBotIdAcpRuntimesByRuntimeIdReasoningErrors];
@@ -5174,7 +5732,7 @@ export type GetBotsByBotIdAgentsErrors = {
     /**
      * Forbidden
      */
-    403: HandlersErrorResponse;
+    403: ServerProblem;
 };
 
 export type GetBotsByBotIdAgentsError = GetBotsByBotIdAgentsErrors[keyof GetBotsByBotIdAgentsErrors];
@@ -5207,15 +5765,15 @@ export type PostBotsByBotIdAgentsErrors = {
     /**
      * Bad Request
      */
-    400: ApperrorProblem;
+    400: ServerProblem;
     /**
      * Forbidden
      */
-    403: HandlersErrorResponse;
+    403: ServerProblem;
     /**
      * Conflict
      */
-    409: ApperrorProblem;
+    409: ServerProblem;
 };
 
 export type PostBotsByBotIdAgentsError = PostBotsByBotIdAgentsErrors[keyof PostBotsByBotIdAgentsErrors];
@@ -5249,15 +5807,15 @@ export type DeleteBotsByBotIdAgentsByIdErrors = {
     /**
      * Forbidden
      */
-    403: HandlersErrorResponse;
+    403: ServerProblem;
     /**
      * Not Found
      */
-    404: ApperrorProblem;
+    404: ServerProblem;
     /**
      * Conflict
      */
-    409: ApperrorProblem;
+    409: ServerProblem;
 };
 
 export type DeleteBotsByBotIdAgentsByIdError = DeleteBotsByBotIdAgentsByIdErrors[keyof DeleteBotsByBotIdAgentsByIdErrors];
@@ -5289,11 +5847,11 @@ export type GetBotsByBotIdAgentsByIdErrors = {
     /**
      * Forbidden
      */
-    403: HandlersErrorResponse;
+    403: ServerProblem;
     /**
      * Not Found
      */
-    404: ApperrorProblem;
+    404: ServerProblem;
 };
 
 export type GetBotsByBotIdAgentsByIdError = GetBotsByBotIdAgentsByIdErrors[keyof GetBotsByBotIdAgentsByIdErrors];
@@ -5330,19 +5888,19 @@ export type PatchBotsByBotIdAgentsByIdErrors = {
     /**
      * Bad Request
      */
-    400: ApperrorProblem;
+    400: ServerProblem;
     /**
      * Forbidden
      */
-    403: HandlersErrorResponse;
+    403: ServerProblem;
     /**
      * Not Found
      */
-    404: ApperrorProblem;
+    404: ServerProblem;
     /**
      * Conflict
      */
-    409: ApperrorProblem;
+    409: ServerProblem;
 };
 
 export type PatchBotsByBotIdAgentsByIdError = PatchBotsByBotIdAgentsByIdErrors[keyof PatchBotsByBotIdAgentsByIdErrors];
@@ -5356,7 +5914,7 @@ export type PatchBotsByBotIdAgentsByIdResponses = {
 
 export type PatchBotsByBotIdAgentsByIdResponse = PatchBotsByBotIdAgentsByIdResponses[keyof PatchBotsByBotIdAgentsByIdResponses];
 
-export type PostBotsByBotIdAgentsByIdCodexLoginDeviceAuthorizeData = {
+export type GetBotsByBotIdAgentsByIdCodexUsageData = {
     body?: never;
     path: {
         /**
@@ -5369,114 +5927,42 @@ export type PostBotsByBotIdAgentsByIdCodexLoginDeviceAuthorizeData = {
         id: string;
     };
     query?: never;
-    url: '/bots/{bot_id}/agents/{id}/codex/login/device/authorize';
+    url: '/bots/{bot_id}/agents/{id}/codex/usage';
 };
 
-export type PostBotsByBotIdAgentsByIdCodexLoginDeviceAuthorizeErrors = {
-    /**
-     * Bad Request
-     */
-    400: HandlersErrorResponse;
+export type GetBotsByBotIdAgentsByIdCodexUsageErrors = {
     /**
      * Forbidden
      */
-    403: HandlersErrorResponse;
+    403: ServerProblem;
     /**
-     * Service Unavailable
+     * Not Found
      */
-    503: ApperrorProblem;
+    404: ServerProblem;
+    /**
+     * Conflict
+     */
+    409: ServerProblem;
+    /**
+     * Unprocessable Entity
+     */
+    422: ServerProblem;
+    /**
+     * Bad Gateway
+     */
+    502: ServerProblem;
 };
 
-export type PostBotsByBotIdAgentsByIdCodexLoginDeviceAuthorizeError = PostBotsByBotIdAgentsByIdCodexLoginDeviceAuthorizeErrors[keyof PostBotsByBotIdAgentsByIdCodexLoginDeviceAuthorizeErrors];
+export type GetBotsByBotIdAgentsByIdCodexUsageError = GetBotsByBotIdAgentsByIdCodexUsageErrors[keyof GetBotsByBotIdAgentsByIdCodexUsageErrors];
 
-export type PostBotsByBotIdAgentsByIdCodexLoginDeviceAuthorizeResponses = {
+export type GetBotsByBotIdAgentsByIdCodexUsageResponses = {
     /**
      * OK
      */
-    200: ExternalagentCodexDeviceLoginAuthorizeResponse;
+    200: ExternalagentCodexUsageResponse;
 };
 
-export type PostBotsByBotIdAgentsByIdCodexLoginDeviceAuthorizeResponse = PostBotsByBotIdAgentsByIdCodexLoginDeviceAuthorizeResponses[keyof PostBotsByBotIdAgentsByIdCodexLoginDeviceAuthorizeResponses];
-
-export type PostBotsByBotIdAgentsByIdCodexLoginDeviceCancelData = {
-    /**
-     * Login reference
-     */
-    body: ExternalagentCodexDeviceLoginPollRequest;
-    path: {
-        /**
-         * Bot ID
-         */
-        bot_id: string;
-        /**
-         * Bot Agent ID
-         */
-        id: string;
-    };
-    query?: never;
-    url: '/bots/{bot_id}/agents/{id}/codex/login/device/cancel';
-};
-
-export type PostBotsByBotIdAgentsByIdCodexLoginDeviceCancelErrors = {
-    /**
-     * Bad Request
-     */
-    400: HandlersErrorResponse;
-    /**
-     * Forbidden
-     */
-    403: HandlersErrorResponse;
-};
-
-export type PostBotsByBotIdAgentsByIdCodexLoginDeviceCancelError = PostBotsByBotIdAgentsByIdCodexLoginDeviceCancelErrors[keyof PostBotsByBotIdAgentsByIdCodexLoginDeviceCancelErrors];
-
-export type PostBotsByBotIdAgentsByIdCodexLoginDeviceCancelResponses = {
-    /**
-     * No Content
-     */
-    204: unknown;
-};
-
-export type PostBotsByBotIdAgentsByIdCodexLoginDevicePollData = {
-    /**
-     * Login reference
-     */
-    body: ExternalagentCodexDeviceLoginPollRequest;
-    path: {
-        /**
-         * Bot ID
-         */
-        bot_id: string;
-        /**
-         * Bot Agent ID
-         */
-        id: string;
-    };
-    query?: never;
-    url: '/bots/{bot_id}/agents/{id}/codex/login/device/poll';
-};
-
-export type PostBotsByBotIdAgentsByIdCodexLoginDevicePollErrors = {
-    /**
-     * Bad Request
-     */
-    400: HandlersErrorResponse;
-    /**
-     * Forbidden
-     */
-    403: HandlersErrorResponse;
-};
-
-export type PostBotsByBotIdAgentsByIdCodexLoginDevicePollError = PostBotsByBotIdAgentsByIdCodexLoginDevicePollErrors[keyof PostBotsByBotIdAgentsByIdCodexLoginDevicePollErrors];
-
-export type PostBotsByBotIdAgentsByIdCodexLoginDevicePollResponses = {
-    /**
-     * OK
-     */
-    200: ExternalagentCodexDeviceLoginPollResponse;
-};
-
-export type PostBotsByBotIdAgentsByIdCodexLoginDevicePollResponse = PostBotsByBotIdAgentsByIdCodexLoginDevicePollResponses[keyof PostBotsByBotIdAgentsByIdCodexLoginDevicePollResponses];
+export type GetBotsByBotIdAgentsByIdCodexUsageResponse = GetBotsByBotIdAgentsByIdCodexUsageResponses[keyof GetBotsByBotIdAgentsByIdCodexUsageResponses];
 
 export type DeleteBotsByBotIdAgentsByIdCredentialData = {
     body?: never;
@@ -5498,7 +5984,7 @@ export type DeleteBotsByBotIdAgentsByIdCredentialErrors = {
     /**
      * Not Found
      */
-    404: ApperrorProblem;
+    404: ServerProblem;
 };
 
 export type DeleteBotsByBotIdAgentsByIdCredentialError = DeleteBotsByBotIdAgentsByIdCredentialErrors[keyof DeleteBotsByBotIdAgentsByIdCredentialErrors];
@@ -5530,7 +6016,7 @@ export type GetBotsByBotIdAgentsByIdCredentialErrors = {
     /**
      * Not Found
      */
-    404: ApperrorProblem;
+    404: ServerProblem;
 };
 
 export type GetBotsByBotIdAgentsByIdCredentialError = GetBotsByBotIdAgentsByIdCredentialErrors[keyof GetBotsByBotIdAgentsByIdCredentialErrors];
@@ -5567,19 +6053,19 @@ export type PutBotsByBotIdAgentsByIdCredentialErrors = {
     /**
      * Bad Request
      */
-    400: ApperrorProblem;
+    400: ServerProblem;
     /**
      * Not Found
      */
-    404: ApperrorProblem;
+    404: ServerProblem;
     /**
      * Unprocessable Entity
      */
-    422: ApperrorProblem;
+    422: ServerProblem;
     /**
      * Service Unavailable
      */
-    503: ApperrorProblem;
+    503: ServerProblem;
 };
 
 export type PutBotsByBotIdAgentsByIdCredentialError = PutBotsByBotIdAgentsByIdCredentialErrors[keyof PutBotsByBotIdAgentsByIdCredentialErrors];
@@ -5593,6 +6079,197 @@ export type PutBotsByBotIdAgentsByIdCredentialResponses = {
 
 export type PutBotsByBotIdAgentsByIdCredentialResponse = PutBotsByBotIdAgentsByIdCredentialResponses[keyof PutBotsByBotIdAgentsByIdCredentialResponses];
 
+export type PostBotsByBotIdAgentsByIdCredentialClaimData = {
+    /**
+     * Authorization reference
+     */
+    body: HandlersAgentAuthorizationClaimRequest;
+    path: {
+        /**
+         * Bot ID
+         */
+        bot_id: string;
+        /**
+         * Agent ID
+         */
+        id: string;
+    };
+    query?: never;
+    url: '/bots/{bot_id}/agents/{id}/credential/claim';
+};
+
+export type PostBotsByBotIdAgentsByIdCredentialClaimErrors = {
+    /**
+     * Bad Request
+     */
+    400: ServerProblem;
+    /**
+     * Forbidden
+     */
+    403: ServerProblem;
+    /**
+     * Not Found
+     */
+    404: ServerProblem;
+    /**
+     * Conflict
+     */
+    409: ServerProblem;
+    /**
+     * Gone
+     */
+    410: ServerProblem;
+    /**
+     * Service Unavailable
+     */
+    503: ServerProblem;
+};
+
+export type PostBotsByBotIdAgentsByIdCredentialClaimError = PostBotsByBotIdAgentsByIdCredentialClaimErrors[keyof PostBotsByBotIdAgentsByIdCredentialClaimErrors];
+
+export type PostBotsByBotIdAgentsByIdCredentialClaimResponses = {
+    /**
+     * OK
+     */
+    200: AgentcredentialPublicCredential;
+};
+
+export type PostBotsByBotIdAgentsByIdCredentialClaimResponse = PostBotsByBotIdAgentsByIdCredentialClaimResponses[keyof PostBotsByBotIdAgentsByIdCredentialClaimResponses];
+
+export type PostBotsByBotIdAgentsByIdLoginDeviceAuthorizeData = {
+    body?: never;
+    path: {
+        /**
+         * Bot ID
+         */
+        bot_id: string;
+        /**
+         * Bot Agent ID
+         */
+        id: string;
+    };
+    query?: never;
+    url: '/bots/{bot_id}/agents/{id}/login/device/authorize';
+};
+
+export type PostBotsByBotIdAgentsByIdLoginDeviceAuthorizeErrors = {
+    /**
+     * Bad Request
+     */
+    400: ServerProblem;
+    /**
+     * Forbidden
+     */
+    403: ServerProblem;
+    /**
+     * Not Found
+     */
+    404: ServerProblem;
+    /**
+     * Service Unavailable
+     */
+    503: ServerProblem;
+};
+
+export type PostBotsByBotIdAgentsByIdLoginDeviceAuthorizeError = PostBotsByBotIdAgentsByIdLoginDeviceAuthorizeErrors[keyof PostBotsByBotIdAgentsByIdLoginDeviceAuthorizeErrors];
+
+export type PostBotsByBotIdAgentsByIdLoginDeviceAuthorizeResponses = {
+    /**
+     * OK
+     */
+    200: ExternalagentDeviceLoginAuthorizeResponse;
+};
+
+export type PostBotsByBotIdAgentsByIdLoginDeviceAuthorizeResponse = PostBotsByBotIdAgentsByIdLoginDeviceAuthorizeResponses[keyof PostBotsByBotIdAgentsByIdLoginDeviceAuthorizeResponses];
+
+export type PostBotsByBotIdAgentsByIdLoginDeviceCancelData = {
+    /**
+     * Sign-in reference
+     */
+    body: ExternalagentDeviceLoginPollRequest;
+    path: {
+        /**
+         * Bot ID
+         */
+        bot_id: string;
+        /**
+         * Bot Agent ID
+         */
+        id: string;
+    };
+    query?: never;
+    url: '/bots/{bot_id}/agents/{id}/login/device/cancel';
+};
+
+export type PostBotsByBotIdAgentsByIdLoginDeviceCancelErrors = {
+    /**
+     * Bad Request
+     */
+    400: ServerProblem;
+    /**
+     * Forbidden
+     */
+    403: ServerProblem;
+    /**
+     * Not Found
+     */
+    404: ServerProblem;
+};
+
+export type PostBotsByBotIdAgentsByIdLoginDeviceCancelError = PostBotsByBotIdAgentsByIdLoginDeviceCancelErrors[keyof PostBotsByBotIdAgentsByIdLoginDeviceCancelErrors];
+
+export type PostBotsByBotIdAgentsByIdLoginDeviceCancelResponses = {
+    /**
+     * No Content
+     */
+    204: unknown;
+};
+
+export type PostBotsByBotIdAgentsByIdLoginDevicePollData = {
+    /**
+     * Sign-in reference
+     */
+    body: ExternalagentDeviceLoginPollRequest;
+    path: {
+        /**
+         * Bot ID
+         */
+        bot_id: string;
+        /**
+         * Bot Agent ID
+         */
+        id: string;
+    };
+    query?: never;
+    url: '/bots/{bot_id}/agents/{id}/login/device/poll';
+};
+
+export type PostBotsByBotIdAgentsByIdLoginDevicePollErrors = {
+    /**
+     * Bad Request
+     */
+    400: ServerProblem;
+    /**
+     * Forbidden
+     */
+    403: ServerProblem;
+    /**
+     * Not Found
+     */
+    404: ServerProblem;
+};
+
+export type PostBotsByBotIdAgentsByIdLoginDevicePollError = PostBotsByBotIdAgentsByIdLoginDevicePollErrors[keyof PostBotsByBotIdAgentsByIdLoginDevicePollErrors];
+
+export type PostBotsByBotIdAgentsByIdLoginDevicePollResponses = {
+    /**
+     * OK
+     */
+    200: ExternalagentDeviceLoginPollResponse;
+};
+
+export type PostBotsByBotIdAgentsByIdLoginDevicePollResponse = PostBotsByBotIdAgentsByIdLoginDevicePollResponses[keyof PostBotsByBotIdAgentsByIdLoginDevicePollResponses];
+
 export type GetBotsByBotIdAgentsByIdModelsData = {
     body?: never;
     path: {
@@ -5605,7 +6282,16 @@ export type GetBotsByBotIdAgentsByIdModelsData = {
          */
         id: string;
     };
-    query?: never;
+    query?: {
+        /**
+         * Model whose effective defaults should be displayed
+         */
+        model_id?: string;
+        /**
+         * Workspace project path for runtime model settings
+         */
+        project_path?: string;
+    };
     url: '/bots/{bot_id}/agents/{id}/models';
 };
 
@@ -5613,15 +6299,15 @@ export type GetBotsByBotIdAgentsByIdModelsErrors = {
     /**
      * Forbidden
      */
-    403: HandlersErrorResponse;
+    403: ServerProblem;
     /**
      * Not Found
      */
-    404: ApperrorProblem;
+    404: ServerProblem;
     /**
      * Service Unavailable
      */
-    503: ApperrorProblem;
+    503: ServerProblem;
 };
 
 export type GetBotsByBotIdAgentsByIdModelsError = GetBotsByBotIdAgentsByIdModelsErrors[keyof GetBotsByBotIdAgentsByIdModelsErrors];
@@ -5634,6 +6320,506 @@ export type GetBotsByBotIdAgentsByIdModelsResponses = {
 };
 
 export type GetBotsByBotIdAgentsByIdModelsResponse = GetBotsByBotIdAgentsByIdModelsResponses[keyof GetBotsByBotIdAgentsByIdModelsResponses];
+
+export type GetBotsByBotIdAgentsByIdRuntimeControlsData = {
+    body?: never;
+    path: {
+        /**
+         * Bot ID
+         */
+        bot_id: string;
+        /**
+         * Agent ID
+         */
+        id: string;
+    };
+    query?: never;
+    url: '/bots/{bot_id}/agents/{id}/runtime-controls';
+};
+
+export type GetBotsByBotIdAgentsByIdRuntimeControlsErrors = {
+    /**
+     * Forbidden
+     */
+    403: ServerProblem;
+    /**
+     * Not Found
+     */
+    404: ServerProblem;
+    /**
+     * Internal Server Error
+     */
+    500: ServerProblem;
+};
+
+export type GetBotsByBotIdAgentsByIdRuntimeControlsError = GetBotsByBotIdAgentsByIdRuntimeControlsErrors[keyof GetBotsByBotIdAgentsByIdRuntimeControlsErrors];
+
+export type GetBotsByBotIdAgentsByIdRuntimeControlsResponses = {
+    /**
+     * OK
+     */
+    200: ExternalControls;
+};
+
+export type GetBotsByBotIdAgentsByIdRuntimeControlsResponse = GetBotsByBotIdAgentsByIdRuntimeControlsResponses[keyof GetBotsByBotIdAgentsByIdRuntimeControlsResponses];
+
+export type GetBotsByBotIdAppsData = {
+    body?: never;
+    path: {
+        /**
+         * Bot ID
+         */
+        bot_id: string;
+    };
+    query?: {
+        /**
+         * Refresh workspace discovery
+         */
+        refresh?: boolean;
+    };
+    url: '/bots/{bot_id}/apps';
+};
+
+export type GetBotsByBotIdAppsErrors = {
+    /**
+     * Bad Request
+     */
+    400: ServerProblem;
+    /**
+     * Forbidden
+     */
+    403: ServerProblem;
+    /**
+     * Not Found
+     */
+    404: ServerProblem;
+    /**
+     * Internal Server Error
+     */
+    500: ServerProblem;
+    /**
+     * Service Unavailable
+     */
+    503: ServerProblem;
+};
+
+export type GetBotsByBotIdAppsError = GetBotsByBotIdAppsErrors[keyof GetBotsByBotIdAppsErrors];
+
+export type GetBotsByBotIdAppsResponses = {
+    /**
+     * OK
+     */
+    200: HandlersAppListResponse;
+};
+
+export type GetBotsByBotIdAppsResponse = GetBotsByBotIdAppsResponses[keyof GetBotsByBotIdAppsResponses];
+
+export type PostBotsByBotIdAppsData = {
+    /**
+     * App release to install
+     */
+    body: HandlersAppInstallRequest;
+    path: {
+        /**
+         * Bot ID
+         */
+        bot_id: string;
+    };
+    query?: never;
+    url: '/bots/{bot_id}/apps';
+};
+
+export type PostBotsByBotIdAppsErrors = {
+    /**
+     * Bad Request
+     */
+    400: ServerProblem;
+    /**
+     * Forbidden
+     */
+    403: ServerProblem;
+    /**
+     * Not Found
+     */
+    404: ServerProblem;
+    /**
+     * Bad Gateway
+     */
+    502: ServerProblem;
+};
+
+export type PostBotsByBotIdAppsError = PostBotsByBotIdAppsErrors[keyof PostBotsByBotIdAppsErrors];
+
+export type PostBotsByBotIdAppsResponses = {
+    /**
+     * SSE stream of operation events
+     */
+    200: HandlersAppStreamEvent;
+};
+
+export type PostBotsByBotIdAppsResponse = PostBotsByBotIdAppsResponses[keyof PostBotsByBotIdAppsResponses];
+
+export type PostBotsByBotIdAppsCheckUpdatesData = {
+    body?: never;
+    path: {
+        /**
+         * Bot ID
+         */
+        bot_id: string;
+    };
+    query?: never;
+    url: '/bots/{bot_id}/apps/check-updates';
+};
+
+export type PostBotsByBotIdAppsCheckUpdatesErrors = {
+    /**
+     * Forbidden
+     */
+    403: ServerProblem;
+    /**
+     * Internal Server Error
+     */
+    500: ServerProblem;
+    /**
+     * Bad Gateway
+     */
+    502: ServerProblem;
+};
+
+export type PostBotsByBotIdAppsCheckUpdatesError = PostBotsByBotIdAppsCheckUpdatesErrors[keyof PostBotsByBotIdAppsCheckUpdatesErrors];
+
+export type PostBotsByBotIdAppsCheckUpdatesResponses = {
+    /**
+     * OK
+     */
+    200: HandlersAppListResponse;
+};
+
+export type PostBotsByBotIdAppsCheckUpdatesResponse = PostBotsByBotIdAppsCheckUpdatesResponses[keyof PostBotsByBotIdAppsCheckUpdatesResponses];
+
+export type PostBotsByBotIdAppsUpdateData = {
+    /**
+     * What to update
+     */
+    body: HandlersAppUpdateRequest;
+    path: {
+        /**
+         * Bot ID
+         */
+        bot_id: string;
+    };
+    query?: never;
+    url: '/bots/{bot_id}/apps/update';
+};
+
+export type PostBotsByBotIdAppsUpdateErrors = {
+    /**
+     * Bad Request
+     */
+    400: ServerProblem;
+    /**
+     * Forbidden
+     */
+    403: ServerProblem;
+    /**
+     * Not Found
+     */
+    404: ServerProblem;
+    /**
+     * Bad Gateway
+     */
+    502: ServerProblem;
+};
+
+export type PostBotsByBotIdAppsUpdateError = PostBotsByBotIdAppsUpdateErrors[keyof PostBotsByBotIdAppsUpdateErrors];
+
+export type PostBotsByBotIdAppsUpdateResponses = {
+    /**
+     * SSE stream of operation events
+     */
+    200: HandlersAppStreamEvent;
+};
+
+export type PostBotsByBotIdAppsUpdateResponse = PostBotsByBotIdAppsUpdateResponses[keyof PostBotsByBotIdAppsUpdateResponses];
+
+export type DeleteBotsByBotIdAppsByInstallationIdData = {
+    body?: never;
+    path: {
+        /**
+         * Bot ID
+         */
+        bot_id: string;
+        /**
+         * App installation ID
+         */
+        installation_id: string;
+    };
+    query?: {
+        /**
+         * Also remove auto-installed Apps that lose their last reference
+         */
+        remove_unreferenced_required?: boolean;
+    };
+    url: '/bots/{bot_id}/apps/{installation_id}';
+};
+
+export type DeleteBotsByBotIdAppsByInstallationIdErrors = {
+    /**
+     * Forbidden
+     */
+    403: ServerProblem;
+    /**
+     * Not Found
+     */
+    404: ServerProblem;
+};
+
+export type DeleteBotsByBotIdAppsByInstallationIdError = DeleteBotsByBotIdAppsByInstallationIdErrors[keyof DeleteBotsByBotIdAppsByInstallationIdErrors];
+
+export type DeleteBotsByBotIdAppsByInstallationIdResponses = {
+    /**
+     * SSE stream of operation events
+     */
+    200: HandlersAppStreamEvent;
+};
+
+export type DeleteBotsByBotIdAppsByInstallationIdResponse = DeleteBotsByBotIdAppsByInstallationIdResponses[keyof DeleteBotsByBotIdAppsByInstallationIdResponses];
+
+export type GetBotsByBotIdAppsByInstallationIdData = {
+    body?: never;
+    path: {
+        /**
+         * Bot ID
+         */
+        bot_id: string;
+        /**
+         * App installation ID
+         */
+        installation_id: string;
+    };
+    query?: never;
+    url: '/bots/{bot_id}/apps/{installation_id}';
+};
+
+export type GetBotsByBotIdAppsByInstallationIdErrors = {
+    /**
+     * Forbidden
+     */
+    403: ServerProblem;
+    /**
+     * Not Found
+     */
+    404: ServerProblem;
+    /**
+     * Internal Server Error
+     */
+    500: ServerProblem;
+};
+
+export type GetBotsByBotIdAppsByInstallationIdError = GetBotsByBotIdAppsByInstallationIdErrors[keyof GetBotsByBotIdAppsByInstallationIdErrors];
+
+export type GetBotsByBotIdAppsByInstallationIdResponses = {
+    /**
+     * OK
+     */
+    200: HandlersAppItem;
+};
+
+export type GetBotsByBotIdAppsByInstallationIdResponse = GetBotsByBotIdAppsByInstallationIdResponses[keyof GetBotsByBotIdAppsByInstallationIdResponses];
+
+export type PostBotsByBotIdAppsByInstallationIdConnectorsByConnectorTypeApiKeyData = {
+    /**
+     * Credential request
+     */
+    body: HandlersAppConnectorCredentialRequest;
+    path: {
+        /**
+         * Bot ID
+         */
+        bot_id: string;
+        /**
+         * App installation ID
+         */
+        installation_id: string;
+        /**
+         * Connector type
+         */
+        connector_type: string;
+    };
+    query?: never;
+    url: '/bots/{bot_id}/apps/{installation_id}/connectors/{connector_type}/api-key';
+};
+
+export type PostBotsByBotIdAppsByInstallationIdConnectorsByConnectorTypeApiKeyErrors = {
+    /**
+     * Bad Request
+     */
+    400: ServerProblem;
+    /**
+     * Forbidden
+     */
+    403: ServerProblem;
+    /**
+     * Not Found
+     */
+    404: ServerProblem;
+    /**
+     * Bad Gateway
+     */
+    502: ServerProblem;
+    /**
+     * Service Unavailable
+     */
+    503: ServerProblem;
+};
+
+export type PostBotsByBotIdAppsByInstallationIdConnectorsByConnectorTypeApiKeyError = PostBotsByBotIdAppsByInstallationIdConnectorsByConnectorTypeApiKeyErrors[keyof PostBotsByBotIdAppsByInstallationIdConnectorsByConnectorTypeApiKeyErrors];
+
+export type PostBotsByBotIdAppsByInstallationIdConnectorsByConnectorTypeApiKeyResponses = {
+    /**
+     * Created
+     */
+    201: ConnectorsConnector;
+};
+
+export type PostBotsByBotIdAppsByInstallationIdConnectorsByConnectorTypeApiKeyResponse = PostBotsByBotIdAppsByInstallationIdConnectorsByConnectorTypeApiKeyResponses[keyof PostBotsByBotIdAppsByInstallationIdConnectorsByConnectorTypeApiKeyResponses];
+
+export type PostBotsByBotIdAppsByInstallationIdConnectorsByConnectorTypeOauthData = {
+    /**
+     * OAuth request
+     */
+    body: HandlersAppConnectorOAuthRequest;
+    path: {
+        /**
+         * Bot ID
+         */
+        bot_id: string;
+        /**
+         * App installation ID
+         */
+        installation_id: string;
+        /**
+         * Connector type
+         */
+        connector_type: string;
+    };
+    query?: never;
+    url: '/bots/{bot_id}/apps/{installation_id}/connectors/{connector_type}/oauth';
+};
+
+export type PostBotsByBotIdAppsByInstallationIdConnectorsByConnectorTypeOauthErrors = {
+    /**
+     * Bad Request
+     */
+    400: ServerProblem;
+    /**
+     * Forbidden
+     */
+    403: ServerProblem;
+    /**
+     * Not Found
+     */
+    404: ServerProblem;
+    /**
+     * Bad Gateway
+     */
+    502: ServerProblem;
+    /**
+     * Service Unavailable
+     */
+    503: ServerProblem;
+};
+
+export type PostBotsByBotIdAppsByInstallationIdConnectorsByConnectorTypeOauthError = PostBotsByBotIdAppsByInstallationIdConnectorsByConnectorTypeOauthErrors[keyof PostBotsByBotIdAppsByInstallationIdConnectorsByConnectorTypeOauthErrors];
+
+export type PostBotsByBotIdAppsByInstallationIdConnectorsByConnectorTypeOauthResponses = {
+    /**
+     * Created
+     */
+    201: ConnectitOAuthAuthorization;
+};
+
+export type PostBotsByBotIdAppsByInstallationIdConnectorsByConnectorTypeOauthResponse = PostBotsByBotIdAppsByInstallationIdConnectorsByConnectorTypeOauthResponses[keyof PostBotsByBotIdAppsByInstallationIdConnectorsByConnectorTypeOauthResponses];
+
+export type GetBotsByBotIdAppsByInstallationIdRemovalPreviewData = {
+    body?: never;
+    path: {
+        /**
+         * Bot ID
+         */
+        bot_id: string;
+        /**
+         * App installation ID
+         */
+        installation_id: string;
+    };
+    query?: never;
+    url: '/bots/{bot_id}/apps/{installation_id}/removal-preview';
+};
+
+export type GetBotsByBotIdAppsByInstallationIdRemovalPreviewErrors = {
+    /**
+     * Forbidden
+     */
+    403: ServerProblem;
+    /**
+     * Not Found
+     */
+    404: ServerProblem;
+    /**
+     * Internal Server Error
+     */
+    500: ServerProblem;
+};
+
+export type GetBotsByBotIdAppsByInstallationIdRemovalPreviewError = GetBotsByBotIdAppsByInstallationIdRemovalPreviewErrors[keyof GetBotsByBotIdAppsByInstallationIdRemovalPreviewErrors];
+
+export type GetBotsByBotIdAppsByInstallationIdRemovalPreviewResponses = {
+    /**
+     * OK
+     */
+    200: HandlersAppRemovalPreviewResponse;
+};
+
+export type GetBotsByBotIdAppsByInstallationIdRemovalPreviewResponse = GetBotsByBotIdAppsByInstallationIdRemovalPreviewResponses[keyof GetBotsByBotIdAppsByInstallationIdRemovalPreviewResponses];
+
+export type PostBotsByBotIdAppsByInstallationIdResumeData = {
+    body?: never;
+    path: {
+        /**
+         * Bot ID
+         */
+        bot_id: string;
+        /**
+         * App installation ID
+         */
+        installation_id: string;
+    };
+    query?: never;
+    url: '/bots/{bot_id}/apps/{installation_id}/resume';
+};
+
+export type PostBotsByBotIdAppsByInstallationIdResumeErrors = {
+    /**
+     * Forbidden
+     */
+    403: ServerProblem;
+    /**
+     * Not Found
+     */
+    404: ServerProblem;
+};
+
+export type PostBotsByBotIdAppsByInstallationIdResumeError = PostBotsByBotIdAppsByInstallationIdResumeErrors[keyof PostBotsByBotIdAppsByInstallationIdResumeErrors];
+
+export type PostBotsByBotIdAppsByInstallationIdResumeResponses = {
+    /**
+     * SSE stream of operation events
+     */
+    200: HandlersAppStreamEvent;
+};
+
+export type PostBotsByBotIdAppsByInstallationIdResumeResponse = PostBotsByBotIdAppsByInstallationIdResumeResponses[keyof PostBotsByBotIdAppsByInstallationIdResumeResponses];
 
 export type PostBotsByBotIdBackupExportData = {
     /**
@@ -5654,15 +6840,15 @@ export type PostBotsByBotIdBackupExportErrors = {
     /**
      * Bad Request
      */
-    400: HandlersErrorResponse;
+    400: ServerProblem;
     /**
      * Forbidden
      */
-    403: HandlersErrorResponse;
+    403: ServerProblem;
     /**
      * Internal Server Error
      */
-    500: HandlersErrorResponse;
+    500: ServerProblem;
 };
 
 export type PostBotsByBotIdBackupExportError = PostBotsByBotIdBackupExportErrors[keyof PostBotsByBotIdBackupExportErrors];
@@ -5690,11 +6876,11 @@ export type GetBotsByBotIdBackupSummaryErrors = {
     /**
      * Forbidden
      */
-    403: HandlersErrorResponse;
+    403: ServerProblem;
     /**
      * Internal Server Error
      */
-    500: HandlersErrorResponse;
+    500: ServerProblem;
 };
 
 export type GetBotsByBotIdBackupSummaryError = GetBotsByBotIdBackupSummaryErrors[keyof GetBotsByBotIdBackupSummaryErrors];
@@ -5724,15 +6910,15 @@ export type GetBotsByBotIdChannelManagersErrors = {
     /**
      * Bad Request
      */
-    400: HandlersErrorResponse;
+    400: ServerProblem;
     /**
      * Forbidden
      */
-    403: HandlersErrorResponse;
+    403: ServerProblem;
     /**
      * Internal Server Error
      */
-    500: HandlersErrorResponse;
+    500: ServerProblem;
 };
 
 export type GetBotsByBotIdChannelManagersError = GetBotsByBotIdChannelManagersErrors[keyof GetBotsByBotIdChannelManagersErrors];
@@ -5765,15 +6951,15 @@ export type PostBotsByBotIdChannelManagersErrors = {
     /**
      * Bad Request
      */
-    400: HandlersErrorResponse;
+    400: ServerProblem;
     /**
      * Forbidden
      */
-    403: HandlersErrorResponse;
+    403: ServerProblem;
     /**
      * Internal Server Error
      */
-    500: HandlersErrorResponse;
+    500: ServerProblem;
 };
 
 export type PostBotsByBotIdChannelManagersError = PostBotsByBotIdChannelManagersErrors[keyof PostBotsByBotIdChannelManagersErrors];
@@ -5805,15 +6991,15 @@ export type DeleteBotsByBotIdChannelManagersByChannelIdentityIdErrors = {
     /**
      * Bad Request
      */
-    400: HandlersErrorResponse;
+    400: ServerProblem;
     /**
      * Forbidden
      */
-    403: HandlersErrorResponse;
+    403: ServerProblem;
     /**
      * Internal Server Error
      */
-    500: HandlersErrorResponse;
+    500: ServerProblem;
 };
 
 export type DeleteBotsByBotIdChannelManagersByChannelIdentityIdError = DeleteBotsByBotIdChannelManagersByChannelIdentityIdErrors[keyof DeleteBotsByBotIdChannelManagersByChannelIdentityIdErrors];
@@ -5841,11 +7027,11 @@ export type DeleteBotsByBotIdCompactionLogsErrors = {
     /**
      * Bad Request
      */
-    400: HandlersErrorResponse;
+    400: ServerProblem;
     /**
      * Internal Server Error
      */
-    500: HandlersErrorResponse;
+    500: ServerProblem;
 };
 
 export type DeleteBotsByBotIdCompactionLogsError = DeleteBotsByBotIdCompactionLogsErrors[keyof DeleteBotsByBotIdCompactionLogsErrors];
@@ -5882,11 +7068,11 @@ export type GetBotsByBotIdCompactionLogsErrors = {
     /**
      * Bad Request
      */
-    400: HandlersErrorResponse;
+    400: ServerProblem;
     /**
      * Internal Server Error
      */
-    500: HandlersErrorResponse;
+    500: ServerProblem;
 };
 
 export type GetBotsByBotIdCompactionLogsError = GetBotsByBotIdCompactionLogsErrors[keyof GetBotsByBotIdCompactionLogsErrors];
@@ -5916,23 +7102,23 @@ export type GetBotsByBotIdConnectorsErrors = {
     /**
      * Forbidden
      */
-    403: HandlersErrorResponse;
+    403: ServerProblem;
     /**
      * Not Found
      */
-    404: ApperrorProblem;
+    404: ServerProblem;
     /**
      * Internal Server Error
      */
-    500: ApperrorProblem;
+    500: ServerProblem;
     /**
      * Bad Gateway
      */
-    502: ApperrorProblem;
+    502: ServerProblem;
     /**
      * Service Unavailable
      */
-    503: ApperrorProblem;
+    503: ServerProblem;
 };
 
 export type GetBotsByBotIdConnectorsError = GetBotsByBotIdConnectorsErrors[keyof GetBotsByBotIdConnectorsErrors];
@@ -5945,120 +7131,6 @@ export type GetBotsByBotIdConnectorsResponses = {
 };
 
 export type GetBotsByBotIdConnectorsResponse = GetBotsByBotIdConnectorsResponses[keyof GetBotsByBotIdConnectorsResponses];
-
-export type PostBotsByBotIdConnectorsApiKeyData = {
-    /**
-     * Credential request
-     */
-    body: HandlersConnectorCredentialRequest;
-    path: {
-        /**
-         * Bot ID
-         */
-        bot_id: string;
-    };
-    query?: never;
-    url: '/bots/{bot_id}/connectors/api-key';
-};
-
-export type PostBotsByBotIdConnectorsApiKeyErrors = {
-    /**
-     * Bad Request
-     */
-    400: ApperrorProblem;
-    /**
-     * Forbidden
-     */
-    403: HandlersErrorResponse;
-    /**
-     * Not Found
-     */
-    404: ApperrorProblem;
-    /**
-     * Conflict
-     */
-    409: ApperrorProblem;
-    /**
-     * Internal Server Error
-     */
-    500: ApperrorProblem;
-    /**
-     * Bad Gateway
-     */
-    502: ApperrorProblem;
-    /**
-     * Service Unavailable
-     */
-    503: ApperrorProblem;
-};
-
-export type PostBotsByBotIdConnectorsApiKeyError = PostBotsByBotIdConnectorsApiKeyErrors[keyof PostBotsByBotIdConnectorsApiKeyErrors];
-
-export type PostBotsByBotIdConnectorsApiKeyResponses = {
-    /**
-     * Created
-     */
-    201: ConnectorsConnector;
-};
-
-export type PostBotsByBotIdConnectorsApiKeyResponse = PostBotsByBotIdConnectorsApiKeyResponses[keyof PostBotsByBotIdConnectorsApiKeyResponses];
-
-export type PostBotsByBotIdConnectorsOauthData = {
-    /**
-     * OAuth request
-     */
-    body: HandlersConnectorOAuthRequest;
-    path: {
-        /**
-         * Bot ID
-         */
-        bot_id: string;
-    };
-    query?: never;
-    url: '/bots/{bot_id}/connectors/oauth';
-};
-
-export type PostBotsByBotIdConnectorsOauthErrors = {
-    /**
-     * Bad Request
-     */
-    400: ApperrorProblem;
-    /**
-     * Forbidden
-     */
-    403: HandlersErrorResponse;
-    /**
-     * Not Found
-     */
-    404: ApperrorProblem;
-    /**
-     * Conflict
-     */
-    409: ApperrorProblem;
-    /**
-     * Internal Server Error
-     */
-    500: ApperrorProblem;
-    /**
-     * Bad Gateway
-     */
-    502: ApperrorProblem;
-    /**
-     * Service Unavailable
-     */
-    503: ApperrorProblem;
-};
-
-export type PostBotsByBotIdConnectorsOauthError = PostBotsByBotIdConnectorsOauthErrors[keyof PostBotsByBotIdConnectorsOauthErrors];
-
-export type PostBotsByBotIdConnectorsOauthResponses = {
-    /**
-     * Created
-     */
-    201: ConnectitOAuthAuthorization;
-};
-
-export type PostBotsByBotIdConnectorsOauthResponse = PostBotsByBotIdConnectorsOauthResponses[keyof PostBotsByBotIdConnectorsOauthResponses];
 
 export type DeleteBotsByBotIdConnectorsByConnectionIdData = {
     body?: never;
@@ -6080,31 +7152,31 @@ export type DeleteBotsByBotIdConnectorsByConnectionIdErrors = {
     /**
      * Bad Request
      */
-    400: ApperrorProblem;
+    400: ServerProblem;
     /**
      * Forbidden
      */
-    403: HandlersErrorResponse;
+    403: ServerProblem;
     /**
      * Not Found
      */
-    404: ApperrorProblem;
+    404: ServerProblem;
     /**
      * Conflict
      */
-    409: ApperrorProblem;
+    409: ServerProblem;
     /**
      * Internal Server Error
      */
-    500: ApperrorProblem;
+    500: ServerProblem;
     /**
      * Bad Gateway
      */
-    502: ApperrorProblem;
+    502: ServerProblem;
     /**
      * Service Unavailable
      */
-    503: ApperrorProblem;
+    503: ServerProblem;
 };
 
 export type DeleteBotsByBotIdConnectorsByConnectionIdError = DeleteBotsByBotIdConnectorsByConnectionIdErrors[keyof DeleteBotsByBotIdConnectorsByConnectionIdErrors];
@@ -6136,27 +7208,27 @@ export type GetBotsByBotIdConnectorsByConnectionIdErrors = {
     /**
      * Bad Request
      */
-    400: ApperrorProblem;
+    400: ServerProblem;
     /**
      * Forbidden
      */
-    403: HandlersErrorResponse;
+    403: ServerProblem;
     /**
      * Not Found
      */
-    404: ApperrorProblem;
+    404: ServerProblem;
     /**
      * Internal Server Error
      */
-    500: ApperrorProblem;
+    500: ServerProblem;
     /**
      * Bad Gateway
      */
-    502: ApperrorProblem;
+    502: ServerProblem;
     /**
      * Service Unavailable
      */
-    503: ApperrorProblem;
+    503: ServerProblem;
 };
 
 export type GetBotsByBotIdConnectorsByConnectionIdError = GetBotsByBotIdConnectorsByConnectionIdErrors[keyof GetBotsByBotIdConnectorsByConnectionIdErrors];
@@ -6193,27 +7265,27 @@ export type PatchBotsByBotIdConnectorsByConnectionIdErrors = {
     /**
      * Bad Request
      */
-    400: ApperrorProblem;
+    400: ServerProblem;
     /**
      * Forbidden
      */
-    403: HandlersErrorResponse;
+    403: ServerProblem;
     /**
      * Not Found
      */
-    404: ApperrorProblem;
+    404: ServerProblem;
     /**
      * Internal Server Error
      */
-    500: ApperrorProblem;
+    500: ServerProblem;
     /**
      * Bad Gateway
      */
-    502: ApperrorProblem;
+    502: ServerProblem;
     /**
      * Service Unavailable
      */
-    503: ApperrorProblem;
+    503: ServerProblem;
 };
 
 export type PatchBotsByBotIdConnectorsByConnectionIdError = PatchBotsByBotIdConnectorsByConnectionIdErrors[keyof PatchBotsByBotIdConnectorsByConnectionIdErrors];
@@ -6245,31 +7317,31 @@ export type PostBotsByBotIdConnectorsByConnectionIdReauthErrors = {
     /**
      * Bad Request
      */
-    400: ApperrorProblem;
+    400: ServerProblem;
     /**
      * Forbidden
      */
-    403: HandlersErrorResponse;
+    403: ServerProblem;
     /**
      * Not Found
      */
-    404: ApperrorProblem;
+    404: ServerProblem;
     /**
      * Conflict
      */
-    409: ApperrorProblem;
+    409: ServerProblem;
     /**
      * Internal Server Error
      */
-    500: ApperrorProblem;
+    500: ServerProblem;
     /**
      * Bad Gateway
      */
-    502: ApperrorProblem;
+    502: ServerProblem;
     /**
      * Service Unavailable
      */
-    503: ApperrorProblem;
+    503: ServerProblem;
 };
 
 export type PostBotsByBotIdConnectorsByConnectionIdReauthError = PostBotsByBotIdConnectorsByConnectionIdReauthErrors[keyof PostBotsByBotIdConnectorsByConnectionIdReauthErrors];
@@ -6304,20 +7376,20 @@ export type DeleteBotsByBotIdContainerErrors = {
     /**
      * Not Found
      */
-    404: HandlersErrorResponse;
+    404: ServerProblem;
     /**
      * Internal Server Error
      */
-    500: HandlersErrorResponse;
+    500: ServerProblem;
 };
 
 export type DeleteBotsByBotIdContainerError = DeleteBotsByBotIdContainerErrors[keyof DeleteBotsByBotIdContainerErrors];
 
 export type DeleteBotsByBotIdContainerResponses = {
     /**
-     * No Content
+     * Accepted
      */
-    204: unknown;
+    202: unknown;
 };
 
 export type GetBotsByBotIdContainerData = {
@@ -6336,11 +7408,11 @@ export type GetBotsByBotIdContainerErrors = {
     /**
      * Not Found
      */
-    404: HandlersErrorResponse;
+    404: ServerProblem;
     /**
      * Internal Server Error
      */
-    500: HandlersErrorResponse;
+    500: ServerProblem;
 };
 
 export type GetBotsByBotIdContainerError = GetBotsByBotIdContainerErrors[keyof GetBotsByBotIdContainerErrors];
@@ -6373,11 +7445,11 @@ export type PostBotsByBotIdContainerErrors = {
     /**
      * Bad Request
      */
-    400: HandlersErrorResponse;
+    400: ServerProblem;
     /**
      * Internal Server Error
      */
-    500: HandlersErrorResponse;
+    500: ServerProblem;
 };
 
 export type PostBotsByBotIdContainerError = PostBotsByBotIdContainerErrors[keyof PostBotsByBotIdContainerErrors];
@@ -6410,19 +7482,19 @@ export type PostBotsByBotIdContainerBrowserSessionsErrors = {
     /**
      * Bad Request
      */
-    400: HandlersErrorResponse;
+    400: ServerProblem;
     /**
      * Unauthorized
      */
-    401: HandlersErrorResponse;
+    401: ServerProblem;
     /**
      * Forbidden
      */
-    403: HandlersErrorResponse;
+    403: ServerProblem;
     /**
      * Internal Server Error
      */
-    500: HandlersErrorResponse;
+    500: ServerProblem;
 };
 
 export type PostBotsByBotIdContainerBrowserSessionsError = PostBotsByBotIdContainerBrowserSessionsErrors[keyof PostBotsByBotIdContainerBrowserSessionsErrors];
@@ -6456,11 +7528,11 @@ export type DeleteBotsByBotIdContainerBrowserSessionsBySessionIdErrors = {
     /**
      * Unauthorized
      */
-    401: HandlersErrorResponse;
+    401: ServerProblem;
     /**
      * Forbidden
      */
-    403: HandlersErrorResponse;
+    403: ServerProblem;
 };
 
 export type DeleteBotsByBotIdContainerBrowserSessionsBySessionIdError = DeleteBotsByBotIdContainerBrowserSessionsBySessionIdErrors[keyof DeleteBotsByBotIdContainerBrowserSessionsBySessionIdErrors];
@@ -6492,15 +7564,15 @@ export type PostBotsByBotIdContainerBrowserSessionsBySessionIdKeepaliveErrors = 
     /**
      * Unauthorized
      */
-    401: HandlersErrorResponse;
+    401: ServerProblem;
     /**
      * Forbidden
      */
-    403: HandlersErrorResponse;
+    403: ServerProblem;
     /**
      * Not Found
      */
-    404: HandlersErrorResponse;
+    404: ServerProblem;
 };
 
 export type PostBotsByBotIdContainerBrowserSessionsBySessionIdKeepaliveError = PostBotsByBotIdContainerBrowserSessionsBySessionIdKeepaliveErrors[keyof PostBotsByBotIdContainerBrowserSessionsBySessionIdKeepaliveErrors];
@@ -6530,11 +7602,11 @@ export type PostBotsByBotIdContainerDataRestoreErrors = {
     /**
      * Not Found
      */
-    404: HandlersErrorResponse;
+    404: ServerProblem;
     /**
      * Internal Server Error
      */
-    500: HandlersErrorResponse;
+    500: ServerProblem;
 };
 
 export type PostBotsByBotIdContainerDataRestoreError = PostBotsByBotIdContainerDataRestoreErrors[keyof PostBotsByBotIdContainerDataRestoreErrors];
@@ -6566,7 +7638,7 @@ export type GetBotsByBotIdContainerDisplayErrors = {
     /**
      * Not Found
      */
-    404: HandlersErrorResponse;
+    404: ServerProblem;
 };
 
 export type GetBotsByBotIdContainerDisplayError = GetBotsByBotIdContainerDisplayErrors[keyof GetBotsByBotIdContainerDisplayErrors];
@@ -6596,7 +7668,7 @@ export type PostBotsByBotIdContainerDisplayPrepareErrors = {
     /**
      * Not Found
      */
-    404: HandlersErrorResponse;
+    404: ServerProblem;
 };
 
 export type PostBotsByBotIdContainerDisplayPrepareError = PostBotsByBotIdContainerDisplayPrepareErrors[keyof PostBotsByBotIdContainerDisplayPrepareErrors];
@@ -6626,7 +7698,7 @@ export type GetBotsByBotIdContainerDisplaySessionsErrors = {
     /**
      * Not Found
      */
-    404: HandlersErrorResponse;
+    404: ServerProblem;
 };
 
 export type GetBotsByBotIdContainerDisplaySessionsError = GetBotsByBotIdContainerDisplaySessionsErrors[keyof GetBotsByBotIdContainerDisplaySessionsErrors];
@@ -6660,7 +7732,7 @@ export type DeleteBotsByBotIdContainerDisplaySessionsBySessionIdErrors = {
     /**
      * Not Found
      */
-    404: HandlersErrorResponse;
+    404: ServerProblem;
 };
 
 export type DeleteBotsByBotIdContainerDisplaySessionsBySessionIdError = DeleteBotsByBotIdContainerDisplaySessionsBySessionIdErrors[keyof DeleteBotsByBotIdContainerDisplaySessionsBySessionIdErrors];
@@ -6691,11 +7763,11 @@ export type PostBotsByBotIdContainerDisplayWebrtcOfferErrors = {
     /**
      * Bad Request
      */
-    400: HandlersErrorResponse;
+    400: ServerProblem;
     /**
      * Service Unavailable
      */
-    503: HandlersErrorResponse;
+    503: ServerProblem;
 };
 
 export type PostBotsByBotIdContainerDisplayWebrtcOfferError = PostBotsByBotIdContainerDisplayWebrtcOfferErrors[keyof PostBotsByBotIdContainerDisplayWebrtcOfferErrors];
@@ -6730,23 +7802,23 @@ export type GetBotsByBotIdContainerFsErrors = {
     /**
      * Bad Request
      */
-    400: HandlersErrorResponse;
+    400: ServerProblem;
     /**
      * Forbidden
      */
-    403: HandlersErrorResponse;
+    403: ServerProblem;
     /**
      * Not Found
      */
-    404: HandlersErrorResponse;
+    404: ServerProblem;
     /**
      * Internal Server Error
      */
-    500: HandlersErrorResponse;
+    500: ServerProblem;
     /**
      * Service Unavailable
      */
-    503: ApperrorProblem;
+    503: ServerProblem;
 };
 
 export type GetBotsByBotIdContainerFsError = GetBotsByBotIdContainerFsErrors[keyof GetBotsByBotIdContainerFsErrors];
@@ -6779,23 +7851,23 @@ export type PostBotsByBotIdContainerFsArchiveErrors = {
     /**
      * Bad Request
      */
-    400: HandlersErrorResponse;
+    400: ServerProblem;
     /**
      * Forbidden
      */
-    403: HandlersErrorResponse;
+    403: ServerProblem;
     /**
      * Not Found
      */
-    404: HandlersErrorResponse;
+    404: ServerProblem;
     /**
      * Internal Server Error
      */
-    500: HandlersErrorResponse;
+    500: ServerProblem;
     /**
      * Service Unavailable
      */
-    503: ApperrorProblem;
+    503: ServerProblem;
 };
 
 export type PostBotsByBotIdContainerFsArchiveError = PostBotsByBotIdContainerFsArchiveErrors[keyof PostBotsByBotIdContainerFsArchiveErrors];
@@ -6826,23 +7898,23 @@ export type PostBotsByBotIdContainerFsDeleteErrors = {
     /**
      * Bad Request
      */
-    400: HandlersErrorResponse;
+    400: ServerProblem;
     /**
      * Forbidden
      */
-    403: HandlersErrorResponse;
+    403: ServerProblem;
     /**
      * Not Found
      */
-    404: HandlersErrorResponse;
+    404: ServerProblem;
     /**
      * Internal Server Error
      */
-    500: HandlersErrorResponse;
+    500: ServerProblem;
     /**
      * Service Unavailable
      */
-    503: ApperrorProblem;
+    503: ServerProblem;
 };
 
 export type PostBotsByBotIdContainerFsDeleteError = PostBotsByBotIdContainerFsDeleteErrors[keyof PostBotsByBotIdContainerFsDeleteErrors];
@@ -6877,19 +7949,19 @@ export type GetBotsByBotIdContainerFsDownloadErrors = {
     /**
      * Bad Request
      */
-    400: HandlersErrorResponse;
+    400: ServerProblem;
     /**
      * Not Found
      */
-    404: HandlersErrorResponse;
+    404: ServerProblem;
     /**
      * Internal Server Error
      */
-    500: HandlersErrorResponse;
+    500: ServerProblem;
     /**
      * Service Unavailable
      */
-    503: ApperrorProblem;
+    503: ServerProblem;
 };
 
 export type GetBotsByBotIdContainerFsDownloadError = GetBotsByBotIdContainerFsDownloadErrors[keyof GetBotsByBotIdContainerFsDownloadErrors];
@@ -6920,27 +7992,27 @@ export type PostBotsByBotIdContainerFsExtractErrors = {
     /**
      * Bad Request
      */
-    400: HandlersErrorResponse;
+    400: ServerProblem;
     /**
      * Forbidden
      */
-    403: HandlersErrorResponse;
+    403: ServerProblem;
     /**
      * Not Found
      */
-    404: HandlersErrorResponse;
+    404: ServerProblem;
     /**
      * Conflict
      */
-    409: HandlersErrorResponse;
+    409: ServerProblem;
     /**
      * Internal Server Error
      */
-    500: HandlersErrorResponse;
+    500: ServerProblem;
     /**
      * Service Unavailable
      */
-    503: ApperrorProblem;
+    503: ServerProblem;
 };
 
 export type PostBotsByBotIdContainerFsExtractError = PostBotsByBotIdContainerFsExtractErrors[keyof PostBotsByBotIdContainerFsExtractErrors];
@@ -6975,19 +8047,19 @@ export type GetBotsByBotIdContainerFsListErrors = {
     /**
      * Bad Request
      */
-    400: HandlersErrorResponse;
+    400: ServerProblem;
     /**
      * Not Found
      */
-    404: HandlersErrorResponse;
+    404: ServerProblem;
     /**
      * Internal Server Error
      */
-    500: HandlersErrorResponse;
+    500: ServerProblem;
     /**
      * Service Unavailable
      */
-    503: ApperrorProblem;
+    503: ServerProblem;
 };
 
 export type GetBotsByBotIdContainerFsListError = GetBotsByBotIdContainerFsListErrors[keyof GetBotsByBotIdContainerFsListErrors];
@@ -7020,19 +8092,23 @@ export type PostBotsByBotIdContainerFsMkdirErrors = {
     /**
      * Bad Request
      */
-    400: HandlersErrorResponse;
+    400: ServerProblem;
     /**
      * Forbidden
      */
-    403: HandlersErrorResponse;
+    403: ServerProblem;
+    /**
+     * Not Found
+     */
+    404: ServerProblem;
     /**
      * Internal Server Error
      */
-    500: HandlersErrorResponse;
+    500: ServerProblem;
     /**
      * Service Unavailable
      */
-    503: ApperrorProblem;
+    503: ServerProblem;
 };
 
 export type PostBotsByBotIdContainerFsMkdirError = PostBotsByBotIdContainerFsMkdirErrors[keyof PostBotsByBotIdContainerFsMkdirErrors];
@@ -7067,19 +8143,19 @@ export type GetBotsByBotIdContainerFsReadErrors = {
     /**
      * Bad Request
      */
-    400: HandlersErrorResponse;
+    400: ServerProblem;
     /**
      * Not Found
      */
-    404: HandlersErrorResponse;
+    404: ServerProblem;
     /**
      * Internal Server Error
      */
-    500: HandlersErrorResponse;
+    500: ServerProblem;
     /**
      * Service Unavailable
      */
-    503: ApperrorProblem;
+    503: ServerProblem;
 };
 
 export type GetBotsByBotIdContainerFsReadError = GetBotsByBotIdContainerFsReadErrors[keyof GetBotsByBotIdContainerFsReadErrors];
@@ -7112,23 +8188,23 @@ export type PostBotsByBotIdContainerFsRenameErrors = {
     /**
      * Bad Request
      */
-    400: HandlersErrorResponse;
+    400: ServerProblem;
     /**
      * Forbidden
      */
-    403: HandlersErrorResponse;
+    403: ServerProblem;
     /**
      * Not Found
      */
-    404: HandlersErrorResponse;
+    404: ServerProblem;
     /**
      * Internal Server Error
      */
-    500: HandlersErrorResponse;
+    500: ServerProblem;
     /**
      * Service Unavailable
      */
-    503: ApperrorProblem;
+    503: ServerProblem;
 };
 
 export type PostBotsByBotIdContainerFsRenameError = PostBotsByBotIdContainerFsRenameErrors[keyof PostBotsByBotIdContainerFsRenameErrors];
@@ -7167,19 +8243,19 @@ export type PostBotsByBotIdContainerFsUploadErrors = {
     /**
      * Bad Request
      */
-    400: HandlersErrorResponse;
+    400: ServerProblem;
     /**
      * Forbidden
      */
-    403: HandlersErrorResponse;
+    403: ServerProblem;
     /**
      * Internal Server Error
      */
-    500: HandlersErrorResponse;
+    500: ServerProblem;
     /**
      * Service Unavailable
      */
-    503: ApperrorProblem;
+    503: ServerProblem;
 };
 
 export type PostBotsByBotIdContainerFsUploadError = PostBotsByBotIdContainerFsUploadErrors[keyof PostBotsByBotIdContainerFsUploadErrors];
@@ -7212,19 +8288,19 @@ export type PostBotsByBotIdContainerFsWriteErrors = {
     /**
      * Bad Request
      */
-    400: HandlersErrorResponse;
+    400: ServerProblem;
     /**
      * Forbidden
      */
-    403: HandlersErrorResponse;
+    403: ServerProblem;
     /**
      * Internal Server Error
      */
-    500: HandlersErrorResponse;
+    500: ServerProblem;
     /**
      * Service Unavailable
      */
-    503: ApperrorProblem;
+    503: ServerProblem;
 };
 
 export type PostBotsByBotIdContainerFsWriteError = PostBotsByBotIdContainerFsWriteErrors[keyof PostBotsByBotIdContainerFsWriteErrors];
@@ -7254,7 +8330,7 @@ export type GetBotsByBotIdContainerMetricsErrors = {
     /**
      * Internal Server Error
      */
-    500: HandlersErrorResponse;
+    500: ServerProblem;
 };
 
 export type GetBotsByBotIdContainerMetricsError = GetBotsByBotIdContainerMetricsErrors[keyof GetBotsByBotIdContainerMetricsErrors];
@@ -7287,11 +8363,11 @@ export type PutBotsByBotIdContainerMetricsErrors = {
     /**
      * Bad Request
      */
-    400: HandlersErrorResponse;
+    400: ServerProblem;
     /**
      * Internal Server Error
      */
-    500: HandlersErrorResponse;
+    500: ServerProblem;
 };
 
 export type PutBotsByBotIdContainerMetricsError = PutBotsByBotIdContainerMetricsErrors[keyof PutBotsByBotIdContainerMetricsErrors];
@@ -7304,6 +8380,34 @@ export type PutBotsByBotIdContainerMetricsResponses = {
 };
 
 export type PutBotsByBotIdContainerMetricsResponse = PutBotsByBotIdContainerMetricsResponses[keyof PutBotsByBotIdContainerMetricsResponses];
+
+export type PostBotsByBotIdContainerRemovalCancelData = {
+    body?: never;
+    path: {
+        /**
+         * Bot ID
+         */
+        bot_id: string;
+    };
+    query?: never;
+    url: '/bots/{bot_id}/container/removal/cancel';
+};
+
+export type PostBotsByBotIdContainerRemovalCancelErrors = {
+    /**
+     * Internal Server Error
+     */
+    500: ServerProblem;
+};
+
+export type PostBotsByBotIdContainerRemovalCancelError = PostBotsByBotIdContainerRemovalCancelErrors[keyof PostBotsByBotIdContainerRemovalCancelErrors];
+
+export type PostBotsByBotIdContainerRemovalCancelResponses = {
+    /**
+     * No Content
+     */
+    204: unknown;
+};
 
 export type DeleteBotsByBotIdContainerSkillsData = {
     /**
@@ -7324,23 +8428,23 @@ export type DeleteBotsByBotIdContainerSkillsErrors = {
     /**
      * Bad Request
      */
-    400: HandlersErrorResponse;
+    400: ServerProblem;
     /**
      * Not Found
      */
-    404: HandlersErrorResponse;
+    404: ServerProblem;
     /**
      * Conflict
      */
-    409: ApperrorProblem;
+    409: ServerProblem;
     /**
      * Internal Server Error
      */
-    500: HandlersErrorResponse;
+    500: ServerProblem;
     /**
      * Service Unavailable
      */
-    503: ApperrorProblem;
+    503: ServerProblem;
 };
 
 export type DeleteBotsByBotIdContainerSkillsError = DeleteBotsByBotIdContainerSkillsErrors[keyof DeleteBotsByBotIdContainerSkillsErrors];
@@ -7375,19 +8479,19 @@ export type GetBotsByBotIdContainerSkillsErrors = {
     /**
      * Bad Request
      */
-    400: HandlersErrorResponse;
+    400: ServerProblem;
     /**
      * Forbidden
      */
-    403: HandlersErrorResponse;
+    403: ServerProblem;
     /**
      * Not Found
      */
-    404: HandlersErrorResponse;
+    404: ServerProblem;
     /**
      * Internal Server Error
      */
-    500: HandlersErrorResponse;
+    500: ServerProblem;
 };
 
 export type GetBotsByBotIdContainerSkillsError = GetBotsByBotIdContainerSkillsErrors[keyof GetBotsByBotIdContainerSkillsErrors];
@@ -7420,23 +8524,23 @@ export type PostBotsByBotIdContainerSkillsErrors = {
     /**
      * Bad Request
      */
-    400: HandlersErrorResponse;
+    400: ServerProblem;
     /**
      * Not Found
      */
-    404: HandlersErrorResponse;
+    404: ServerProblem;
     /**
      * Conflict
      */
-    409: ApperrorProblem;
+    409: ServerProblem;
     /**
      * Internal Server Error
      */
-    500: ApperrorProblem;
+    500: ServerProblem;
     /**
      * Service Unavailable
      */
-    503: ApperrorProblem;
+    503: ServerProblem;
 };
 
 export type PostBotsByBotIdContainerSkillsError = PostBotsByBotIdContainerSkillsErrors[keyof PostBotsByBotIdContainerSkillsErrors];
@@ -7469,23 +8573,23 @@ export type PostBotsByBotIdContainerSkillsActionsErrors = {
     /**
      * Bad Request
      */
-    400: HandlersErrorResponse;
+    400: ServerProblem;
     /**
      * Not Found
      */
-    404: HandlersErrorResponse;
+    404: ServerProblem;
     /**
      * Conflict
      */
-    409: ApperrorProblem;
+    409: ServerProblem;
     /**
      * Internal Server Error
      */
-    500: HandlersErrorResponse;
+    500: ServerProblem;
     /**
      * Service Unavailable
      */
-    503: ApperrorProblem;
+    503: ServerProblem;
 };
 
 export type PostBotsByBotIdContainerSkillsActionsError = PostBotsByBotIdContainerSkillsActionsErrors[keyof PostBotsByBotIdContainerSkillsActionsErrors];
@@ -7520,7 +8624,7 @@ export type GetBotsByBotIdContainerSnapshotsErrors = {
     /**
      * Snapshots currently not supported on this backend
      */
-    501: HandlersErrorResponse;
+    501: ServerProblem;
 };
 
 export type GetBotsByBotIdContainerSnapshotsError = GetBotsByBotIdContainerSnapshotsErrors[keyof GetBotsByBotIdContainerSnapshotsErrors];
@@ -7553,15 +8657,15 @@ export type PostBotsByBotIdContainerSnapshotsErrors = {
     /**
      * Not Found
      */
-    404: HandlersErrorResponse;
+    404: ServerProblem;
     /**
      * Internal Server Error
      */
-    500: HandlersErrorResponse;
+    500: ServerProblem;
     /**
      * Snapshots currently not supported on this backend
      */
-    501: HandlersErrorResponse;
+    501: ServerProblem;
 };
 
 export type PostBotsByBotIdContainerSnapshotsError = PostBotsByBotIdContainerSnapshotsErrors[keyof PostBotsByBotIdContainerSnapshotsErrors];
@@ -7594,11 +8698,11 @@ export type PostBotsByBotIdContainerSnapshotsRollbackErrors = {
     /**
      * Bad Request
      */
-    400: HandlersErrorResponse;
+    400: ServerProblem;
     /**
      * Internal Server Error
      */
-    500: HandlersErrorResponse;
+    500: ServerProblem;
 };
 
 export type PostBotsByBotIdContainerSnapshotsRollbackError = PostBotsByBotIdContainerSnapshotsRollbackErrors[keyof PostBotsByBotIdContainerSnapshotsRollbackErrors];
@@ -7630,11 +8734,11 @@ export type PostBotsByBotIdContainerStartErrors = {
     /**
      * Not Found
      */
-    404: HandlersErrorResponse;
+    404: ServerProblem;
     /**
      * Internal Server Error
      */
-    500: HandlersErrorResponse;
+    500: ServerProblem;
 };
 
 export type PostBotsByBotIdContainerStartError = PostBotsByBotIdContainerStartErrors[keyof PostBotsByBotIdContainerStartErrors];
@@ -7666,11 +8770,11 @@ export type PostBotsByBotIdContainerStopErrors = {
     /**
      * Not Found
      */
-    404: HandlersErrorResponse;
+    404: ServerProblem;
     /**
      * Internal Server Error
      */
-    500: HandlersErrorResponse;
+    500: ServerProblem;
 };
 
 export type PostBotsByBotIdContainerStopError = PostBotsByBotIdContainerStopErrors[keyof PostBotsByBotIdContainerStopErrors];
@@ -7702,7 +8806,7 @@ export type GetBotsByBotIdContainerTerminalErrors = {
     /**
      * Not Found
      */
-    404: HandlersErrorResponse;
+    404: ServerProblem;
 };
 
 export type GetBotsByBotIdContainerTerminalError = GetBotsByBotIdContainerTerminalErrors[keyof GetBotsByBotIdContainerTerminalErrors];
@@ -7745,11 +8849,11 @@ export type GetBotsByBotIdContainerTerminalWsErrors = {
     /**
      * Bad Request
      */
-    400: HandlersErrorResponse;
+    400: ServerProblem;
     /**
      * Internal Server Error
      */
-    500: HandlersErrorResponse;
+    500: ServerProblem;
 };
 
 export type GetBotsByBotIdContainerTerminalWsError = GetBotsByBotIdContainerTerminalWsErrors[keyof GetBotsByBotIdContainerTerminalWsErrors];
@@ -7764,10 +8868,6 @@ export type GetBotsByBotIdDependenciesData = {
     };
     query?: {
         /**
-         * Workspace target ID (defaults to the bot's current target)
-         */
-        workspace_target_id?: string;
-        /**
          * Refresh definitions and workspace discovery
          */
         refresh?: boolean;
@@ -7779,23 +8879,23 @@ export type GetBotsByBotIdDependenciesErrors = {
     /**
      * Bad Request
      */
-    400: HandlersErrorResponse;
+    400: ServerProblem;
     /**
      * Forbidden
      */
-    403: HandlersErrorResponse;
+    403: ServerProblem;
     /**
      * Not Found
      */
-    404: HandlersErrorResponse;
+    404: ServerProblem;
     /**
      * Internal Server Error
      */
-    500: ApperrorProblem;
+    500: ServerProblem;
     /**
      * Service Unavailable
      */
-    503: ApperrorProblem;
+    503: ServerProblem;
 };
 
 export type GetBotsByBotIdDependenciesError = GetBotsByBotIdDependenciesErrors[keyof GetBotsByBotIdDependenciesErrors];
@@ -7817,12 +8917,7 @@ export type PostBotsByBotIdDependenciesCheckUpdatesData = {
          */
         bot_id: string;
     };
-    query?: {
-        /**
-         * Workspace target ID (defaults to the bot's current target)
-         */
-        workspace_target_id?: string;
-    };
+    query?: never;
     url: '/bots/{bot_id}/dependencies/check-updates';
 };
 
@@ -7830,23 +8925,23 @@ export type PostBotsByBotIdDependenciesCheckUpdatesErrors = {
     /**
      * Bad Request
      */
-    400: HandlersErrorResponse;
+    400: ServerProblem;
     /**
      * Forbidden
      */
-    403: HandlersErrorResponse;
+    403: ServerProblem;
     /**
      * Not Found
      */
-    404: HandlersErrorResponse;
+    404: ServerProblem;
     /**
      * Internal Server Error
      */
-    500: ApperrorProblem;
+    500: ServerProblem;
     /**
      * Service Unavailable
      */
-    503: ApperrorProblem;
+    503: ServerProblem;
 };
 
 export type PostBotsByBotIdDependenciesCheckUpdatesError = PostBotsByBotIdDependenciesCheckUpdatesErrors[keyof PostBotsByBotIdDependenciesCheckUpdatesErrors];
@@ -7871,12 +8966,7 @@ export type PostBotsByBotIdDependenciesPreflightData = {
          */
         bot_id: string;
     };
-    query?: {
-        /**
-         * Workspace target ID (defaults to the bot's current target)
-         */
-        workspace_target_id?: string;
-    };
+    query?: never;
     url: '/bots/{bot_id}/dependencies/preflight';
 };
 
@@ -7884,23 +8974,23 @@ export type PostBotsByBotIdDependenciesPreflightErrors = {
     /**
      * Bad Request
      */
-    400: ApperrorProblem;
+    400: ServerProblem;
     /**
      * Forbidden
      */
-    403: HandlersErrorResponse;
+    403: ServerProblem;
     /**
      * Not Found
      */
-    404: HandlersErrorResponse;
+    404: ServerProblem;
     /**
      * Internal Server Error
      */
-    500: ApperrorProblem;
+    500: ServerProblem;
     /**
      * Service Unavailable
      */
-    503: ApperrorProblem;
+    503: ServerProblem;
 };
 
 export type PostBotsByBotIdDependenciesPreflightError = PostBotsByBotIdDependenciesPreflightErrors[keyof PostBotsByBotIdDependenciesPreflightErrors];
@@ -7913,64 +9003,6 @@ export type PostBotsByBotIdDependenciesPreflightResponses = {
 };
 
 export type PostBotsByBotIdDependenciesPreflightResponse = PostBotsByBotIdDependenciesPreflightResponses[keyof PostBotsByBotIdDependenciesPreflightResponses];
-
-export type DeleteBotsByBotIdDependenciesByDepIdData = {
-    /**
-     * Prepared definition revision (optional)
-     */
-    body?: HandlersWorkspaceDependencyInstallRequest;
-    path: {
-        /**
-         * Bot ID
-         */
-        bot_id: string;
-        /**
-         * Dependency ID
-         */
-        dep_id: string;
-    };
-    query?: {
-        /**
-         * Workspace target ID (defaults to the bot's current target)
-         */
-        workspace_target_id?: string;
-    };
-    url: '/bots/{bot_id}/dependencies/{dep_id}';
-};
-
-export type DeleteBotsByBotIdDependenciesByDepIdErrors = {
-    /**
-     * Bad Request
-     */
-    400: ApperrorProblem;
-    /**
-     * Forbidden
-     */
-    403: HandlersErrorResponse;
-    /**
-     * Not Found
-     */
-    404: ApperrorProblem;
-    /**
-     * Unprocessable Entity
-     */
-    422: ApperrorProblem;
-    /**
-     * Service Unavailable
-     */
-    503: ApperrorProblem;
-};
-
-export type DeleteBotsByBotIdDependenciesByDepIdError = DeleteBotsByBotIdDependenciesByDepIdErrors[keyof DeleteBotsByBotIdDependenciesByDepIdErrors];
-
-export type DeleteBotsByBotIdDependenciesByDepIdResponses = {
-    /**
-     * SSE stream of operation events
-     */
-    200: HandlersWorkspaceDependencyStreamEvent;
-};
-
-export type DeleteBotsByBotIdDependenciesByDepIdResponse = DeleteBotsByBotIdDependenciesByDepIdResponses[keyof DeleteBotsByBotIdDependenciesByDepIdResponses];
 
 export type PostBotsByBotIdDependenciesByDepIdInstallData = {
     /**
@@ -7987,12 +9019,7 @@ export type PostBotsByBotIdDependenciesByDepIdInstallData = {
          */
         dep_id: string;
     };
-    query?: {
-        /**
-         * Workspace target ID (defaults to the bot's current target)
-         */
-        workspace_target_id?: string;
-    };
+    query?: never;
     url: '/bots/{bot_id}/dependencies/{dep_id}/install';
 };
 
@@ -8000,23 +9027,23 @@ export type PostBotsByBotIdDependenciesByDepIdInstallErrors = {
     /**
      * Bad Request
      */
-    400: ApperrorProblem;
+    400: ServerProblem;
     /**
      * Forbidden
      */
-    403: HandlersErrorResponse;
+    403: ServerProblem;
     /**
      * Not Found
      */
-    404: ApperrorProblem;
+    404: ServerProblem;
     /**
      * Unprocessable Entity
      */
-    422: ApperrorProblem;
+    422: ServerProblem;
     /**
      * Service Unavailable
      */
-    503: ApperrorProblem;
+    503: ServerProblem;
 };
 
 export type PostBotsByBotIdDependenciesByDepIdInstallError = PostBotsByBotIdDependenciesByDepIdInstallErrors[keyof PostBotsByBotIdDependenciesByDepIdInstallErrors];
@@ -8045,12 +9072,7 @@ export type PostBotsByBotIdDependenciesByDepIdReinstallData = {
          */
         dep_id: string;
     };
-    query?: {
-        /**
-         * Workspace target ID (defaults to the bot's current target)
-         */
-        workspace_target_id?: string;
-    };
+    query?: never;
     url: '/bots/{bot_id}/dependencies/{dep_id}/reinstall';
 };
 
@@ -8058,23 +9080,23 @@ export type PostBotsByBotIdDependenciesByDepIdReinstallErrors = {
     /**
      * Bad Request
      */
-    400: ApperrorProblem;
+    400: ServerProblem;
     /**
      * Forbidden
      */
-    403: HandlersErrorResponse;
+    403: ServerProblem;
     /**
      * Not Found
      */
-    404: ApperrorProblem;
+    404: ServerProblem;
     /**
      * Unprocessable Entity
      */
-    422: ApperrorProblem;
+    422: ServerProblem;
     /**
      * Service Unavailable
      */
-    503: ApperrorProblem;
+    503: ServerProblem;
 };
 
 export type PostBotsByBotIdDependenciesByDepIdReinstallError = PostBotsByBotIdDependenciesByDepIdReinstallErrors[keyof PostBotsByBotIdDependenciesByDepIdReinstallErrors];
@@ -8100,12 +9122,7 @@ export type PostBotsByBotIdDependenciesByDepIdRollbackData = {
          */
         dep_id: string;
     };
-    query?: {
-        /**
-         * Workspace target ID (defaults to the bot's current target)
-         */
-        workspace_target_id?: string;
-    };
+    query?: never;
     url: '/bots/{bot_id}/dependencies/{dep_id}/rollback';
 };
 
@@ -8113,31 +9130,31 @@ export type PostBotsByBotIdDependenciesByDepIdRollbackErrors = {
     /**
      * Bad Request
      */
-    400: ApperrorProblem;
+    400: ServerProblem;
     /**
      * Forbidden
      */
-    403: HandlersErrorResponse;
+    403: ServerProblem;
     /**
      * Not Found
      */
-    404: ApperrorProblem;
+    404: ServerProblem;
     /**
      * Conflict
      */
-    409: ApperrorProblem;
+    409: ServerProblem;
     /**
      * Unprocessable Entity
      */
-    422: ApperrorProblem;
+    422: ServerProblem;
     /**
      * Internal Server Error
      */
-    500: ApperrorProblem;
+    500: ServerProblem;
     /**
      * Service Unavailable
      */
-    503: ApperrorProblem;
+    503: ServerProblem;
 };
 
 export type PostBotsByBotIdDependenciesByDepIdRollbackError = PostBotsByBotIdDependenciesByDepIdRollbackErrors[keyof PostBotsByBotIdDependenciesByDepIdRollbackErrors];
@@ -8169,10 +9186,6 @@ export type GetBotsByBotIdDependenciesByDepIdScriptData = {
          */
         action?: 'install' | 'update' | 'remove' | 'reinstall' | 'rollback';
         /**
-         * Workspace target ID (defaults to the bot's current target)
-         */
-        workspace_target_id?: string;
-        /**
          * Keep a previously prepared definition revision
          */
         definition_revision?: string;
@@ -8184,23 +9197,23 @@ export type GetBotsByBotIdDependenciesByDepIdScriptErrors = {
     /**
      * Bad Request
      */
-    400: ApperrorProblem;
+    400: ServerProblem;
     /**
      * Forbidden
      */
-    403: HandlersErrorResponse;
+    403: ServerProblem;
     /**
      * Not Found
      */
-    404: ApperrorProblem;
+    404: ServerProblem;
     /**
      * Unprocessable Entity
      */
-    422: ApperrorProblem;
+    422: ServerProblem;
     /**
      * Service Unavailable
      */
-    503: ApperrorProblem;
+    503: ServerProblem;
 };
 
 export type GetBotsByBotIdDependenciesByDepIdScriptError = GetBotsByBotIdDependenciesByDepIdScriptErrors[keyof GetBotsByBotIdDependenciesByDepIdScriptErrors];
@@ -8229,12 +9242,7 @@ export type PostBotsByBotIdDependenciesByDepIdUpdateData = {
          */
         dep_id: string;
     };
-    query?: {
-        /**
-         * Workspace target ID (defaults to the bot's current target)
-         */
-        workspace_target_id?: string;
-    };
+    query?: never;
     url: '/bots/{bot_id}/dependencies/{dep_id}/update';
 };
 
@@ -8242,23 +9250,23 @@ export type PostBotsByBotIdDependenciesByDepIdUpdateErrors = {
     /**
      * Bad Request
      */
-    400: ApperrorProblem;
+    400: ServerProblem;
     /**
      * Forbidden
      */
-    403: HandlersErrorResponse;
+    403: ServerProblem;
     /**
      * Not Found
      */
-    404: ApperrorProblem;
+    404: ServerProblem;
     /**
      * Unprocessable Entity
      */
-    422: ApperrorProblem;
+    422: ServerProblem;
     /**
      * Service Unavailable
      */
-    503: ApperrorProblem;
+    503: ServerProblem;
 };
 
 export type PostBotsByBotIdDependenciesByDepIdUpdateError = PostBotsByBotIdDependenciesByDepIdUpdateErrors[keyof PostBotsByBotIdDependenciesByDepIdUpdateErrors];
@@ -8271,221 +9279,6 @@ export type PostBotsByBotIdDependenciesByDepIdUpdateResponses = {
 };
 
 export type PostBotsByBotIdDependenciesByDepIdUpdateResponse = PostBotsByBotIdDependenciesByDepIdUpdateResponses[keyof PostBotsByBotIdDependenciesByDepIdUpdateResponses];
-
-export type GetBotsByBotIdEmailBindingsData = {
-    body?: never;
-    path: {
-        /**
-         * Bot ID
-         */
-        bot_id: string;
-    };
-    query?: never;
-    url: '/bots/{bot_id}/email-bindings';
-};
-
-export type GetBotsByBotIdEmailBindingsErrors = {
-    /**
-     * Internal Server Error
-     */
-    500: HandlersErrorResponse;
-};
-
-export type GetBotsByBotIdEmailBindingsError = GetBotsByBotIdEmailBindingsErrors[keyof GetBotsByBotIdEmailBindingsErrors];
-
-export type GetBotsByBotIdEmailBindingsResponses = {
-    /**
-     * OK
-     */
-    200: Array<EmailBindingResponse>;
-};
-
-export type GetBotsByBotIdEmailBindingsResponse = GetBotsByBotIdEmailBindingsResponses[keyof GetBotsByBotIdEmailBindingsResponses];
-
-export type PostBotsByBotIdEmailBindingsData = {
-    /**
-     * Binding configuration
-     */
-    body: EmailCreateBindingRequest;
-    path: {
-        /**
-         * Bot ID
-         */
-        bot_id: string;
-    };
-    query?: never;
-    url: '/bots/{bot_id}/email-bindings';
-};
-
-export type PostBotsByBotIdEmailBindingsErrors = {
-    /**
-     * Bad Request
-     */
-    400: HandlersErrorResponse;
-    /**
-     * Internal Server Error
-     */
-    500: HandlersErrorResponse;
-};
-
-export type PostBotsByBotIdEmailBindingsError = PostBotsByBotIdEmailBindingsErrors[keyof PostBotsByBotIdEmailBindingsErrors];
-
-export type PostBotsByBotIdEmailBindingsResponses = {
-    /**
-     * Created
-     */
-    201: EmailBindingResponse;
-};
-
-export type PostBotsByBotIdEmailBindingsResponse = PostBotsByBotIdEmailBindingsResponses[keyof PostBotsByBotIdEmailBindingsResponses];
-
-export type DeleteBotsByBotIdEmailBindingsByIdData = {
-    body?: never;
-    path: {
-        /**
-         * Bot ID
-         */
-        bot_id: string;
-        /**
-         * Binding ID
-         */
-        id: string;
-    };
-    query?: never;
-    url: '/bots/{bot_id}/email-bindings/{id}';
-};
-
-export type DeleteBotsByBotIdEmailBindingsByIdErrors = {
-    /**
-     * Internal Server Error
-     */
-    500: HandlersErrorResponse;
-};
-
-export type DeleteBotsByBotIdEmailBindingsByIdError = DeleteBotsByBotIdEmailBindingsByIdErrors[keyof DeleteBotsByBotIdEmailBindingsByIdErrors];
-
-export type DeleteBotsByBotIdEmailBindingsByIdResponses = {
-    /**
-     * No Content
-     */
-    204: unknown;
-};
-
-export type PutBotsByBotIdEmailBindingsByIdData = {
-    /**
-     * Updated binding
-     */
-    body: EmailUpdateBindingRequest;
-    path: {
-        /**
-         * Bot ID
-         */
-        bot_id: string;
-        /**
-         * Binding ID
-         */
-        id: string;
-    };
-    query?: never;
-    url: '/bots/{bot_id}/email-bindings/{id}';
-};
-
-export type PutBotsByBotIdEmailBindingsByIdErrors = {
-    /**
-     * Bad Request
-     */
-    400: HandlersErrorResponse;
-    /**
-     * Internal Server Error
-     */
-    500: HandlersErrorResponse;
-};
-
-export type PutBotsByBotIdEmailBindingsByIdError = PutBotsByBotIdEmailBindingsByIdErrors[keyof PutBotsByBotIdEmailBindingsByIdErrors];
-
-export type PutBotsByBotIdEmailBindingsByIdResponses = {
-    /**
-     * OK
-     */
-    200: EmailBindingResponse;
-};
-
-export type PutBotsByBotIdEmailBindingsByIdResponse = PutBotsByBotIdEmailBindingsByIdResponses[keyof PutBotsByBotIdEmailBindingsByIdResponses];
-
-export type GetBotsByBotIdEmailOutboxData = {
-    body?: never;
-    path: {
-        /**
-         * Bot ID
-         */
-        bot_id: string;
-    };
-    query?: {
-        /**
-         * Limit
-         */
-        limit?: number;
-        /**
-         * Offset
-         */
-        offset?: number;
-    };
-    url: '/bots/{bot_id}/email-outbox';
-};
-
-export type GetBotsByBotIdEmailOutboxErrors = {
-    /**
-     * Internal Server Error
-     */
-    500: HandlersErrorResponse;
-};
-
-export type GetBotsByBotIdEmailOutboxError = GetBotsByBotIdEmailOutboxErrors[keyof GetBotsByBotIdEmailOutboxErrors];
-
-export type GetBotsByBotIdEmailOutboxResponses = {
-    /**
-     * OK
-     */
-    200: {
-        [key: string]: unknown;
-    };
-};
-
-export type GetBotsByBotIdEmailOutboxResponse = GetBotsByBotIdEmailOutboxResponses[keyof GetBotsByBotIdEmailOutboxResponses];
-
-export type GetBotsByBotIdEmailOutboxByIdData = {
-    body?: never;
-    path: {
-        /**
-         * Bot ID
-         */
-        bot_id: string;
-        /**
-         * Email ID
-         */
-        id: string;
-    };
-    query?: never;
-    url: '/bots/{bot_id}/email-outbox/{id}';
-};
-
-export type GetBotsByBotIdEmailOutboxByIdErrors = {
-    /**
-     * Not Found
-     */
-    404: HandlersErrorResponse;
-};
-
-export type GetBotsByBotIdEmailOutboxByIdError = GetBotsByBotIdEmailOutboxByIdErrors[keyof GetBotsByBotIdEmailOutboxByIdErrors];
-
-export type GetBotsByBotIdEmailOutboxByIdResponses = {
-    /**
-     * OK
-     */
-    200: EmailOutboxItemResponse;
-};
-
-export type GetBotsByBotIdEmailOutboxByIdResponse = GetBotsByBotIdEmailOutboxByIdResponses[keyof GetBotsByBotIdEmailOutboxByIdResponses];
 
 export type GetBotsByBotIdHooksEventsData = {
     body?: never;
@@ -8503,15 +9296,15 @@ export type GetBotsByBotIdHooksEventsErrors = {
     /**
      * Bad Request
      */
-    400: HandlersErrorResponse;
+    400: ServerProblem;
     /**
      * Forbidden
      */
-    403: HandlersErrorResponse;
+    403: ServerProblem;
     /**
      * Internal Server Error
      */
-    500: HandlersErrorResponse;
+    500: ServerProblem;
 };
 
 export type GetBotsByBotIdHooksEventsError = GetBotsByBotIdHooksEventsErrors[keyof GetBotsByBotIdHooksEventsErrors];
@@ -8544,15 +9337,15 @@ export type PostBotsByBotIdHooksTestErrors = {
     /**
      * Bad Request
      */
-    400: HandlersErrorResponse;
+    400: ServerProblem;
     /**
      * Forbidden
      */
-    403: HandlersErrorResponse;
+    403: ServerProblem;
     /**
      * Internal Server Error
      */
-    500: HandlersErrorResponse;
+    500: ServerProblem;
 };
 
 export type PostBotsByBotIdHooksTestError = PostBotsByBotIdHooksTestErrors[keyof PostBotsByBotIdHooksTestErrors];
@@ -8577,19 +9370,19 @@ export type GetBotsByBotIdMcpErrors = {
     /**
      * Bad Request
      */
-    400: HandlersErrorResponse;
+    400: ServerProblem;
     /**
      * Forbidden
      */
-    403: HandlersErrorResponse;
+    403: ServerProblem;
     /**
      * Not Found
      */
-    404: HandlersErrorResponse;
+    404: ServerProblem;
     /**
      * Internal Server Error
      */
-    500: HandlersErrorResponse;
+    500: ServerProblem;
 };
 
 export type GetBotsByBotIdMcpError = GetBotsByBotIdMcpErrors[keyof GetBotsByBotIdMcpErrors];
@@ -8617,19 +9410,19 @@ export type PostBotsByBotIdMcpErrors = {
     /**
      * Bad Request
      */
-    400: HandlersErrorResponse;
+    400: ServerProblem;
     /**
      * Forbidden
      */
-    403: HandlersErrorResponse;
+    403: ServerProblem;
     /**
      * Not Found
      */
-    404: HandlersErrorResponse;
+    404: ServerProblem;
     /**
      * Internal Server Error
      */
-    500: HandlersErrorResponse;
+    500: ServerProblem;
 };
 
 export type PostBotsByBotIdMcpError = PostBotsByBotIdMcpErrors[keyof PostBotsByBotIdMcpErrors];
@@ -8657,15 +9450,15 @@ export type PostBotsByBotIdMcpOpsBatchDeleteErrors = {
     /**
      * Bad Request
      */
-    400: HandlersErrorResponse;
+    400: ServerProblem;
     /**
      * Forbidden
      */
-    403: HandlersErrorResponse;
+    403: ServerProblem;
     /**
      * Internal Server Error
      */
-    500: HandlersErrorResponse;
+    500: ServerProblem;
 };
 
 export type PostBotsByBotIdMcpOpsBatchDeleteError = PostBotsByBotIdMcpOpsBatchDeleteErrors[keyof PostBotsByBotIdMcpOpsBatchDeleteErrors];
@@ -8688,15 +9481,15 @@ export type GetBotsByBotIdMcpOpsExportErrors = {
     /**
      * Bad Request
      */
-    400: HandlersErrorResponse;
+    400: ServerProblem;
     /**
      * Forbidden
      */
-    403: HandlersErrorResponse;
+    403: ServerProblem;
     /**
      * Internal Server Error
      */
-    500: HandlersErrorResponse;
+    500: ServerProblem;
 };
 
 export type GetBotsByBotIdMcpOpsExportError = GetBotsByBotIdMcpOpsExportErrors[keyof GetBotsByBotIdMcpOpsExportErrors];
@@ -8724,15 +9517,15 @@ export type PutBotsByBotIdMcpOpsImportErrors = {
     /**
      * Bad Request
      */
-    400: HandlersErrorResponse;
+    400: ServerProblem;
     /**
      * Forbidden
      */
-    403: HandlersErrorResponse;
+    403: ServerProblem;
     /**
      * Internal Server Error
      */
-    500: HandlersErrorResponse;
+    500: ServerProblem;
 };
 
 export type PutBotsByBotIdMcpOpsImportError = PutBotsByBotIdMcpOpsImportErrors[keyof PutBotsByBotIdMcpOpsImportErrors];
@@ -8765,15 +9558,15 @@ export type PostBotsByBotIdMcpStdioErrors = {
     /**
      * Bad Request
      */
-    400: HandlersErrorResponse;
+    400: ServerProblem;
     /**
      * Not Found
      */
-    404: HandlersErrorResponse;
+    404: ServerProblem;
     /**
      * Internal Server Error
      */
-    500: HandlersErrorResponse;
+    500: ServerProblem;
 };
 
 export type PostBotsByBotIdMcpStdioError = PostBotsByBotIdMcpStdioErrors[keyof PostBotsByBotIdMcpStdioErrors];
@@ -8812,15 +9605,15 @@ export type PostBotsByBotIdMcpStdioByConnectionIdErrors = {
     /**
      * Bad Request
      */
-    400: HandlersErrorResponse;
+    400: ServerProblem;
     /**
      * Not Found
      */
-    404: HandlersErrorResponse;
+    404: ServerProblem;
     /**
      * Internal Server Error
      */
-    500: HandlersErrorResponse;
+    500: ServerProblem;
 };
 
 export type PostBotsByBotIdMcpStdioByConnectionIdError = PostBotsByBotIdMcpStdioByConnectionIdErrors[keyof PostBotsByBotIdMcpStdioByConnectionIdErrors];
@@ -8852,19 +9645,19 @@ export type DeleteBotsByBotIdMcpByIdErrors = {
     /**
      * Bad Request
      */
-    400: HandlersErrorResponse;
+    400: ServerProblem;
     /**
      * Forbidden
      */
-    403: HandlersErrorResponse;
+    403: ServerProblem;
     /**
      * Not Found
      */
-    404: HandlersErrorResponse;
+    404: ServerProblem;
     /**
      * Internal Server Error
      */
-    500: HandlersErrorResponse;
+    500: ServerProblem;
 };
 
 export type DeleteBotsByBotIdMcpByIdError = DeleteBotsByBotIdMcpByIdErrors[keyof DeleteBotsByBotIdMcpByIdErrors];
@@ -8892,19 +9685,19 @@ export type GetBotsByBotIdMcpByIdErrors = {
     /**
      * Bad Request
      */
-    400: HandlersErrorResponse;
+    400: ServerProblem;
     /**
      * Forbidden
      */
-    403: HandlersErrorResponse;
+    403: ServerProblem;
     /**
      * Not Found
      */
-    404: HandlersErrorResponse;
+    404: ServerProblem;
     /**
      * Internal Server Error
      */
-    500: HandlersErrorResponse;
+    500: ServerProblem;
 };
 
 export type GetBotsByBotIdMcpByIdError = GetBotsByBotIdMcpByIdErrors[keyof GetBotsByBotIdMcpByIdErrors];
@@ -8937,19 +9730,19 @@ export type PutBotsByBotIdMcpByIdErrors = {
     /**
      * Bad Request
      */
-    400: HandlersErrorResponse;
+    400: ServerProblem;
     /**
      * Forbidden
      */
-    403: HandlersErrorResponse;
+    403: ServerProblem;
     /**
      * Not Found
      */
-    404: HandlersErrorResponse;
+    404: ServerProblem;
     /**
      * Internal Server Error
      */
-    500: HandlersErrorResponse;
+    500: ServerProblem;
 };
 
 export type PutBotsByBotIdMcpByIdError = PutBotsByBotIdMcpByIdErrors[keyof PutBotsByBotIdMcpByIdErrors];
@@ -8982,11 +9775,11 @@ export type PostBotsByBotIdMcpByIdOauthAuthorizeErrors = {
     /**
      * Bad Request
      */
-    400: HandlersErrorResponse;
+    400: ServerProblem;
     /**
      * Not Found
      */
-    404: HandlersErrorResponse;
+    404: ServerProblem;
 };
 
 export type PostBotsByBotIdMcpByIdOauthAuthorizeError = PostBotsByBotIdMcpByIdOauthAuthorizeErrors[keyof PostBotsByBotIdMcpByIdOauthAuthorizeErrors];
@@ -9019,11 +9812,11 @@ export type PostBotsByBotIdMcpByIdOauthDiscoverErrors = {
     /**
      * Bad Request
      */
-    400: HandlersErrorResponse;
+    400: ServerProblem;
     /**
      * Not Found
      */
-    404: HandlersErrorResponse;
+    404: ServerProblem;
 };
 
 export type PostBotsByBotIdMcpByIdOauthDiscoverError = PostBotsByBotIdMcpByIdOauthDiscoverErrors[keyof PostBotsByBotIdMcpByIdOauthDiscoverErrors];
@@ -9051,7 +9844,7 @@ export type PostBotsByBotIdMcpByIdOauthExchangeErrors = {
     /**
      * Bad Request
      */
-    400: HandlersErrorResponse;
+    400: ServerProblem;
 };
 
 export type PostBotsByBotIdMcpByIdOauthExchangeError = PostBotsByBotIdMcpByIdOauthExchangeErrors[keyof PostBotsByBotIdMcpByIdOauthExchangeErrors];
@@ -9083,11 +9876,11 @@ export type GetBotsByBotIdMcpByIdOauthStatusErrors = {
     /**
      * Bad Request
      */
-    400: HandlersErrorResponse;
+    400: ServerProblem;
     /**
      * Not Found
      */
-    404: HandlersErrorResponse;
+    404: ServerProblem;
 };
 
 export type GetBotsByBotIdMcpByIdOauthStatusError = GetBotsByBotIdMcpByIdOauthStatusErrors[keyof GetBotsByBotIdMcpByIdOauthStatusErrors];
@@ -9117,7 +9910,7 @@ export type DeleteBotsByBotIdMcpByIdOauthTokenErrors = {
     /**
      * Bad Request
      */
-    400: HandlersErrorResponse;
+    400: ServerProblem;
 };
 
 export type DeleteBotsByBotIdMcpByIdOauthTokenError = DeleteBotsByBotIdMcpByIdOauthTokenErrors[keyof DeleteBotsByBotIdMcpByIdOauthTokenErrors];
@@ -9145,19 +9938,19 @@ export type PostBotsByBotIdMcpByIdProbeErrors = {
     /**
      * Bad Request
      */
-    400: HandlersErrorResponse;
+    400: ServerProblem;
     /**
      * Forbidden
      */
-    403: HandlersErrorResponse;
+    403: ServerProblem;
     /**
      * Not Found
      */
-    404: HandlersErrorResponse;
+    404: ServerProblem;
     /**
      * Internal Server Error
      */
-    500: HandlersErrorResponse;
+    500: ServerProblem;
 };
 
 export type PostBotsByBotIdMcpByIdProbeError = PostBotsByBotIdMcpByIdProbeErrors[keyof PostBotsByBotIdMcpByIdProbeErrors];
@@ -9190,19 +9983,19 @@ export type DeleteBotsByBotIdMemoryErrors = {
     /**
      * Bad Request
      */
-    400: HandlersErrorResponse;
+    400: ServerProblem;
     /**
      * Forbidden
      */
-    403: HandlersErrorResponse;
+    403: ServerProblem;
     /**
      * Internal Server Error
      */
-    500: HandlersErrorResponse;
+    500: ServerProblem;
     /**
      * Service Unavailable
      */
-    503: HandlersErrorResponse;
+    503: ServerProblem;
 };
 
 export type DeleteBotsByBotIdMemoryError = DeleteBotsByBotIdMemoryErrors[keyof DeleteBotsByBotIdMemoryErrors];
@@ -9237,19 +10030,19 @@ export type GetBotsByBotIdMemoryErrors = {
     /**
      * Bad Request
      */
-    400: HandlersErrorResponse;
+    400: ServerProblem;
     /**
      * Forbidden
      */
-    403: HandlersErrorResponse;
+    403: ServerProblem;
     /**
      * Internal Server Error
      */
-    500: HandlersErrorResponse;
+    500: ServerProblem;
     /**
      * Service Unavailable
      */
-    503: HandlersErrorResponse;
+    503: ServerProblem;
 };
 
 export type GetBotsByBotIdMemoryError = GetBotsByBotIdMemoryErrors[keyof GetBotsByBotIdMemoryErrors];
@@ -9282,19 +10075,19 @@ export type PostBotsByBotIdMemoryErrors = {
     /**
      * Bad Request
      */
-    400: HandlersErrorResponse;
+    400: ServerProblem;
     /**
      * Forbidden
      */
-    403: HandlersErrorResponse;
+    403: ServerProblem;
     /**
      * Internal Server Error
      */
-    500: HandlersErrorResponse;
+    500: ServerProblem;
     /**
      * Service Unavailable
      */
-    503: HandlersErrorResponse;
+    503: ServerProblem;
 };
 
 export type PostBotsByBotIdMemoryError = PostBotsByBotIdMemoryErrors[keyof PostBotsByBotIdMemoryErrors];
@@ -9327,23 +10120,23 @@ export type PostBotsByBotIdMemoryCompactErrors = {
     /**
      * Bad Request
      */
-    400: HandlersErrorResponse;
+    400: ServerProblem;
     /**
      * Forbidden
      */
-    403: HandlersErrorResponse;
+    403: ServerProblem;
     /**
      * Internal Server Error
      */
-    500: HandlersErrorResponse;
+    500: ServerProblem;
     /**
      * Not Implemented
      */
-    501: HandlersErrorResponse;
+    501: ServerProblem;
     /**
      * Service Unavailable
      */
-    503: HandlersErrorResponse;
+    503: ServerProblem;
 };
 
 export type PostBotsByBotIdMemoryCompactError = PostBotsByBotIdMemoryCompactErrors[keyof PostBotsByBotIdMemoryCompactErrors];
@@ -9373,15 +10166,15 @@ export type GetBotsByBotIdMemoryGraphErrors = {
     /**
      * Forbidden
      */
-    403: HandlersErrorResponse;
+    403: ServerProblem;
     /**
      * Internal Server Error
      */
-    500: HandlersErrorResponse;
+    500: ServerProblem;
     /**
      * Service Unavailable
      */
-    503: HandlersErrorResponse;
+    503: ServerProblem;
 };
 
 export type GetBotsByBotIdMemoryGraphError = GetBotsByBotIdMemoryGraphErrors[keyof GetBotsByBotIdMemoryGraphErrors];
@@ -9411,23 +10204,23 @@ export type PostBotsByBotIdMemoryIngestErrors = {
     /**
      * Bad Request
      */
-    400: HandlersErrorResponse;
+    400: ServerProblem;
     /**
      * Forbidden
      */
-    403: HandlersErrorResponse;
+    403: ServerProblem;
     /**
      * Conflict
      */
-    409: HandlersErrorResponse;
+    409: ServerProblem;
     /**
      * Internal Server Error
      */
-    500: HandlersErrorResponse;
+    500: ServerProblem;
     /**
      * Service Unavailable
      */
-    503: HandlersErrorResponse;
+    503: ServerProblem;
 };
 
 export type PostBotsByBotIdMemoryIngestError = PostBotsByBotIdMemoryIngestErrors[keyof PostBotsByBotIdMemoryIngestErrors];
@@ -9457,23 +10250,23 @@ export type PostBotsByBotIdMemoryRebuildErrors = {
     /**
      * Bad Request
      */
-    400: HandlersErrorResponse;
+    400: ServerProblem;
     /**
      * Forbidden
      */
-    403: HandlersErrorResponse;
+    403: ServerProblem;
     /**
      * Conflict
      */
-    409: HandlersErrorResponse;
+    409: ServerProblem;
     /**
      * Internal Server Error
      */
-    500: HandlersErrorResponse;
+    500: ServerProblem;
     /**
      * Service Unavailable
      */
-    503: HandlersErrorResponse;
+    503: ServerProblem;
 };
 
 export type PostBotsByBotIdMemoryRebuildError = PostBotsByBotIdMemoryRebuildErrors[keyof PostBotsByBotIdMemoryRebuildErrors];
@@ -9506,23 +10299,23 @@ export type PostBotsByBotIdMemorySearchErrors = {
     /**
      * Bad Request
      */
-    400: HandlersErrorResponse;
+    400: ServerProblem;
     /**
      * Forbidden
      */
-    403: HandlersErrorResponse;
+    403: ServerProblem;
     /**
      * Not Found
      */
-    404: HandlersErrorResponse;
+    404: ServerProblem;
     /**
      * Internal Server Error
      */
-    500: HandlersErrorResponse;
+    500: ServerProblem;
     /**
      * Service Unavailable
      */
-    503: HandlersErrorResponse;
+    503: ServerProblem;
 };
 
 export type PostBotsByBotIdMemorySearchError = PostBotsByBotIdMemorySearchErrors[keyof PostBotsByBotIdMemorySearchErrors];
@@ -9552,23 +10345,23 @@ export type GetBotsByBotIdMemoryStatusErrors = {
     /**
      * Bad Request
      */
-    400: HandlersErrorResponse;
+    400: ServerProblem;
     /**
      * Forbidden
      */
-    403: HandlersErrorResponse;
+    403: ServerProblem;
     /**
      * Conflict
      */
-    409: HandlersErrorResponse;
+    409: ServerProblem;
     /**
      * Internal Server Error
      */
-    500: HandlersErrorResponse;
+    500: ServerProblem;
     /**
      * Service Unavailable
      */
-    503: HandlersErrorResponse;
+    503: ServerProblem;
 };
 
 export type GetBotsByBotIdMemoryStatusError = GetBotsByBotIdMemoryStatusErrors[keyof GetBotsByBotIdMemoryStatusErrors];
@@ -9598,19 +10391,19 @@ export type GetBotsByBotIdMemoryUsageErrors = {
     /**
      * Bad Request
      */
-    400: HandlersErrorResponse;
+    400: ServerProblem;
     /**
      * Forbidden
      */
-    403: HandlersErrorResponse;
+    403: ServerProblem;
     /**
      * Internal Server Error
      */
-    500: HandlersErrorResponse;
+    500: ServerProblem;
     /**
      * Service Unavailable
      */
-    503: HandlersErrorResponse;
+    503: ServerProblem;
 };
 
 export type GetBotsByBotIdMemoryUsageError = GetBotsByBotIdMemoryUsageErrors[keyof GetBotsByBotIdMemoryUsageErrors];
@@ -9644,19 +10437,19 @@ export type DeleteBotsByBotIdMemoryByIdErrors = {
     /**
      * Bad Request
      */
-    400: HandlersErrorResponse;
+    400: ServerProblem;
     /**
      * Forbidden
      */
-    403: HandlersErrorResponse;
+    403: ServerProblem;
     /**
      * Internal Server Error
      */
-    500: HandlersErrorResponse;
+    500: ServerProblem;
     /**
      * Service Unavailable
      */
-    503: HandlersErrorResponse;
+    503: ServerProblem;
 };
 
 export type DeleteBotsByBotIdMemoryByIdError = DeleteBotsByBotIdMemoryByIdErrors[keyof DeleteBotsByBotIdMemoryByIdErrors];
@@ -9693,19 +10486,19 @@ export type PutBotsByBotIdMemoryByMemoryIdErrors = {
     /**
      * Bad Request
      */
-    400: HandlersErrorResponse;
+    400: ServerProblem;
     /**
      * Forbidden
      */
-    403: HandlersErrorResponse;
+    403: ServerProblem;
     /**
      * Internal Server Error
      */
-    500: HandlersErrorResponse;
+    500: ServerProblem;
     /**
      * Service Unavailable
      */
-    503: HandlersErrorResponse;
+    503: ServerProblem;
 };
 
 export type PutBotsByBotIdMemoryByMemoryIdError = PutBotsByBotIdMemoryByMemoryIdErrors[keyof PutBotsByBotIdMemoryByMemoryIdErrors];
@@ -9735,15 +10528,15 @@ export type DeleteBotsByBotIdMessagesErrors = {
     /**
      * Bad Request
      */
-    400: HandlersErrorResponse;
+    400: ServerProblem;
     /**
      * Forbidden
      */
-    403: HandlersErrorResponse;
+    403: ServerProblem;
     /**
      * Internal Server Error
      */
-    500: HandlersErrorResponse;
+    500: ServerProblem;
 };
 
 export type DeleteBotsByBotIdMessagesError = DeleteBotsByBotIdMessagesErrors[keyof DeleteBotsByBotIdMessagesErrors];
@@ -9788,19 +10581,19 @@ export type GetBotsByBotIdMessagesErrors = {
     /**
      * Bad Request
      */
-    400: HandlersErrorResponse;
+    400: ServerProblem;
     /**
      * Forbidden
      */
-    403: HandlersErrorResponse;
+    403: ServerProblem;
     /**
      * Not Found
      */
-    404: HandlersErrorResponse;
+    404: ServerProblem;
     /**
      * Internal Server Error
      */
-    500: HandlersErrorResponse;
+    500: ServerProblem;
 };
 
 export type GetBotsByBotIdMessagesError = GetBotsByBotIdMessagesErrors[keyof GetBotsByBotIdMessagesErrors];
@@ -9847,19 +10640,19 @@ export type GetBotsByBotIdMessagesLocateErrors = {
     /**
      * Bad Request
      */
-    400: HandlersErrorResponse;
+    400: ServerProblem;
     /**
      * Forbidden
      */
-    403: HandlersErrorResponse;
+    403: ServerProblem;
     /**
      * Not Found
      */
-    404: HandlersErrorResponse;
+    404: ServerProblem;
     /**
      * Internal Server Error
      */
-    500: HandlersErrorResponse;
+    500: ServerProblem;
 };
 
 export type GetBotsByBotIdMessagesLocateError = GetBotsByBotIdMessagesLocateErrors[keyof GetBotsByBotIdMessagesLocateErrors];
@@ -9892,15 +10685,15 @@ export type PostBotsByBotIdQuickActionsExecuteErrors = {
     /**
      * Bad Request
      */
-    400: HandlersErrorResponse;
+    400: ServerProblem;
     /**
      * Forbidden
      */
-    403: HandlersErrorResponse;
+    403: ServerProblem;
     /**
      * Internal Server Error
      */
-    500: HandlersErrorResponse;
+    500: ServerProblem;
 };
 
 export type PostBotsByBotIdQuickActionsExecuteError = PostBotsByBotIdQuickActionsExecuteErrors[keyof PostBotsByBotIdQuickActionsExecuteErrors];
@@ -9930,11 +10723,11 @@ export type GetBotsByBotIdScheduleErrors = {
     /**
      * Bad Request
      */
-    400: HandlersErrorResponse;
+    400: ServerProblem;
     /**
      * Internal Server Error
      */
-    500: HandlersErrorResponse;
+    500: ServerProblem;
 };
 
 export type GetBotsByBotIdScheduleError = GetBotsByBotIdScheduleErrors[keyof GetBotsByBotIdScheduleErrors];
@@ -9967,11 +10760,11 @@ export type PostBotsByBotIdScheduleErrors = {
     /**
      * Bad Request
      */
-    400: HandlersErrorResponse;
+    400: ServerProblem;
     /**
      * Internal Server Error
      */
-    500: HandlersErrorResponse;
+    500: ServerProblem;
 };
 
 export type PostBotsByBotIdScheduleError = PostBotsByBotIdScheduleErrors[keyof PostBotsByBotIdScheduleErrors];
@@ -10001,11 +10794,11 @@ export type DeleteBotsByBotIdScheduleLogsErrors = {
     /**
      * Bad Request
      */
-    400: HandlersErrorResponse;
+    400: ServerProblem;
     /**
      * Internal Server Error
      */
-    500: HandlersErrorResponse;
+    500: ServerProblem;
 };
 
 export type DeleteBotsByBotIdScheduleLogsError = DeleteBotsByBotIdScheduleLogsErrors[keyof DeleteBotsByBotIdScheduleLogsErrors];
@@ -10042,11 +10835,11 @@ export type GetBotsByBotIdScheduleLogsErrors = {
     /**
      * Bad Request
      */
-    400: HandlersErrorResponse;
+    400: ServerProblem;
     /**
      * Internal Server Error
      */
-    500: HandlersErrorResponse;
+    500: ServerProblem;
 };
 
 export type GetBotsByBotIdScheduleLogsError = GetBotsByBotIdScheduleLogsErrors[keyof GetBotsByBotIdScheduleLogsErrors];
@@ -10080,11 +10873,11 @@ export type DeleteBotsByBotIdScheduleByIdErrors = {
     /**
      * Bad Request
      */
-    400: HandlersErrorResponse;
+    400: ServerProblem;
     /**
      * Internal Server Error
      */
-    500: HandlersErrorResponse;
+    500: ServerProblem;
 };
 
 export type DeleteBotsByBotIdScheduleByIdError = DeleteBotsByBotIdScheduleByIdErrors[keyof DeleteBotsByBotIdScheduleByIdErrors];
@@ -10116,15 +10909,15 @@ export type GetBotsByBotIdScheduleByIdErrors = {
     /**
      * Bad Request
      */
-    400: HandlersErrorResponse;
+    400: ServerProblem;
     /**
      * Not Found
      */
-    404: HandlersErrorResponse;
+    404: ServerProblem;
     /**
      * Internal Server Error
      */
-    500: HandlersErrorResponse;
+    500: ServerProblem;
 };
 
 export type GetBotsByBotIdScheduleByIdError = GetBotsByBotIdScheduleByIdErrors[keyof GetBotsByBotIdScheduleByIdErrors];
@@ -10161,11 +10954,11 @@ export type PutBotsByBotIdScheduleByIdErrors = {
     /**
      * Bad Request
      */
-    400: HandlersErrorResponse;
+    400: ServerProblem;
     /**
      * Internal Server Error
      */
-    500: HandlersErrorResponse;
+    500: ServerProblem;
 };
 
 export type PutBotsByBotIdScheduleByIdError = PutBotsByBotIdScheduleByIdErrors[keyof PutBotsByBotIdScheduleByIdErrors];
@@ -10208,11 +11001,11 @@ export type GetBotsByBotIdScheduleByIdLogsErrors = {
     /**
      * Bad Request
      */
-    400: HandlersErrorResponse;
+    400: ServerProblem;
     /**
      * Internal Server Error
      */
-    500: HandlersErrorResponse;
+    500: ServerProblem;
 };
 
 export type GetBotsByBotIdScheduleByIdLogsError = GetBotsByBotIdScheduleByIdLogsErrors[keyof GetBotsByBotIdScheduleByIdLogsErrors];
@@ -10225,6 +11018,61 @@ export type GetBotsByBotIdScheduleByIdLogsResponses = {
 };
 
 export type GetBotsByBotIdScheduleByIdLogsResponse = GetBotsByBotIdScheduleByIdLogsResponses[keyof GetBotsByBotIdScheduleByIdLogsResponses];
+
+export type GetBotsByBotIdScheduleByIdSessionsData = {
+    body?: never;
+    path: {
+        /**
+         * Bot ID
+         */
+        bot_id: string;
+        /**
+         * Schedule ID
+         */
+        id: string;
+    };
+    query?: {
+        /**
+         * Page size (1..100)
+         */
+        limit?: number;
+        /**
+         * Opaque cursor returned as next_cursor on a previous page
+         */
+        cursor?: string;
+    };
+    url: '/bots/{bot_id}/schedule/{id}/sessions';
+};
+
+export type GetBotsByBotIdScheduleByIdSessionsErrors = {
+    /**
+     * Bad Request
+     */
+    400: ServerProblem;
+    /**
+     * Forbidden
+     */
+    403: ServerProblem;
+    /**
+     * Not Found
+     */
+    404: ServerProblem;
+    /**
+     * Internal Server Error
+     */
+    500: ServerProblem;
+};
+
+export type GetBotsByBotIdScheduleByIdSessionsError = GetBotsByBotIdScheduleByIdSessionsErrors[keyof GetBotsByBotIdScheduleByIdSessionsErrors];
+
+export type GetBotsByBotIdScheduleByIdSessionsResponses = {
+    /**
+     * OK
+     */
+    200: ScheduleListRunSessionsResponse;
+};
+
+export type GetBotsByBotIdScheduleByIdSessionsResponse = GetBotsByBotIdScheduleByIdSessionsResponses[keyof GetBotsByBotIdScheduleByIdSessionsResponses];
 
 export type GetBotsByBotIdSessionsData = {
     body?: never;
@@ -10248,6 +11096,10 @@ export type GetBotsByBotIdSessionsData = {
          */
         workdir_id?: string;
         /**
+         * Leave out sessions schedule runs created, except one a schedule still runs in. The sidebar lists them under their schedule.
+         */
+        hide_schedule_runs?: boolean;
+        /**
          * Page size (1..200). Defaults to 50.
          */
         limit?: number;
@@ -10263,11 +11115,11 @@ export type GetBotsByBotIdSessionsErrors = {
     /**
      * Bad Request
      */
-    400: HandlersErrorResponse;
+    400: ServerProblem;
     /**
      * Forbidden
      */
-    403: HandlersErrorResponse;
+    403: ServerProblem;
 };
 
 export type GetBotsByBotIdSessionsError = GetBotsByBotIdSessionsErrors[keyof GetBotsByBotIdSessionsErrors];
@@ -10300,11 +11152,11 @@ export type PostBotsByBotIdSessionsErrors = {
     /**
      * Bad Request
      */
-    400: HandlersErrorResponse;
+    400: ServerProblem;
     /**
      * Forbidden
      */
-    403: HandlersErrorResponse;
+    403: ServerProblem;
 };
 
 export type PostBotsByBotIdSessionsError = PostBotsByBotIdSessionsErrors[keyof PostBotsByBotIdSessionsErrors];
@@ -10334,15 +11186,15 @@ export type GetBotsByBotIdSessionsEventsErrors = {
     /**
      * Bad Request
      */
-    400: HandlersErrorResponse;
+    400: ServerProblem;
     /**
      * Forbidden
      */
-    403: HandlersErrorResponse;
+    403: ServerProblem;
     /**
      * Internal Server Error
      */
-    500: HandlersErrorResponse;
+    500: ServerProblem;
 };
 
 export type GetBotsByBotIdSessionsEventsError = GetBotsByBotIdSessionsEventsErrors[keyof GetBotsByBotIdSessionsEventsErrors];
@@ -10372,11 +11224,11 @@ export type GetBotsByBotIdSessionsModelPreferenceSeedErrors = {
     /**
      * Bad Request
      */
-    400: HandlersErrorResponse;
+    400: ServerProblem;
     /**
      * Forbidden
      */
-    403: HandlersErrorResponse;
+    403: ServerProblem;
 };
 
 export type GetBotsByBotIdSessionsModelPreferenceSeedError = GetBotsByBotIdSessionsModelPreferenceSeedErrors[keyof GetBotsByBotIdSessionsModelPreferenceSeedErrors];
@@ -10410,11 +11262,11 @@ export type DeleteBotsByBotIdSessionsBySessionIdErrors = {
     /**
      * Bad Request
      */
-    400: HandlersErrorResponse;
+    400: ServerProblem;
     /**
      * Forbidden
      */
-    403: HandlersErrorResponse;
+    403: ServerProblem;
 };
 
 export type DeleteBotsByBotIdSessionsBySessionIdError = DeleteBotsByBotIdSessionsBySessionIdErrors[keyof DeleteBotsByBotIdSessionsBySessionIdErrors];
@@ -10446,15 +11298,15 @@ export type GetBotsByBotIdSessionsBySessionIdErrors = {
     /**
      * Bad Request
      */
-    400: HandlersErrorResponse;
+    400: ServerProblem;
     /**
      * Forbidden
      */
-    403: HandlersErrorResponse;
+    403: ServerProblem;
     /**
      * Not Found
      */
-    404: HandlersErrorResponse;
+    404: ServerProblem;
 };
 
 export type GetBotsByBotIdSessionsBySessionIdError = GetBotsByBotIdSessionsBySessionIdErrors[keyof GetBotsByBotIdSessionsBySessionIdErrors];
@@ -10491,19 +11343,19 @@ export type PatchBotsByBotIdSessionsBySessionIdErrors = {
     /**
      * Bad Request
      */
-    400: HandlersErrorResponse;
+    400: ServerProblem;
     /**
      * Forbidden
      */
-    403: HandlersErrorResponse;
+    403: ServerProblem;
     /**
      * Not Found
      */
-    404: HandlersErrorResponse;
+    404: ServerProblem;
     /**
      * Conflict
      */
-    409: ApperrorProblem;
+    409: ServerProblem;
 };
 
 export type PatchBotsByBotIdSessionsBySessionIdError = PatchBotsByBotIdSessionsBySessionIdErrors[keyof PatchBotsByBotIdSessionsBySessionIdErrors];
@@ -10537,23 +11389,23 @@ export type GetBotsByBotIdSessionsBySessionIdAcpRuntimeErrors = {
     /**
      * Bad Request
      */
-    400: ApperrorProblem;
+    400: ServerProblem;
     /**
      * Forbidden
      */
-    403: ApperrorProblem;
+    403: ServerProblem;
     /**
      * Not Found
      */
-    404: ApperrorProblem;
+    404: ServerProblem;
     /**
      * Conflict
      */
-    409: ApperrorProblem;
+    409: ServerProblem;
     /**
      * Internal Server Error
      */
-    500: ApperrorProblem;
+    500: ServerProblem;
 };
 
 export type GetBotsByBotIdSessionsBySessionIdAcpRuntimeError = GetBotsByBotIdSessionsBySessionIdAcpRuntimeErrors[keyof GetBotsByBotIdSessionsBySessionIdAcpRuntimeErrors];
@@ -10587,27 +11439,27 @@ export type PostBotsByBotIdSessionsBySessionIdAcpRuntimeErrors = {
     /**
      * Bad Request
      */
-    400: ApperrorProblem;
+    400: ServerProblem;
     /**
      * Forbidden
      */
-    403: ApperrorProblem;
+    403: ServerProblem;
     /**
      * Not Found
      */
-    404: ApperrorProblem;
+    404: ServerProblem;
     /**
      * Conflict
      */
-    409: ApperrorProblem;
+    409: ServerProblem;
     /**
      * Internal Server Error
      */
-    500: ApperrorProblem;
+    500: ServerProblem;
     /**
      * Bad Gateway
      */
-    502: ApperrorProblem;
+    502: ServerProblem;
 };
 
 export type PostBotsByBotIdSessionsBySessionIdAcpRuntimeError = PostBotsByBotIdSessionsBySessionIdAcpRuntimeErrors[keyof PostBotsByBotIdSessionsBySessionIdAcpRuntimeErrors];
@@ -10644,27 +11496,27 @@ export type PatchBotsByBotIdSessionsBySessionIdAcpRuntimeModeErrors = {
     /**
      * Bad Request
      */
-    400: ApperrorProblem;
+    400: ServerProblem;
     /**
      * Forbidden
      */
-    403: ApperrorProblem;
+    403: ServerProblem;
     /**
      * Not Found
      */
-    404: ApperrorProblem;
+    404: ServerProblem;
     /**
      * Conflict
      */
-    409: ApperrorProblem;
+    409: ServerProblem;
     /**
      * Internal Server Error
      */
-    500: ApperrorProblem;
+    500: ServerProblem;
     /**
      * Bad Gateway
      */
-    502: ApperrorProblem;
+    502: ServerProblem;
 };
 
 export type PatchBotsByBotIdSessionsBySessionIdAcpRuntimeModeError = PatchBotsByBotIdSessionsBySessionIdAcpRuntimeModeErrors[keyof PatchBotsByBotIdSessionsBySessionIdAcpRuntimeModeErrors];
@@ -10701,27 +11553,27 @@ export type PatchBotsByBotIdSessionsBySessionIdAcpRuntimeModelErrors = {
     /**
      * Bad Request
      */
-    400: ApperrorProblem;
+    400: ServerProblem;
     /**
      * Forbidden
      */
-    403: ApperrorProblem;
+    403: ServerProblem;
     /**
      * Not Found
      */
-    404: ApperrorProblem;
+    404: ServerProblem;
     /**
      * Conflict
      */
-    409: ApperrorProblem;
+    409: ServerProblem;
     /**
      * Internal Server Error
      */
-    500: ApperrorProblem;
+    500: ServerProblem;
     /**
      * Bad Gateway
      */
-    502: ApperrorProblem;
+    502: ServerProblem;
 };
 
 export type PatchBotsByBotIdSessionsBySessionIdAcpRuntimeModelError = PatchBotsByBotIdSessionsBySessionIdAcpRuntimeModelErrors[keyof PatchBotsByBotIdSessionsBySessionIdAcpRuntimeModelErrors];
@@ -10758,27 +11610,27 @@ export type PatchBotsByBotIdSessionsBySessionIdAcpRuntimeReasoningErrors = {
     /**
      * Bad Request
      */
-    400: ApperrorProblem;
+    400: ServerProblem;
     /**
      * Forbidden
      */
-    403: ApperrorProblem;
+    403: ServerProblem;
     /**
      * Not Found
      */
-    404: ApperrorProblem;
+    404: ServerProblem;
     /**
      * Conflict
      */
-    409: ApperrorProblem;
+    409: ServerProblem;
     /**
      * Internal Server Error
      */
-    500: ApperrorProblem;
+    500: ServerProblem;
     /**
      * Bad Gateway
      */
-    502: ApperrorProblem;
+    502: ServerProblem;
 };
 
 export type PatchBotsByBotIdSessionsBySessionIdAcpRuntimeReasoningError = PatchBotsByBotIdSessionsBySessionIdAcpRuntimeReasoningErrors[keyof PatchBotsByBotIdSessionsBySessionIdAcpRuntimeReasoningErrors];
@@ -10812,11 +11664,11 @@ export type PostBotsByBotIdSessionsBySessionIdCompactErrors = {
     /**
      * Bad Request
      */
-    400: ApperrorProblem;
+    400: ServerProblem;
     /**
      * Internal Server Error
      */
-    500: HandlersErrorResponse;
+    500: ServerProblem;
 };
 
 export type PostBotsByBotIdSessionsBySessionIdCompactError = PostBotsByBotIdSessionsBySessionIdCompactErrors[keyof PostBotsByBotIdSessionsBySessionIdCompactErrors];
@@ -10855,23 +11707,23 @@ export type GetBotsByBotIdSessionsBySessionIdContextLifecycleErrors = {
     /**
      * Bad Request
      */
-    400: ApperrorProblem;
+    400: ServerProblem;
     /**
      * Unauthorized
      */
-    401: ApperrorProblem;
+    401: ServerProblem;
     /**
      * Forbidden
      */
-    403: ApperrorProblem;
+    403: ServerProblem;
     /**
      * Not Found
      */
-    404: ApperrorProblem;
+    404: ServerProblem;
     /**
      * Internal Server Error
      */
-    500: ApperrorProblem;
+    500: ServerProblem;
 };
 
 export type GetBotsByBotIdSessionsBySessionIdContextLifecycleError = GetBotsByBotIdSessionsBySessionIdContextLifecycleErrors[keyof GetBotsByBotIdSessionsBySessionIdContextLifecycleErrors];
@@ -10905,7 +11757,7 @@ export type GetBotsByBotIdSessionsBySessionIdFollowUpQueueErrors = {
     /**
      * Forbidden
      */
-    403: ApperrorProblem;
+    403: ServerProblem;
 };
 
 export type GetBotsByBotIdSessionsBySessionIdFollowUpQueueError = GetBotsByBotIdSessionsBySessionIdFollowUpQueueErrors[keyof GetBotsByBotIdSessionsBySessionIdFollowUpQueueErrors];
@@ -10942,15 +11794,15 @@ export type PostBotsByBotIdSessionsBySessionIdFollowUpQueueErrors = {
     /**
      * Bad Request
      */
-    400: ApperrorProblem;
+    400: ServerProblem;
     /**
      * Forbidden
      */
-    403: ApperrorProblem;
+    403: ServerProblem;
     /**
      * Conflict
      */
-    409: ApperrorProblem;
+    409: ServerProblem;
 };
 
 export type PostBotsByBotIdSessionsBySessionIdFollowUpQueueError = PostBotsByBotIdSessionsBySessionIdFollowUpQueueErrors[keyof PostBotsByBotIdSessionsBySessionIdFollowUpQueueErrors];
@@ -10987,15 +11839,15 @@ export type PutBotsByBotIdSessionsBySessionIdFollowUpQueueReorderErrors = {
     /**
      * Bad Request
      */
-    400: ApperrorProblem;
+    400: ServerProblem;
     /**
      * Forbidden
      */
-    403: ApperrorProblem;
+    403: ServerProblem;
     /**
      * Conflict
      */
-    409: ApperrorProblem;
+    409: ServerProblem;
 };
 
 export type PutBotsByBotIdSessionsBySessionIdFollowUpQueueReorderError = PutBotsByBotIdSessionsBySessionIdFollowUpQueueReorderErrors[keyof PutBotsByBotIdSessionsBySessionIdFollowUpQueueReorderErrors];
@@ -11033,15 +11885,15 @@ export type DeleteBotsByBotIdSessionsBySessionIdFollowUpQueueByItemIdErrors = {
     /**
      * Bad Request
      */
-    400: ApperrorProblem;
+    400: ServerProblem;
     /**
      * Forbidden
      */
-    403: ApperrorProblem;
+    403: ServerProblem;
     /**
      * Conflict
      */
-    409: ApperrorProblem;
+    409: ServerProblem;
 };
 
 export type DeleteBotsByBotIdSessionsBySessionIdFollowUpQueueByItemIdError = DeleteBotsByBotIdSessionsBySessionIdFollowUpQueueByItemIdErrors[keyof DeleteBotsByBotIdSessionsBySessionIdFollowUpQueueByItemIdErrors];
@@ -11080,15 +11932,15 @@ export type PatchBotsByBotIdSessionsBySessionIdFollowUpQueueByItemIdErrors = {
     /**
      * Bad Request
      */
-    400: ApperrorProblem;
+    400: ServerProblem;
     /**
      * Forbidden
      */
-    403: ApperrorProblem;
+    403: ServerProblem;
     /**
      * Conflict
      */
-    409: ApperrorProblem;
+    409: ServerProblem;
 };
 
 export type PatchBotsByBotIdSessionsBySessionIdFollowUpQueueByItemIdError = PatchBotsByBotIdSessionsBySessionIdFollowUpQueueByItemIdErrors[keyof PatchBotsByBotIdSessionsBySessionIdFollowUpQueueByItemIdErrors];
@@ -11126,15 +11978,15 @@ export type PostBotsByBotIdSessionsBySessionIdFollowUpQueueByItemIdSteerErrors =
     /**
      * Bad Request
      */
-    400: ApperrorProblem;
+    400: ServerProblem;
     /**
      * Forbidden
      */
-    403: ApperrorProblem;
+    403: ServerProblem;
     /**
      * Conflict
      */
-    409: ApperrorProblem;
+    409: ServerProblem;
 };
 
 export type PostBotsByBotIdSessionsBySessionIdFollowUpQueueByItemIdSteerError = PostBotsByBotIdSessionsBySessionIdFollowUpQueueByItemIdSteerErrors[keyof PostBotsByBotIdSessionsBySessionIdFollowUpQueueByItemIdSteerErrors];
@@ -11171,19 +12023,19 @@ export type PostBotsByBotIdSessionsBySessionIdForkErrors = {
     /**
      * Bad Request
      */
-    400: HandlersErrorResponse;
+    400: ServerProblem;
     /**
      * Forbidden
      */
-    403: HandlersErrorResponse;
+    403: ServerProblem;
     /**
      * Not Found
      */
-    404: HandlersErrorResponse;
+    404: ServerProblem;
     /**
      * Conflict
      */
-    409: HandlersErrorResponse;
+    409: ServerProblem;
 };
 
 export type PostBotsByBotIdSessionsBySessionIdForkError = PostBotsByBotIdSessionsBySessionIdForkErrors[keyof PostBotsByBotIdSessionsBySessionIdForkErrors];
@@ -11196,6 +12048,56 @@ export type PostBotsByBotIdSessionsBySessionIdForkResponses = {
 };
 
 export type PostBotsByBotIdSessionsBySessionIdForkResponse = PostBotsByBotIdSessionsBySessionIdForkResponses[keyof PostBotsByBotIdSessionsBySessionIdForkResponses];
+
+export type GetBotsByBotIdSessionsBySessionIdInvocationsByInvocationIdData = {
+    body?: never;
+    path: {
+        /**
+         * Bot ID
+         */
+        bot_id: string;
+        /**
+         * Session ID
+         */
+        session_id: string;
+        /**
+         * Client invocation ID
+         */
+        invocation_id: string;
+    };
+    query?: never;
+    url: '/bots/{bot_id}/sessions/{session_id}/invocations/{invocation_id}';
+};
+
+export type GetBotsByBotIdSessionsBySessionIdInvocationsByInvocationIdErrors = {
+    /**
+     * Bad Request
+     */
+    400: ServerProblem;
+    /**
+     * Forbidden
+     */
+    403: ServerProblem;
+    /**
+     * Not Found
+     */
+    404: ServerProblem;
+    /**
+     * Internal Server Error
+     */
+    500: ServerProblem;
+};
+
+export type GetBotsByBotIdSessionsBySessionIdInvocationsByInvocationIdError = GetBotsByBotIdSessionsBySessionIdInvocationsByInvocationIdErrors[keyof GetBotsByBotIdSessionsBySessionIdInvocationsByInvocationIdErrors];
+
+export type GetBotsByBotIdSessionsBySessionIdInvocationsByInvocationIdResponses = {
+    /**
+     * OK
+     */
+    200: HandlersSessionInvocationResponse;
+};
+
+export type GetBotsByBotIdSessionsBySessionIdInvocationsByInvocationIdResponse = GetBotsByBotIdSessionsBySessionIdInvocationsByInvocationIdResponses[keyof GetBotsByBotIdSessionsBySessionIdInvocationsByInvocationIdResponses];
 
 export type GetBotsByBotIdSessionsBySessionIdQueueData = {
     body?: never;
@@ -11217,7 +12119,7 @@ export type GetBotsByBotIdSessionsBySessionIdQueueErrors = {
     /**
      * Forbidden
      */
-    403: ApperrorProblem;
+    403: ServerProblem;
 };
 
 export type GetBotsByBotIdSessionsBySessionIdQueueError = GetBotsByBotIdSessionsBySessionIdQueueErrors[keyof GetBotsByBotIdSessionsBySessionIdQueueErrors];
@@ -11230,6 +12132,231 @@ export type GetBotsByBotIdSessionsBySessionIdQueueResponses = {
 };
 
 export type GetBotsByBotIdSessionsBySessionIdQueueResponse = GetBotsByBotIdSessionsBySessionIdQueueResponses[keyof GetBotsByBotIdSessionsBySessionIdQueueResponses];
+
+export type GetBotsByBotIdSessionsBySessionIdRuntimeControlsData = {
+    body?: never;
+    path: {
+        /**
+         * Bot ID
+         */
+        bot_id: string;
+        /**
+         * Session ID
+         */
+        session_id: string;
+    };
+    query?: never;
+    url: '/bots/{bot_id}/sessions/{session_id}/runtime-controls';
+};
+
+export type GetBotsByBotIdSessionsBySessionIdRuntimeControlsErrors = {
+    /**
+     * Bad Request
+     */
+    400: ServerProblem;
+    /**
+     * Forbidden
+     */
+    403: ServerProblem;
+    /**
+     * Internal Server Error
+     */
+    500: ServerProblem;
+};
+
+export type GetBotsByBotIdSessionsBySessionIdRuntimeControlsError = GetBotsByBotIdSessionsBySessionIdRuntimeControlsErrors[keyof GetBotsByBotIdSessionsBySessionIdRuntimeControlsErrors];
+
+export type GetBotsByBotIdSessionsBySessionIdRuntimeControlsResponses = {
+    /**
+     * OK
+     */
+    200: ExternalControls;
+};
+
+export type GetBotsByBotIdSessionsBySessionIdRuntimeControlsResponse = GetBotsByBotIdSessionsBySessionIdRuntimeControlsResponses[keyof GetBotsByBotIdSessionsBySessionIdRuntimeControlsResponses];
+
+export type PostBotsByBotIdSessionsBySessionIdRuntimeControlsCommandsData = {
+    /**
+     * Runtime command
+     */
+    body: HandlersRuntimeCommandRequest;
+    path: {
+        /**
+         * Bot ID
+         */
+        bot_id: string;
+        /**
+         * Session ID
+         */
+        session_id: string;
+    };
+    query?: never;
+    url: '/bots/{bot_id}/sessions/{session_id}/runtime-controls/commands';
+};
+
+export type PostBotsByBotIdSessionsBySessionIdRuntimeControlsCommandsErrors = {
+    /**
+     * Bad Request
+     */
+    400: ServerProblem;
+    /**
+     * Forbidden
+     */
+    403: ServerProblem;
+    /**
+     * Conflict
+     */
+    409: ServerProblem;
+    /**
+     * Internal Server Error
+     */
+    500: ServerProblem;
+};
+
+export type PostBotsByBotIdSessionsBySessionIdRuntimeControlsCommandsError = PostBotsByBotIdSessionsBySessionIdRuntimeControlsCommandsErrors[keyof PostBotsByBotIdSessionsBySessionIdRuntimeControlsCommandsErrors];
+
+export type PostBotsByBotIdSessionsBySessionIdRuntimeControlsCommandsResponses = {
+    /**
+     * OK
+     */
+    200: HandlersRuntimeCommandResponse;
+};
+
+export type PostBotsByBotIdSessionsBySessionIdRuntimeControlsCommandsResponse = PostBotsByBotIdSessionsBySessionIdRuntimeControlsCommandsResponses[keyof PostBotsByBotIdSessionsBySessionIdRuntimeControlsCommandsResponses];
+
+export type GetBotsByBotIdSessionsBySessionIdRuntimeControlsGoalData = {
+    body?: never;
+    path: {
+        /**
+         * Bot ID
+         */
+        bot_id: string;
+        /**
+         * Session ID
+         */
+        session_id: string;
+    };
+    query?: never;
+    url: '/bots/{bot_id}/sessions/{session_id}/runtime-controls/goal';
+};
+
+export type GetBotsByBotIdSessionsBySessionIdRuntimeControlsGoalErrors = {
+    /**
+     * Bad Request
+     */
+    400: ServerProblem;
+    /**
+     * Forbidden
+     */
+    403: ServerProblem;
+    /**
+     * Internal Server Error
+     */
+    500: ServerProblem;
+};
+
+export type GetBotsByBotIdSessionsBySessionIdRuntimeControlsGoalError = GetBotsByBotIdSessionsBySessionIdRuntimeControlsGoalErrors[keyof GetBotsByBotIdSessionsBySessionIdRuntimeControlsGoalErrors];
+
+export type GetBotsByBotIdSessionsBySessionIdRuntimeControlsGoalResponses = {
+    /**
+     * OK
+     */
+    200: HandlersRuntimeGoalResponse;
+};
+
+export type GetBotsByBotIdSessionsBySessionIdRuntimeControlsGoalResponse = GetBotsByBotIdSessionsBySessionIdRuntimeControlsGoalResponses[keyof GetBotsByBotIdSessionsBySessionIdRuntimeControlsGoalResponses];
+
+export type PostBotsByBotIdSessionsBySessionIdRuntimeControlsGoalData = {
+    /**
+     * Goal action
+     */
+    body: HandlersRuntimeGoalRequest;
+    path: {
+        /**
+         * Bot ID
+         */
+        bot_id: string;
+        /**
+         * Session ID
+         */
+        session_id: string;
+    };
+    query?: never;
+    url: '/bots/{bot_id}/sessions/{session_id}/runtime-controls/goal';
+};
+
+export type PostBotsByBotIdSessionsBySessionIdRuntimeControlsGoalErrors = {
+    /**
+     * Bad Request
+     */
+    400: ServerProblem;
+    /**
+     * Forbidden
+     */
+    403: ServerProblem;
+    /**
+     * Internal Server Error
+     */
+    500: ServerProblem;
+};
+
+export type PostBotsByBotIdSessionsBySessionIdRuntimeControlsGoalError = PostBotsByBotIdSessionsBySessionIdRuntimeControlsGoalErrors[keyof PostBotsByBotIdSessionsBySessionIdRuntimeControlsGoalErrors];
+
+export type PostBotsByBotIdSessionsBySessionIdRuntimeControlsGoalResponses = {
+    /**
+     * No Content
+     */
+    204: unknown;
+};
+
+export type PatchBotsByBotIdSessionsBySessionIdRuntimeControlsModeData = {
+    /**
+     * Permission mode
+     */
+    body: HandlersRuntimeModeRequest;
+    path: {
+        /**
+         * Bot ID
+         */
+        bot_id: string;
+        /**
+         * Session ID
+         */
+        session_id: string;
+    };
+    query?: never;
+    url: '/bots/{bot_id}/sessions/{session_id}/runtime-controls/mode';
+};
+
+export type PatchBotsByBotIdSessionsBySessionIdRuntimeControlsModeErrors = {
+    /**
+     * Bad Request
+     */
+    400: ServerProblem;
+    /**
+     * Forbidden
+     */
+    403: ServerProblem;
+    /**
+     * Conflict
+     */
+    409: ServerProblem;
+    /**
+     * Internal Server Error
+     */
+    500: ServerProblem;
+};
+
+export type PatchBotsByBotIdSessionsBySessionIdRuntimeControlsModeError = PatchBotsByBotIdSessionsBySessionIdRuntimeControlsModeErrors[keyof PatchBotsByBotIdSessionsBySessionIdRuntimeControlsModeErrors];
+
+export type PatchBotsByBotIdSessionsBySessionIdRuntimeControlsModeResponses = {
+    /**
+     * OK
+     */
+    200: ExternalModeState;
+};
+
+export type PatchBotsByBotIdSessionsBySessionIdRuntimeControlsModeResponse = PatchBotsByBotIdSessionsBySessionIdRuntimeControlsModeResponses[keyof PatchBotsByBotIdSessionsBySessionIdRuntimeControlsModeResponses];
 
 export type GetBotsByBotIdSessionsBySessionIdStatusData = {
     body?: never;
@@ -11256,15 +12383,15 @@ export type GetBotsByBotIdSessionsBySessionIdStatusErrors = {
     /**
      * Bad Request
      */
-    400: HandlersErrorResponse;
+    400: ServerProblem;
     /**
      * Forbidden
      */
-    403: HandlersErrorResponse;
+    403: ServerProblem;
     /**
      * Internal Server Error
      */
-    500: HandlersErrorResponse;
+    500: ServerProblem;
 };
 
 export type GetBotsByBotIdSessionsBySessionIdStatusError = GetBotsByBotIdSessionsBySessionIdStatusErrors[keyof GetBotsByBotIdSessionsBySessionIdStatusErrors];
@@ -11298,7 +12425,7 @@ export type GetBotsByBotIdSessionsBySessionIdSteerQueueErrors = {
     /**
      * Forbidden
      */
-    403: ApperrorProblem;
+    403: ServerProblem;
 };
 
 export type GetBotsByBotIdSessionsBySessionIdSteerQueueError = GetBotsByBotIdSessionsBySessionIdSteerQueueErrors[keyof GetBotsByBotIdSessionsBySessionIdSteerQueueErrors];
@@ -11335,15 +12462,15 @@ export type PostBotsByBotIdSessionsBySessionIdSteerQueueErrors = {
     /**
      * Bad Request
      */
-    400: ApperrorProblem;
+    400: ServerProblem;
     /**
      * Forbidden
      */
-    403: ApperrorProblem;
+    403: ServerProblem;
     /**
      * Conflict
      */
-    409: ApperrorProblem;
+    409: ServerProblem;
 };
 
 export type PostBotsByBotIdSessionsBySessionIdSteerQueueError = PostBotsByBotIdSessionsBySessionIdSteerQueueErrors[keyof PostBotsByBotIdSessionsBySessionIdSteerQueueErrors];
@@ -11380,15 +12507,15 @@ export type PutBotsByBotIdSessionsBySessionIdSteerQueueReorderErrors = {
     /**
      * Bad Request
      */
-    400: ApperrorProblem;
+    400: ServerProblem;
     /**
      * Forbidden
      */
-    403: ApperrorProblem;
+    403: ServerProblem;
     /**
      * Conflict
      */
-    409: ApperrorProblem;
+    409: ServerProblem;
 };
 
 export type PutBotsByBotIdSessionsBySessionIdSteerQueueReorderError = PutBotsByBotIdSessionsBySessionIdSteerQueueReorderErrors[keyof PutBotsByBotIdSessionsBySessionIdSteerQueueReorderErrors];
@@ -11426,15 +12553,15 @@ export type DeleteBotsByBotIdSessionsBySessionIdSteerQueueByItemIdErrors = {
     /**
      * Bad Request
      */
-    400: ApperrorProblem;
+    400: ServerProblem;
     /**
      * Forbidden
      */
-    403: ApperrorProblem;
+    403: ServerProblem;
     /**
      * Conflict
      */
-    409: ApperrorProblem;
+    409: ServerProblem;
 };
 
 export type DeleteBotsByBotIdSessionsBySessionIdSteerQueueByItemIdError = DeleteBotsByBotIdSessionsBySessionIdSteerQueueByItemIdErrors[keyof DeleteBotsByBotIdSessionsBySessionIdSteerQueueByItemIdErrors];
@@ -11473,15 +12600,15 @@ export type PatchBotsByBotIdSessionsBySessionIdSteerQueueByItemIdErrors = {
     /**
      * Bad Request
      */
-    400: ApperrorProblem;
+    400: ServerProblem;
     /**
      * Forbidden
      */
-    403: ApperrorProblem;
+    403: ServerProblem;
     /**
      * Conflict
      */
-    409: ApperrorProblem;
+    409: ServerProblem;
 };
 
 export type PatchBotsByBotIdSessionsBySessionIdSteerQueueByItemIdError = PatchBotsByBotIdSessionsBySessionIdSteerQueueByItemIdErrors[keyof PatchBotsByBotIdSessionsBySessionIdSteerQueueByItemIdErrors];
@@ -11511,11 +12638,11 @@ export type DeleteBotsByBotIdSettingsErrors = {
     /**
      * Bad Request
      */
-    400: HandlersErrorResponse;
+    400: ServerProblem;
     /**
      * Internal Server Error
      */
-    500: HandlersErrorResponse;
+    500: ServerProblem;
 };
 
 export type DeleteBotsByBotIdSettingsError = DeleteBotsByBotIdSettingsErrors[keyof DeleteBotsByBotIdSettingsErrors];
@@ -11543,11 +12670,11 @@ export type GetBotsByBotIdSettingsErrors = {
     /**
      * Bad Request
      */
-    400: HandlersErrorResponse;
+    400: ServerProblem;
     /**
      * Internal Server Error
      */
-    500: HandlersErrorResponse;
+    500: ServerProblem;
 };
 
 export type GetBotsByBotIdSettingsError = GetBotsByBotIdSettingsErrors[keyof GetBotsByBotIdSettingsErrors];
@@ -11580,15 +12707,15 @@ export type PostBotsByBotIdSettingsErrors = {
     /**
      * Bad Request
      */
-    400: ApperrorProblem;
+    400: ServerProblem;
     /**
      * Internal Server Error
      */
-    500: HandlersErrorResponse;
+    500: ServerProblem;
     /**
      * Service Unavailable
      */
-    503: ApperrorProblem;
+    503: ServerProblem;
 };
 
 export type PostBotsByBotIdSettingsError = PostBotsByBotIdSettingsErrors[keyof PostBotsByBotIdSettingsErrors];
@@ -11621,15 +12748,15 @@ export type PutBotsByBotIdSettingsErrors = {
     /**
      * Bad Request
      */
-    400: ApperrorProblem;
+    400: ServerProblem;
     /**
      * Internal Server Error
      */
-    500: HandlersErrorResponse;
+    500: ServerProblem;
     /**
      * Service Unavailable
      */
-    503: ApperrorProblem;
+    503: ServerProblem;
 };
 
 export type PutBotsByBotIdSettingsError = PutBotsByBotIdSettingsErrors[keyof PutBotsByBotIdSettingsErrors];
@@ -11659,19 +12786,19 @@ export type GetBotsByBotIdSkillsCatalogErrors = {
     /**
      * Bad Request
      */
-    400: HandlersErrorResponse;
+    400: ServerProblem;
     /**
      * Forbidden
      */
-    403: HandlersErrorResponse;
+    403: ServerProblem;
     /**
      * Not Found
      */
-    404: HandlersErrorResponse;
+    404: ServerProblem;
     /**
      * Internal Server Error
      */
-    500: HandlersErrorResponse;
+    500: ServerProblem;
 };
 
 export type GetBotsByBotIdSkillsCatalogError = GetBotsByBotIdSkillsCatalogErrors[keyof GetBotsByBotIdSkillsCatalogErrors];
@@ -11685,56 +12812,7 @@ export type GetBotsByBotIdSkillsCatalogResponses = {
 
 export type GetBotsByBotIdSkillsCatalogResponse = GetBotsByBotIdSkillsCatalogResponses[keyof GetBotsByBotIdSkillsCatalogResponses];
 
-export type PostBotsByBotIdSupermarketInstallPackageData = {
-    /**
-     * Install Package request
-     */
-    body: HandlersInstallPackageRequest;
-    path: {
-        /**
-         * Bot ID
-         */
-        bot_id: string;
-    };
-    query?: never;
-    url: '/bots/{bot_id}/supermarket/install-package';
-};
-
-export type PostBotsByBotIdSupermarketInstallPackageErrors = {
-    /**
-     * Bad Request
-     */
-    400: HandlersErrorResponse;
-    /**
-     * Not Found
-     */
-    404: ApperrorProblem;
-    /**
-     * Conflict
-     */
-    409: ApperrorProblem;
-    /**
-     * Internal Server Error
-     */
-    500: ApperrorProblem;
-    /**
-     * Bad Gateway
-     */
-    502: ApperrorProblem;
-};
-
-export type PostBotsByBotIdSupermarketInstallPackageError = PostBotsByBotIdSupermarketInstallPackageErrors[keyof PostBotsByBotIdSupermarketInstallPackageErrors];
-
-export type PostBotsByBotIdSupermarketInstallPackageResponses = {
-    /**
-     * OK
-     */
-    200: HandlersInstallRegistryPackageResponse;
-};
-
-export type PostBotsByBotIdSupermarketInstallPackageResponse = PostBotsByBotIdSupermarketInstallPackageResponses[keyof PostBotsByBotIdSupermarketInstallPackageResponses];
-
-export type GetBotsByBotIdSupermarketPackagesData = {
+export type GetBotsByBotIdStarterPromptsData = {
     body?: never;
     path: {
         /**
@@ -11744,64 +12822,83 @@ export type GetBotsByBotIdSupermarketPackagesData = {
     };
     query?: {
         /**
-         * Workspace target ID
+         * BCP 47 language tag the suggestions are written in. Defaults to en.
          */
-        workspace_target_id?: string;
+        locale?: string;
+        /**
+         * Hash of the set the client already holds.
+         */
+        known_hash?: string;
     };
-    url: '/bots/{bot_id}/supermarket/packages';
+    url: '/bots/{bot_id}/starter-prompts';
 };
 
-export type GetBotsByBotIdSupermarketPackagesErrors = {
+export type GetBotsByBotIdStarterPromptsErrors = {
+    /**
+     * Bad Request
+     */
+    400: ServerProblem;
+    /**
+     * Forbidden
+     */
+    403: ServerProblem;
     /**
      * Internal Server Error
      */
-    500: HandlersErrorResponse;
+    500: ServerProblem;
 };
 
-export type GetBotsByBotIdSupermarketPackagesError = GetBotsByBotIdSupermarketPackagesErrors[keyof GetBotsByBotIdSupermarketPackagesErrors];
+export type GetBotsByBotIdStarterPromptsError = GetBotsByBotIdStarterPromptsErrors[keyof GetBotsByBotIdStarterPromptsErrors];
 
-export type GetBotsByBotIdSupermarketPackagesResponses = {
+export type GetBotsByBotIdStarterPromptsResponses = {
     /**
      * OK
      */
-    200: Array<SkillpackagesInstallation>;
+    200: HandlersStarterPromptsResponse;
 };
 
-export type GetBotsByBotIdSupermarketPackagesResponse = GetBotsByBotIdSupermarketPackagesResponses[keyof GetBotsByBotIdSupermarketPackagesResponses];
+export type GetBotsByBotIdStarterPromptsResponse = GetBotsByBotIdStarterPromptsResponses[keyof GetBotsByBotIdStarterPromptsResponses];
 
-export type DeleteBotsByBotIdSupermarketPackagesByInstallationIdData = {
-    body?: never;
+export type PostBotsByBotIdStarterPromptsRefreshData = {
+    /**
+     * Locale and the prompts on screen
+     */
+    body: HandlersStarterPromptsRefreshRequest;
     path: {
         /**
          * Bot ID
          */
         bot_id: string;
-        /**
-         * Package installation ID
-         */
-        installation_id: string;
     };
     query?: never;
-    url: '/bots/{bot_id}/supermarket/packages/{installation_id}';
+    url: '/bots/{bot_id}/starter-prompts/refresh';
 };
 
-export type DeleteBotsByBotIdSupermarketPackagesByInstallationIdErrors = {
+export type PostBotsByBotIdStarterPromptsRefreshErrors = {
     /**
-     * Not Found
+     * Bad Request
      */
-    404: HandlersErrorResponse;
+    400: ServerProblem;
+    /**
+     * Forbidden
+     */
+    403: ServerProblem;
+    /**
+     * Internal Server Error
+     */
+    500: ServerProblem;
 };
 
-export type DeleteBotsByBotIdSupermarketPackagesByInstallationIdError = DeleteBotsByBotIdSupermarketPackagesByInstallationIdErrors[keyof DeleteBotsByBotIdSupermarketPackagesByInstallationIdErrors];
+export type PostBotsByBotIdStarterPromptsRefreshError = PostBotsByBotIdStarterPromptsRefreshErrors[keyof PostBotsByBotIdStarterPromptsRefreshErrors];
 
-export type DeleteBotsByBotIdSupermarketPackagesByInstallationIdResponses = {
+export type PostBotsByBotIdStarterPromptsRefreshResponses = {
     /**
      * OK
      */
-    200: SupermarketUninstallPackageResponse;
+    200: HandlersStarterPromptsResponse;
 };
 
-export type DeleteBotsByBotIdSupermarketPackagesByInstallationIdResponse = DeleteBotsByBotIdSupermarketPackagesByInstallationIdResponses[keyof DeleteBotsByBotIdSupermarketPackagesByInstallationIdResponses];
+export type PostBotsByBotIdStarterPromptsRefreshResponse = PostBotsByBotIdStarterPromptsRefreshResponses[keyof PostBotsByBotIdStarterPromptsRefreshResponses];
 
 export type GetBotsByBotIdTokenUsageData = {
     body?: never;
@@ -11825,7 +12922,7 @@ export type GetBotsByBotIdTokenUsageData = {
          */
         model_id?: string;
         /**
-         * Optional session type: chat, discuss, schedule, or acp_agent. acp_agent filters by runtime.
+         * Optional session type: chat, discuss, schedule, acp_agent, or memory. acp_agent filters by runtime; memory selects memory LLM calls.
          */
         session_type?: string;
     };
@@ -11836,15 +12933,15 @@ export type GetBotsByBotIdTokenUsageErrors = {
     /**
      * Bad Request
      */
-    400: HandlersErrorResponse;
+    400: ServerProblem;
     /**
      * Forbidden
      */
-    403: HandlersErrorResponse;
+    403: ServerProblem;
     /**
      * Internal Server Error
      */
-    500: HandlersErrorResponse;
+    500: ServerProblem;
 };
 
 export type GetBotsByBotIdTokenUsageError = GetBotsByBotIdTokenUsageErrors[keyof GetBotsByBotIdTokenUsageErrors];
@@ -11880,7 +12977,7 @@ export type GetBotsByBotIdTokenUsageRecordsData = {
          */
         model_id?: string;
         /**
-         * Optional session type: chat, discuss, schedule, or acp_agent. acp_agent filters by runtime.
+         * Optional session type: chat, discuss, schedule, acp_agent, or memory. acp_agent filters by runtime; memory selects memory LLM calls.
          */
         session_type?: string;
         /**
@@ -11899,15 +12996,15 @@ export type GetBotsByBotIdTokenUsageRecordsErrors = {
     /**
      * Bad Request
      */
-    400: HandlersErrorResponse;
+    400: ServerProblem;
     /**
      * Forbidden
      */
-    403: HandlersErrorResponse;
+    403: ServerProblem;
     /**
      * Internal Server Error
      */
-    500: HandlersErrorResponse;
+    500: ServerProblem;
 };
 
 export type GetBotsByBotIdTokenUsageRecordsError = GetBotsByBotIdTokenUsageRecordsErrors[keyof GetBotsByBotIdTokenUsageRecordsErrors];
@@ -11944,23 +13041,23 @@ export type PostBotsByBotIdToolApprovalsByApprovalIdApproveErrors = {
     /**
      * Bad Request
      */
-    400: ApperrorProblem;
+    400: ServerProblem;
     /**
      * Forbidden
      */
-    403: ApperrorProblem;
+    403: ServerProblem;
     /**
      * Not Found
      */
-    404: ApperrorProblem;
+    404: ServerProblem;
     /**
      * Conflict
      */
-    409: ApperrorProblem;
+    409: ServerProblem;
     /**
      * Internal Server Error
      */
-    500: ApperrorProblem;
+    500: ServerProblem;
 };
 
 export type PostBotsByBotIdToolApprovalsByApprovalIdApproveError = PostBotsByBotIdToolApprovalsByApprovalIdApproveErrors[keyof PostBotsByBotIdToolApprovalsByApprovalIdApproveErrors];
@@ -11999,23 +13096,23 @@ export type PostBotsByBotIdToolApprovalsByApprovalIdRejectErrors = {
     /**
      * Bad Request
      */
-    400: ApperrorProblem;
+    400: ServerProblem;
     /**
      * Forbidden
      */
-    403: ApperrorProblem;
+    403: ServerProblem;
     /**
      * Not Found
      */
-    404: ApperrorProblem;
+    404: ServerProblem;
     /**
      * Conflict
      */
-    409: ApperrorProblem;
+    409: ServerProblem;
     /**
      * Internal Server Error
      */
-    500: ApperrorProblem;
+    500: ServerProblem;
 };
 
 export type PostBotsByBotIdToolApprovalsByApprovalIdRejectError = PostBotsByBotIdToolApprovalsByApprovalIdRejectErrors[keyof PostBotsByBotIdToolApprovalsByApprovalIdRejectErrors];
@@ -12052,15 +13149,15 @@ export type PostBotsByBotIdToolsErrors = {
     /**
      * Bad Request
      */
-    400: HandlersErrorResponse;
+    400: ServerProblem;
     /**
      * Not Found
      */
-    404: HandlersErrorResponse;
+    404: ServerProblem;
     /**
      * Internal Server Error
      */
-    500: HandlersErrorResponse;
+    500: ServerProblem;
 };
 
 export type PostBotsByBotIdToolsError = PostBotsByBotIdToolsErrors[keyof PostBotsByBotIdToolsErrors];
@@ -12095,11 +13192,11 @@ export type PostBotsByBotIdTtsSynthesizeErrors = {
     /**
      * Bad Request
      */
-    400: HandlersErrorResponse;
+    400: ServerProblem;
     /**
      * Internal Server Error
      */
-    500: HandlersErrorResponse;
+    500: ServerProblem;
 };
 
 export type PostBotsByBotIdTtsSynthesizeError = PostBotsByBotIdTtsSynthesizeErrors[keyof PostBotsByBotIdTtsSynthesizeErrors];
@@ -12129,15 +13226,15 @@ export type GetBotsByBotIdUserAccessErrors = {
     /**
      * Bad Request
      */
-    400: HandlersErrorResponse;
+    400: ServerProblem;
     /**
      * Forbidden
      */
-    403: HandlersErrorResponse;
+    403: ServerProblem;
     /**
      * Internal Server Error
      */
-    500: HandlersErrorResponse;
+    500: ServerProblem;
 };
 
 export type GetBotsByBotIdUserAccessError = GetBotsByBotIdUserAccessErrors[keyof GetBotsByBotIdUserAccessErrors];
@@ -12170,19 +13267,19 @@ export type PostBotsByBotIdUserAccessErrors = {
     /**
      * Bad Request
      */
-    400: HandlersErrorResponse;
+    400: ServerProblem;
     /**
      * Forbidden
      */
-    403: HandlersErrorResponse;
+    403: ServerProblem;
     /**
      * Conflict
      */
-    409: HandlersErrorResponse;
+    409: ServerProblem;
     /**
      * Internal Server Error
      */
-    500: HandlersErrorResponse;
+    500: ServerProblem;
 };
 
 export type PostBotsByBotIdUserAccessError = PostBotsByBotIdUserAccessErrors[keyof PostBotsByBotIdUserAccessErrors];
@@ -12221,15 +13318,15 @@ export type GetBotsByBotIdUserAccessCandidatesErrors = {
     /**
      * Bad Request
      */
-    400: HandlersErrorResponse;
+    400: ServerProblem;
     /**
      * Forbidden
      */
-    403: HandlersErrorResponse;
+    403: ServerProblem;
     /**
      * Internal Server Error
      */
-    500: HandlersErrorResponse;
+    500: ServerProblem;
 };
 
 export type GetBotsByBotIdUserAccessCandidatesError = GetBotsByBotIdUserAccessCandidatesErrors[keyof GetBotsByBotIdUserAccessCandidatesErrors];
@@ -12263,19 +13360,19 @@ export type DeleteBotsByBotIdUserAccessByGrantIdErrors = {
     /**
      * Bad Request
      */
-    400: HandlersErrorResponse;
+    400: ServerProblem;
     /**
      * Forbidden
      */
-    403: HandlersErrorResponse;
+    403: ServerProblem;
     /**
      * Not Found
      */
-    404: HandlersErrorResponse;
+    404: ServerProblem;
     /**
      * Internal Server Error
      */
-    500: HandlersErrorResponse;
+    500: ServerProblem;
 };
 
 export type DeleteBotsByBotIdUserAccessByGrantIdError = DeleteBotsByBotIdUserAccessByGrantIdErrors[keyof DeleteBotsByBotIdUserAccessByGrantIdErrors];
@@ -12310,19 +13407,19 @@ export type PutBotsByBotIdUserAccessByGrantIdErrors = {
     /**
      * Bad Request
      */
-    400: HandlersErrorResponse;
+    400: ServerProblem;
     /**
      * Forbidden
      */
-    403: HandlersErrorResponse;
+    403: ServerProblem;
     /**
      * Not Found
      */
-    404: HandlersErrorResponse;
+    404: ServerProblem;
     /**
      * Internal Server Error
      */
-    500: HandlersErrorResponse;
+    500: ServerProblem;
 };
 
 export type PutBotsByBotIdUserAccessByGrantIdError = PutBotsByBotIdUserAccessByGrantIdErrors[keyof PutBotsByBotIdUserAccessByGrantIdErrors];
@@ -12355,15 +13452,15 @@ export type PostBotsByBotIdWebMessagesErrors = {
     /**
      * Bad Request
      */
-    400: HandlersErrorResponse;
+    400: ServerProblem;
     /**
      * Forbidden
      */
-    403: HandlersErrorResponse;
+    403: ServerProblem;
     /**
      * Internal Server Error
      */
-    500: HandlersErrorResponse;
+    500: ServerProblem;
 };
 
 export type PostBotsByBotIdWebMessagesError = PostBotsByBotIdWebMessagesErrors[keyof PostBotsByBotIdWebMessagesErrors];
@@ -12395,15 +13492,15 @@ export type GetBotsByBotIdWebStreamErrors = {
     /**
      * Bad Request
      */
-    400: HandlersErrorResponse;
+    400: ServerProblem;
     /**
      * Forbidden
      */
-    403: HandlersErrorResponse;
+    403: ServerProblem;
     /**
      * Internal Server Error
      */
-    500: HandlersErrorResponse;
+    500: ServerProblem;
 };
 
 export type GetBotsByBotIdWebStreamError = GetBotsByBotIdWebStreamErrors[keyof GetBotsByBotIdWebStreamErrors];
@@ -12433,15 +13530,15 @@ export type GetBotsByBotIdWebWsErrors = {
     /**
      * Bad Request
      */
-    400: HandlersErrorResponse;
+    400: ServerProblem;
     /**
      * Forbidden
      */
-    403: HandlersErrorResponse;
+    403: ServerProblem;
     /**
      * Internal Server Error
      */
-    500: HandlersErrorResponse;
+    500: ServerProblem;
 };
 
 export type GetBotsByBotIdWebWsError = GetBotsByBotIdWebWsErrors[keyof GetBotsByBotIdWebWsErrors];
@@ -12467,11 +13564,11 @@ export type GetBotsByBotIdWorkdirsErrors = {
     /**
      * Forbidden
      */
-    403: HandlersErrorResponse;
+    403: ServerProblem;
     /**
      * Internal Server Error
      */
-    500: HandlersErrorResponse;
+    500: ServerProblem;
 };
 
 export type GetBotsByBotIdWorkdirsError = GetBotsByBotIdWorkdirsErrors[keyof GetBotsByBotIdWorkdirsErrors];
@@ -12504,19 +13601,19 @@ export type PostBotsByBotIdWorkdirsErrors = {
     /**
      * Bad Request
      */
-    400: HandlersErrorResponse;
+    400: ServerProblem;
     /**
      * Forbidden
      */
-    403: HandlersErrorResponse;
+    403: ServerProblem;
     /**
      * Not Found
      */
-    404: HandlersErrorResponse;
+    404: ServerProblem;
     /**
      * Conflict
      */
-    409: HandlersErrorResponse;
+    409: ServerProblem;
 };
 
 export type PostBotsByBotIdWorkdirsError = PostBotsByBotIdWorkdirsErrors[keyof PostBotsByBotIdWorkdirsErrors];
@@ -12529,6 +13626,61 @@ export type PostBotsByBotIdWorkdirsResponses = {
 };
 
 export type PostBotsByBotIdWorkdirsResponse = PostBotsByBotIdWorkdirsResponses[keyof PostBotsByBotIdWorkdirsResponses];
+
+export type GetBotsByBotIdWorkdirsDirectoriesData = {
+    body?: never;
+    path: {
+        /**
+         * Bot ID
+         */
+        bot_id: string;
+    };
+    query?: {
+        /**
+         * Workspace target ID; defaults to the native workspace
+         */
+        workspace_target_id?: string;
+        /**
+         * Absolute directory path on that target
+         */
+        path?: string;
+    };
+    url: '/bots/{bot_id}/workdirs/directories';
+};
+
+export type GetBotsByBotIdWorkdirsDirectoriesErrors = {
+    /**
+     * Bad Request
+     */
+    400: ServerProblem;
+    /**
+     * Forbidden
+     */
+    403: ServerProblem;
+    /**
+     * Not Found
+     */
+    404: ServerProblem;
+    /**
+     * Conflict
+     */
+    409: ServerProblem;
+    /**
+     * Service Unavailable
+     */
+    503: ServerProblem;
+};
+
+export type GetBotsByBotIdWorkdirsDirectoriesError = GetBotsByBotIdWorkdirsDirectoriesErrors[keyof GetBotsByBotIdWorkdirsDirectoriesErrors];
+
+export type GetBotsByBotIdWorkdirsDirectoriesResponses = {
+    /**
+     * OK
+     */
+    200: WorkdirDirectoriesResponse;
+};
+
+export type GetBotsByBotIdWorkdirsDirectoriesResponse = GetBotsByBotIdWorkdirsDirectoriesResponses[keyof GetBotsByBotIdWorkdirsDirectoriesResponses];
 
 export type DeleteBotsByBotIdWorkdirsByWorkdirIdData = {
     body?: never;
@@ -12550,11 +13702,11 @@ export type DeleteBotsByBotIdWorkdirsByWorkdirIdErrors = {
     /**
      * Forbidden
      */
-    403: HandlersErrorResponse;
+    403: ServerProblem;
     /**
      * Not Found
      */
-    404: HandlersErrorResponse;
+    404: ServerProblem;
 };
 
 export type DeleteBotsByBotIdWorkdirsByWorkdirIdError = DeleteBotsByBotIdWorkdirsByWorkdirIdErrors[keyof DeleteBotsByBotIdWorkdirsByWorkdirIdErrors];
@@ -12589,15 +13741,15 @@ export type PatchBotsByBotIdWorkdirsByWorkdirIdErrors = {
     /**
      * Bad Request
      */
-    400: HandlersErrorResponse;
+    400: ServerProblem;
     /**
      * Forbidden
      */
-    403: HandlersErrorResponse;
+    403: ServerProblem;
     /**
      * Not Found
      */
-    404: HandlersErrorResponse;
+    404: ServerProblem;
 };
 
 export type PatchBotsByBotIdWorkdirsByWorkdirIdError = PatchBotsByBotIdWorkdirsByWorkdirIdErrors[keyof PatchBotsByBotIdWorkdirsByWorkdirIdErrors];
@@ -12610,6 +13762,97 @@ export type PatchBotsByBotIdWorkdirsByWorkdirIdResponses = {
 };
 
 export type PatchBotsByBotIdWorkdirsByWorkdirIdResponse = PatchBotsByBotIdWorkdirsByWorkdirIdResponses[keyof PatchBotsByBotIdWorkdirsByWorkdirIdResponses];
+
+export type GetBotsByBotIdWorkdirsByWorkdirIdGitBranchData = {
+    body?: never;
+    path: {
+        /**
+         * Bot ID
+         */
+        bot_id: string;
+        /**
+         * Workdir ID
+         */
+        workdir_id: string;
+    };
+    query?: never;
+    url: '/bots/{bot_id}/workdirs/{workdir_id}/git-branch';
+};
+
+export type GetBotsByBotIdWorkdirsByWorkdirIdGitBranchErrors = {
+    /**
+     * Forbidden
+     */
+    403: ServerProblem;
+    /**
+     * Not Found
+     */
+    404: ServerProblem;
+    /**
+     * Internal Server Error
+     */
+    500: ServerProblem;
+};
+
+export type GetBotsByBotIdWorkdirsByWorkdirIdGitBranchError = GetBotsByBotIdWorkdirsByWorkdirIdGitBranchErrors[keyof GetBotsByBotIdWorkdirsByWorkdirIdGitBranchErrors];
+
+export type GetBotsByBotIdWorkdirsByWorkdirIdGitBranchResponses = {
+    /**
+     * OK
+     */
+    200: WorkdirGitBranchResponse;
+};
+
+export type GetBotsByBotIdWorkdirsByWorkdirIdGitBranchResponse = GetBotsByBotIdWorkdirsByWorkdirIdGitBranchResponses[keyof GetBotsByBotIdWorkdirsByWorkdirIdGitBranchResponses];
+
+export type PostBotsByBotIdWorkdirsByWorkdirIdGitBranchData = {
+    /**
+     * Local branch
+     */
+    body: WorkdirSwitchGitBranchRequest;
+    path: {
+        /**
+         * Bot ID
+         */
+        bot_id: string;
+        /**
+         * Workdir ID
+         */
+        workdir_id: string;
+    };
+    query?: never;
+    url: '/bots/{bot_id}/workdirs/{workdir_id}/git-branch';
+};
+
+export type PostBotsByBotIdWorkdirsByWorkdirIdGitBranchErrors = {
+    /**
+     * Bad Request
+     */
+    400: ServerProblem;
+    /**
+     * Forbidden
+     */
+    403: ServerProblem;
+    /**
+     * Conflict
+     */
+    409: ServerProblem;
+    /**
+     * Internal Server Error
+     */
+    500: ServerProblem;
+};
+
+export type PostBotsByBotIdWorkdirsByWorkdirIdGitBranchError = PostBotsByBotIdWorkdirsByWorkdirIdGitBranchErrors[keyof PostBotsByBotIdWorkdirsByWorkdirIdGitBranchErrors];
+
+export type PostBotsByBotIdWorkdirsByWorkdirIdGitBranchResponses = {
+    /**
+     * OK
+     */
+    200: WorkdirGitBranchResponse;
+};
+
+export type PostBotsByBotIdWorkdirsByWorkdirIdGitBranchResponse = PostBotsByBotIdWorkdirsByWorkdirIdGitBranchResponses[keyof PostBotsByBotIdWorkdirsByWorkdirIdGitBranchResponses];
 
 export type GetBotsByBotIdWorkspaceTargetsData = {
     body?: never;
@@ -12627,11 +13870,11 @@ export type GetBotsByBotIdWorkspaceTargetsErrors = {
     /**
      * Forbidden
      */
-    403: HandlersErrorResponse;
+    403: ServerProblem;
     /**
      * Internal Server Error
      */
-    500: HandlersErrorResponse;
+    500: ServerProblem;
 };
 
 export type GetBotsByBotIdWorkspaceTargetsError = GetBotsByBotIdWorkspaceTargetsErrors[keyof GetBotsByBotIdWorkspaceTargetsErrors];
@@ -12664,15 +13907,15 @@ export type PutBotsByBotIdWorkspaceTargetsPrimaryErrors = {
     /**
      * Bad Request
      */
-    400: HandlersErrorResponse;
+    400: ServerProblem;
     /**
      * Forbidden
      */
-    403: HandlersErrorResponse;
+    403: ServerProblem;
     /**
      * Not Found
      */
-    404: HandlersErrorResponse;
+    404: ServerProblem;
 };
 
 export type PutBotsByBotIdWorkspaceTargetsPrimaryError = PutBotsByBotIdWorkspaceTargetsPrimaryErrors[keyof PutBotsByBotIdWorkspaceTargetsPrimaryErrors];
@@ -12704,15 +13947,15 @@ export type PutBotsByBotIdWorkspaceTargetsRemotesByRuntimeIdErrors = {
     /**
      * Bad Request
      */
-    400: HandlersErrorResponse;
+    400: ServerProblem;
     /**
      * Forbidden
      */
-    403: HandlersErrorResponse;
+    403: ServerProblem;
     /**
      * Not Found
      */
-    404: HandlersErrorResponse;
+    404: ServerProblem;
 };
 
 export type PutBotsByBotIdWorkspaceTargetsRemotesByRuntimeIdError = PutBotsByBotIdWorkspaceTargetsRemotesByRuntimeIdErrors[keyof PutBotsByBotIdWorkspaceTargetsRemotesByRuntimeIdErrors];
@@ -12746,15 +13989,15 @@ export type DeleteBotsByBotIdWorkspaceTargetsByTargetIdErrors = {
     /**
      * Bad Request
      */
-    400: HandlersErrorResponse;
+    400: ServerProblem;
     /**
      * Forbidden
      */
-    403: HandlersErrorResponse;
+    403: ServerProblem;
     /**
      * Not Found
      */
-    404: HandlersErrorResponse;
+    404: ServerProblem;
 };
 
 export type DeleteBotsByBotIdWorkspaceTargetsByTargetIdError = DeleteBotsByBotIdWorkspaceTargetsByTargetIdErrors[keyof DeleteBotsByBotIdWorkspaceTargetsByTargetIdErrors];
@@ -12789,15 +14032,15 @@ export type PutBotsByBotIdWorkspaceTargetsByTargetIdToolApprovalErrors = {
     /**
      * Bad Request
      */
-    400: HandlersErrorResponse;
+    400: ServerProblem;
     /**
      * Forbidden
      */
-    403: HandlersErrorResponse;
+    403: ServerProblem;
     /**
      * Not Found
      */
-    404: HandlersErrorResponse;
+    404: ServerProblem;
 };
 
 export type PutBotsByBotIdWorkspaceTargetsByTargetIdToolApprovalError = PutBotsByBotIdWorkspaceTargetsByTargetIdToolApprovalErrors[keyof PutBotsByBotIdWorkspaceTargetsByTargetIdToolApprovalErrors];
@@ -12825,19 +14068,19 @@ export type DeleteBotsByIdErrors = {
     /**
      * Bad Request
      */
-    400: HandlersErrorResponse;
+    400: ServerProblem;
     /**
      * Forbidden
      */
-    403: HandlersErrorResponse;
+    403: ServerProblem;
     /**
      * Not Found
      */
-    404: HandlersErrorResponse;
+    404: ServerProblem;
     /**
      * Internal Server Error
      */
-    500: HandlersErrorResponse;
+    500: ServerProblem;
 };
 
 export type DeleteBotsByIdError = DeleteBotsByIdErrors[keyof DeleteBotsByIdErrors];
@@ -12869,19 +14112,19 @@ export type GetBotsByIdErrors = {
     /**
      * Bad Request
      */
-    400: HandlersErrorResponse;
+    400: ServerProblem;
     /**
      * Forbidden
      */
-    403: HandlersErrorResponse;
+    403: ServerProblem;
     /**
      * Not Found
      */
-    404: HandlersErrorResponse;
+    404: ServerProblem;
     /**
      * Internal Server Error
      */
-    500: HandlersErrorResponse;
+    500: ServerProblem;
 };
 
 export type GetBotsByIdError = GetBotsByIdErrors[keyof GetBotsByIdErrors];
@@ -12914,23 +14157,23 @@ export type PutBotsByIdErrors = {
     /**
      * Bad Request
      */
-    400: HandlersErrorResponse;
+    400: ServerProblem;
     /**
      * Forbidden
      */
-    403: HandlersErrorResponse;
+    403: ServerProblem;
     /**
      * Not Found
      */
-    404: HandlersErrorResponse;
+    404: ServerProblem;
     /**
      * Conflict
      */
-    409: ApperrorProblem;
+    409: ServerProblem;
     /**
      * Internal Server Error
      */
-    500: HandlersErrorResponse;
+    500: ServerProblem;
 };
 
 export type PutBotsByIdError = PutBotsByIdErrors[keyof PutBotsByIdErrors];
@@ -12964,19 +14207,19 @@ export type DeleteBotsByIdChannelByPlatformErrors = {
     /**
      * Bad Request
      */
-    400: HandlersErrorResponse;
+    400: ServerProblem;
     /**
      * Forbidden
      */
-    403: HandlersErrorResponse;
+    403: ServerProblem;
     /**
      * Internal Server Error
      */
-    500: HandlersErrorResponse;
+    500: ServerProblem;
     /**
      * Service Unavailable
      */
-    503: ApperrorProblem;
+    503: ServerProblem;
 };
 
 export type DeleteBotsByIdChannelByPlatformError = DeleteBotsByIdChannelByPlatformErrors[keyof DeleteBotsByIdChannelByPlatformErrors];
@@ -13008,19 +14251,19 @@ export type GetBotsByIdChannelByPlatformErrors = {
     /**
      * Bad Request
      */
-    400: HandlersErrorResponse;
+    400: ServerProblem;
     /**
      * Forbidden
      */
-    403: HandlersErrorResponse;
+    403: ServerProblem;
     /**
      * Not Found
      */
-    404: HandlersErrorResponse;
+    404: ServerProblem;
     /**
      * Internal Server Error
      */
-    500: HandlersErrorResponse;
+    500: ServerProblem;
 };
 
 export type GetBotsByIdChannelByPlatformError = GetBotsByIdChannelByPlatformErrors[keyof GetBotsByIdChannelByPlatformErrors];
@@ -13057,27 +14300,27 @@ export type PutBotsByIdChannelByPlatformErrors = {
     /**
      * Bad Request
      */
-    400: HandlersErrorResponse;
+    400: ServerProblem;
     /**
      * Forbidden
      */
-    403: HandlersErrorResponse;
+    403: ServerProblem;
     /**
      * Not Found
      */
-    404: HandlersErrorResponse;
+    404: ServerProblem;
     /**
      * Internal Server Error
      */
-    500: HandlersErrorResponse;
+    500: ServerProblem;
     /**
      * Bad Gateway
      */
-    502: HandlersErrorResponse;
+    502: ServerProblem;
     /**
      * Service Unavailable
      */
-    503: ApperrorProblem;
+    503: ServerProblem;
 };
 
 export type PutBotsByIdChannelByPlatformError = PutBotsByIdChannelByPlatformErrors[keyof PutBotsByIdChannelByPlatformErrors];
@@ -13114,23 +14357,23 @@ export type PostBotsByIdChannelByPlatformSendErrors = {
     /**
      * Bad Request
      */
-    400: HandlersErrorResponse;
+    400: ServerProblem;
     /**
      * Forbidden
      */
-    403: HandlersErrorResponse;
+    403: ServerProblem;
     /**
      * Not Found
      */
-    404: HandlersErrorResponse;
+    404: ServerProblem;
     /**
      * Internal Server Error
      */
-    500: HandlersErrorResponse;
+    500: ServerProblem;
     /**
      * Service Unavailable
      */
-    503: ApperrorProblem;
+    503: ServerProblem;
 };
 
 export type PostBotsByIdChannelByPlatformSendError = PostBotsByIdChannelByPlatformSendErrors[keyof PostBotsByIdChannelByPlatformSendErrors];
@@ -13169,23 +14412,23 @@ export type PostBotsByIdChannelByPlatformSendChatErrors = {
     /**
      * Bad Request
      */
-    400: HandlersErrorResponse;
+    400: ServerProblem;
     /**
      * Unauthorized
      */
-    401: HandlersErrorResponse;
+    401: ServerProblem;
     /**
      * Forbidden
      */
-    403: HandlersErrorResponse;
+    403: ServerProblem;
     /**
      * Internal Server Error
      */
-    500: HandlersErrorResponse;
+    500: ServerProblem;
     /**
      * Service Unavailable
      */
-    503: ApperrorProblem;
+    503: ServerProblem;
 };
 
 export type PostBotsByIdChannelByPlatformSendChatError = PostBotsByIdChannelByPlatformSendChatErrors[keyof PostBotsByIdChannelByPlatformSendChatErrors];
@@ -13224,27 +14467,27 @@ export type PatchBotsByIdChannelByPlatformStatusErrors = {
     /**
      * Bad Request
      */
-    400: HandlersErrorResponse;
+    400: ServerProblem;
     /**
      * Forbidden
      */
-    403: HandlersErrorResponse;
+    403: ServerProblem;
     /**
      * Not Found
      */
-    404: HandlersErrorResponse;
+    404: ServerProblem;
     /**
      * Internal Server Error
      */
-    500: HandlersErrorResponse;
+    500: ServerProblem;
     /**
      * Bad Gateway
      */
-    502: HandlersErrorResponse;
+    502: ServerProblem;
     /**
      * Service Unavailable
      */
-    503: ApperrorProblem;
+    503: ServerProblem;
 };
 
 export type PatchBotsByIdChannelByPlatformStatusError = PatchBotsByIdChannelByPlatformStatusErrors[keyof PatchBotsByIdChannelByPlatformStatusErrors];
@@ -13281,23 +14524,23 @@ export type PostBotsByIdChannelByPlatformWebhookEndpointErrors = {
     /**
      * Bad Request
      */
-    400: HandlersErrorResponse;
+    400: ServerProblem;
     /**
      * Forbidden
      */
-    403: HandlersErrorResponse;
+    403: ServerProblem;
     /**
      * Not Found
      */
-    404: HandlersErrorResponse;
+    404: ServerProblem;
     /**
      * Bad Gateway
      */
-    502: HandlersErrorResponse;
+    502: ServerProblem;
     /**
      * Service Unavailable
      */
-    503: ApperrorProblem;
+    503: ServerProblem;
 };
 
 export type PostBotsByIdChannelByPlatformWebhookEndpointError = PostBotsByIdChannelByPlatformWebhookEndpointErrors[keyof PostBotsByIdChannelByPlatformWebhookEndpointErrors];
@@ -13327,19 +14570,19 @@ export type GetBotsByIdChecksErrors = {
     /**
      * Bad Request
      */
-    400: HandlersErrorResponse;
+    400: ServerProblem;
     /**
      * Forbidden
      */
-    403: HandlersErrorResponse;
+    403: ServerProblem;
     /**
      * Not Found
      */
-    404: HandlersErrorResponse;
+    404: ServerProblem;
     /**
      * Internal Server Error
      */
-    500: HandlersErrorResponse;
+    500: ServerProblem;
 };
 
 export type GetBotsByIdChecksError = GetBotsByIdChecksErrors[keyof GetBotsByIdChecksErrors];
@@ -13372,19 +14615,19 @@ export type PutBotsByIdOwnerErrors = {
     /**
      * Bad Request
      */
-    400: HandlersErrorResponse;
+    400: ServerProblem;
     /**
      * Forbidden
      */
-    403: HandlersErrorResponse;
+    403: ServerProblem;
     /**
      * Not Found
      */
-    404: HandlersErrorResponse;
+    404: ServerProblem;
     /**
      * Internal Server Error
      */
-    500: HandlersErrorResponse;
+    500: ServerProblem;
 };
 
 export type PutBotsByIdOwnerError = PutBotsByIdOwnerErrors[keyof PutBotsByIdOwnerErrors];
@@ -13409,7 +14652,7 @@ export type GetChannelsErrors = {
     /**
      * Internal Server Error
      */
-    500: HandlersErrorResponse;
+    500: ServerProblem;
 };
 
 export type GetChannelsError = GetChannelsErrors[keyof GetChannelsErrors];
@@ -13439,11 +14682,11 @@ export type GetChannelsByPlatformErrors = {
     /**
      * Bad Request
      */
-    400: HandlersErrorResponse;
+    400: ServerProblem;
     /**
      * Not Found
      */
-    404: HandlersErrorResponse;
+    404: ServerProblem;
 };
 
 export type GetChannelsByPlatformError = GetChannelsByPlatformErrors[keyof GetChannelsByPlatformErrors];
@@ -13468,15 +14711,15 @@ export type GetConnectorsCatalogErrors = {
     /**
      * Forbidden
      */
-    403: HandlersErrorResponse;
+    403: ServerProblem;
     /**
      * Bad Gateway
      */
-    502: ApperrorProblem;
+    502: ServerProblem;
     /**
      * Service Unavailable
      */
-    503: ApperrorProblem;
+    503: ServerProblem;
 };
 
 export type GetConnectorsCatalogError = GetConnectorsCatalogErrors[keyof GetConnectorsCatalogErrors];
@@ -13489,361 +14732,6 @@ export type GetConnectorsCatalogResponses = {
 };
 
 export type GetConnectorsCatalogResponse = GetConnectorsCatalogResponses[keyof GetConnectorsCatalogResponses];
-
-export type GetEmailProvidersData = {
-    body?: never;
-    path?: never;
-    query?: {
-        /**
-         * Provider type filter
-         */
-        provider?: string;
-    };
-    url: '/email-providers';
-};
-
-export type GetEmailProvidersErrors = {
-    /**
-     * Internal Server Error
-     */
-    500: HandlersErrorResponse;
-};
-
-export type GetEmailProvidersError = GetEmailProvidersErrors[keyof GetEmailProvidersErrors];
-
-export type GetEmailProvidersResponses = {
-    /**
-     * OK
-     */
-    200: Array<EmailProviderResponse>;
-};
-
-export type GetEmailProvidersResponse = GetEmailProvidersResponses[keyof GetEmailProvidersResponses];
-
-export type PostEmailProvidersData = {
-    /**
-     * Email provider configuration
-     */
-    body: EmailCreateProviderRequest;
-    path?: never;
-    query?: never;
-    url: '/email-providers';
-};
-
-export type PostEmailProvidersErrors = {
-    /**
-     * Bad Request
-     */
-    400: HandlersErrorResponse;
-    /**
-     * Internal Server Error
-     */
-    500: HandlersErrorResponse;
-};
-
-export type PostEmailProvidersError = PostEmailProvidersErrors[keyof PostEmailProvidersErrors];
-
-export type PostEmailProvidersResponses = {
-    /**
-     * Created
-     */
-    201: EmailProviderResponse;
-};
-
-export type PostEmailProvidersResponse = PostEmailProvidersResponses[keyof PostEmailProvidersResponses];
-
-export type GetEmailProvidersMetaData = {
-    body?: never;
-    path?: never;
-    query?: never;
-    url: '/email-providers/meta';
-};
-
-export type GetEmailProvidersMetaResponses = {
-    /**
-     * OK
-     */
-    200: Array<EmailProviderMeta>;
-};
-
-export type GetEmailProvidersMetaResponse = GetEmailProvidersMetaResponses[keyof GetEmailProvidersMetaResponses];
-
-export type DeleteEmailProvidersByIdData = {
-    body?: never;
-    path: {
-        /**
-         * Provider ID
-         */
-        id: string;
-    };
-    query?: never;
-    url: '/email-providers/{id}';
-};
-
-export type DeleteEmailProvidersByIdErrors = {
-    /**
-     * Internal Server Error
-     */
-    500: HandlersErrorResponse;
-};
-
-export type DeleteEmailProvidersByIdError = DeleteEmailProvidersByIdErrors[keyof DeleteEmailProvidersByIdErrors];
-
-export type DeleteEmailProvidersByIdResponses = {
-    /**
-     * No Content
-     */
-    204: unknown;
-};
-
-export type GetEmailProvidersByIdData = {
-    body?: never;
-    path: {
-        /**
-         * Provider ID
-         */
-        id: string;
-    };
-    query?: never;
-    url: '/email-providers/{id}';
-};
-
-export type GetEmailProvidersByIdErrors = {
-    /**
-     * Not Found
-     */
-    404: HandlersErrorResponse;
-};
-
-export type GetEmailProvidersByIdError = GetEmailProvidersByIdErrors[keyof GetEmailProvidersByIdErrors];
-
-export type GetEmailProvidersByIdResponses = {
-    /**
-     * OK
-     */
-    200: EmailProviderResponse;
-};
-
-export type GetEmailProvidersByIdResponse = GetEmailProvidersByIdResponses[keyof GetEmailProvidersByIdResponses];
-
-export type PutEmailProvidersByIdData = {
-    /**
-     * Updated configuration
-     */
-    body: EmailUpdateProviderRequest;
-    path: {
-        /**
-         * Provider ID
-         */
-        id: string;
-    };
-    query?: never;
-    url: '/email-providers/{id}';
-};
-
-export type PutEmailProvidersByIdErrors = {
-    /**
-     * Bad Request
-     */
-    400: HandlersErrorResponse;
-    /**
-     * Internal Server Error
-     */
-    500: HandlersErrorResponse;
-};
-
-export type PutEmailProvidersByIdError = PutEmailProvidersByIdErrors[keyof PutEmailProvidersByIdErrors];
-
-export type PutEmailProvidersByIdResponses = {
-    /**
-     * OK
-     */
-    200: EmailProviderResponse;
-};
-
-export type PutEmailProvidersByIdResponse = PutEmailProvidersByIdResponses[keyof PutEmailProvidersByIdResponses];
-
-export type GetEmailProvidersByIdOauthAuthorizeData = {
-    body?: never;
-    path: {
-        /**
-         * Email provider ID
-         */
-        id: string;
-    };
-    query?: never;
-    url: '/email-providers/{id}/oauth/authorize';
-};
-
-export type GetEmailProvidersByIdOauthAuthorizeErrors = {
-    /**
-     * Bad Request
-     */
-    400: HandlersErrorResponse;
-    /**
-     * Not Found
-     */
-    404: HandlersErrorResponse;
-};
-
-export type GetEmailProvidersByIdOauthAuthorizeError = GetEmailProvidersByIdOauthAuthorizeErrors[keyof GetEmailProvidersByIdOauthAuthorizeErrors];
-
-export type GetEmailProvidersByIdOauthAuthorizeResponses = {
-    /**
-     * OK
-     */
-    200: {
-        [key: string]: string;
-    };
-};
-
-export type GetEmailProvidersByIdOauthAuthorizeResponse = GetEmailProvidersByIdOauthAuthorizeResponses[keyof GetEmailProvidersByIdOauthAuthorizeResponses];
-
-export type GetEmailProvidersByIdOauthStatusData = {
-    body?: never;
-    path: {
-        /**
-         * Email provider ID
-         */
-        id: string;
-    };
-    query?: never;
-    url: '/email-providers/{id}/oauth/status';
-};
-
-export type GetEmailProvidersByIdOauthStatusErrors = {
-    /**
-     * Bad Request
-     */
-    400: HandlersErrorResponse;
-    /**
-     * Not Found
-     */
-    404: HandlersErrorResponse;
-};
-
-export type GetEmailProvidersByIdOauthStatusError = GetEmailProvidersByIdOauthStatusErrors[keyof GetEmailProvidersByIdOauthStatusErrors];
-
-export type GetEmailProvidersByIdOauthStatusResponses = {
-    /**
-     * OK
-     */
-    200: HandlersEmailOAuthStatusResponse;
-};
-
-export type GetEmailProvidersByIdOauthStatusResponse = GetEmailProvidersByIdOauthStatusResponses[keyof GetEmailProvidersByIdOauthStatusResponses];
-
-export type DeleteEmailProvidersByIdOauthTokenData = {
-    body?: never;
-    path: {
-        /**
-         * Email provider ID
-         */
-        id: string;
-    };
-    query?: never;
-    url: '/email-providers/{id}/oauth/token';
-};
-
-export type DeleteEmailProvidersByIdOauthTokenErrors = {
-    /**
-     * Bad Request
-     */
-    400: HandlersErrorResponse;
-    /**
-     * Not Found
-     */
-    404: HandlersErrorResponse;
-};
-
-export type DeleteEmailProvidersByIdOauthTokenError = DeleteEmailProvidersByIdOauthTokenErrors[keyof DeleteEmailProvidersByIdOauthTokenErrors];
-
-export type DeleteEmailProvidersByIdOauthTokenResponses = {
-    /**
-     * No Content
-     */
-    204: unknown;
-};
-
-export type PostEmailMailgunWebhookByConfigIdData = {
-    body?: never;
-    path: {
-        /**
-         * Email provider config ID
-         */
-        config_id: string;
-    };
-    query?: never;
-    url: '/email/mailgun/webhook/{config_id}';
-};
-
-export type PostEmailMailgunWebhookByConfigIdErrors = {
-    /**
-     * Bad Request
-     */
-    400: HandlersErrorResponse;
-    /**
-     * Forbidden
-     */
-    403: HandlersErrorResponse;
-    /**
-     * Internal Server Error
-     */
-    500: HandlersErrorResponse;
-};
-
-export type PostEmailMailgunWebhookByConfigIdError = PostEmailMailgunWebhookByConfigIdErrors[keyof PostEmailMailgunWebhookByConfigIdErrors];
-
-export type PostEmailMailgunWebhookByConfigIdResponses = {
-    /**
-     * OK
-     */
-    200: {
-        [key: string]: string;
-    };
-};
-
-export type PostEmailMailgunWebhookByConfigIdResponse = PostEmailMailgunWebhookByConfigIdResponses[keyof PostEmailMailgunWebhookByConfigIdResponses];
-
-export type GetEmailOauthCallbackData = {
-    body?: never;
-    path?: never;
-    query: {
-        /**
-         * Authorization code
-         */
-        code: string;
-        /**
-         * State parameter
-         */
-        state: string;
-    };
-    url: '/email/oauth/callback';
-};
-
-export type GetEmailOauthCallbackErrors = {
-    /**
-     * Bad Request
-     */
-    400: HandlersErrorResponse;
-    /**
-     * Internal Server Error
-     */
-    500: HandlersErrorResponse;
-};
-
-export type GetEmailOauthCallbackError = GetEmailOauthCallbackErrors[keyof GetEmailOauthCallbackErrors];
-
-export type GetEmailOauthCallbackResponses = {
-    /**
-     * OK
-     */
-    200: {
-        [key: string]: string;
-    };
-};
-
-export type GetEmailOauthCallbackResponse = GetEmailOauthCallbackResponses[keyof GetEmailOauthCallbackResponses];
 
 export type GetFetchProvidersData = {
     body?: never;
@@ -13861,7 +14749,7 @@ export type GetFetchProvidersErrors = {
     /**
      * Internal Server Error
      */
-    500: HandlersErrorResponse;
+    500: ServerProblem;
 };
 
 export type GetFetchProvidersError = GetFetchProvidersErrors[keyof GetFetchProvidersErrors];
@@ -13889,11 +14777,11 @@ export type PostFetchProvidersErrors = {
     /**
      * Bad Request
      */
-    400: HandlersErrorResponse;
+    400: ServerProblem;
     /**
      * Internal Server Error
      */
-    500: HandlersErrorResponse;
+    500: ServerProblem;
 };
 
 export type PostFetchProvidersError = PostFetchProvidersErrors[keyof PostFetchProvidersErrors];
@@ -13939,11 +14827,11 @@ export type DeleteFetchProvidersByIdErrors = {
     /**
      * Bad Request
      */
-    400: HandlersErrorResponse;
+    400: ServerProblem;
     /**
      * Internal Server Error
      */
-    500: HandlersErrorResponse;
+    500: ServerProblem;
 };
 
 export type DeleteFetchProvidersByIdError = DeleteFetchProvidersByIdErrors[keyof DeleteFetchProvidersByIdErrors];
@@ -13971,11 +14859,11 @@ export type GetFetchProvidersByIdErrors = {
     /**
      * Bad Request
      */
-    400: HandlersErrorResponse;
+    400: ServerProblem;
     /**
      * Not Found
      */
-    404: HandlersErrorResponse;
+    404: ServerProblem;
 };
 
 export type GetFetchProvidersByIdError = GetFetchProvidersByIdErrors[keyof GetFetchProvidersByIdErrors];
@@ -14008,11 +14896,11 @@ export type PutFetchProvidersByIdErrors = {
     /**
      * Bad Request
      */
-    400: HandlersErrorResponse;
+    400: ServerProblem;
     /**
      * Internal Server Error
      */
-    500: HandlersErrorResponse;
+    500: ServerProblem;
 };
 
 export type PutFetchProvidersByIdError = PutFetchProvidersByIdErrors[keyof PutFetchProvidersByIdErrors];
@@ -14026,219 +14914,62 @@ export type PutFetchProvidersByIdResponses = {
 
 export type PutFetchProvidersByIdResponse = PutFetchProvidersByIdResponses[keyof PutFetchProvidersByIdResponses];
 
-export type GetMemoryProvidersData = {
+export type GetMemoryConfigData = {
     body?: never;
     path?: never;
     query?: never;
-    url: '/memory-providers';
+    url: '/memory/config';
 };
 
-export type GetMemoryProvidersErrors = {
+export type GetMemoryConfigErrors = {
     /**
      * Internal Server Error
      */
-    500: HandlersErrorResponse;
+    500: ServerProblem;
 };
 
-export type GetMemoryProvidersError = GetMemoryProvidersErrors[keyof GetMemoryProvidersErrors];
+export type GetMemoryConfigError = GetMemoryConfigErrors[keyof GetMemoryConfigErrors];
 
-export type GetMemoryProvidersResponses = {
+export type GetMemoryConfigResponses = {
     /**
      * OK
      */
-    200: Array<AdaptersProviderGetResponse>;
+    200: AdaptersMemoryConfig;
 };
 
-export type GetMemoryProvidersResponse = GetMemoryProvidersResponses[keyof GetMemoryProvidersResponses];
+export type GetMemoryConfigResponse = GetMemoryConfigResponses[keyof GetMemoryConfigResponses];
 
-export type PostMemoryProvidersData = {
+export type PutMemoryConfigData = {
     /**
-     * Memory provider configuration
+     * Built-in Memory configuration
      */
-    body: AdaptersProviderCreateRequest;
+    body: AdaptersMemoryConfigUpdateRequest;
     path?: never;
     query?: never;
-    url: '/memory-providers';
+    url: '/memory/config';
 };
 
-export type PostMemoryProvidersErrors = {
+export type PutMemoryConfigErrors = {
     /**
      * Bad Request
      */
-    400: HandlersErrorResponse;
+    400: ServerProblem;
     /**
      * Internal Server Error
      */
-    500: HandlersErrorResponse;
+    500: ServerProblem;
 };
 
-export type PostMemoryProvidersError = PostMemoryProvidersErrors[keyof PostMemoryProvidersErrors];
+export type PutMemoryConfigError = PutMemoryConfigErrors[keyof PutMemoryConfigErrors];
 
-export type PostMemoryProvidersResponses = {
-    /**
-     * Created
-     */
-    201: AdaptersProviderGetResponse;
-};
-
-export type PostMemoryProvidersResponse = PostMemoryProvidersResponses[keyof PostMemoryProvidersResponses];
-
-export type GetMemoryProvidersMetaData = {
-    body?: never;
-    path?: never;
-    query?: never;
-    url: '/memory-providers/meta';
-};
-
-export type GetMemoryProvidersMetaResponses = {
+export type PutMemoryConfigResponses = {
     /**
      * OK
      */
-    200: Array<AdaptersProviderMeta>;
+    200: AdaptersMemoryConfig;
 };
 
-export type GetMemoryProvidersMetaResponse = GetMemoryProvidersMetaResponses[keyof GetMemoryProvidersMetaResponses];
-
-export type DeleteMemoryProvidersByIdData = {
-    body?: never;
-    path: {
-        /**
-         * Provider ID
-         */
-        id: string;
-    };
-    query?: never;
-    url: '/memory-providers/{id}';
-};
-
-export type DeleteMemoryProvidersByIdErrors = {
-    /**
-     * Bad Request
-     */
-    400: HandlersErrorResponse;
-    /**
-     * Internal Server Error
-     */
-    500: HandlersErrorResponse;
-};
-
-export type DeleteMemoryProvidersByIdError = DeleteMemoryProvidersByIdErrors[keyof DeleteMemoryProvidersByIdErrors];
-
-export type DeleteMemoryProvidersByIdResponses = {
-    /**
-     * No Content
-     */
-    204: unknown;
-};
-
-export type GetMemoryProvidersByIdData = {
-    body?: never;
-    path: {
-        /**
-         * Provider ID
-         */
-        id: string;
-    };
-    query?: never;
-    url: '/memory-providers/{id}';
-};
-
-export type GetMemoryProvidersByIdErrors = {
-    /**
-     * Bad Request
-     */
-    400: HandlersErrorResponse;
-    /**
-     * Not Found
-     */
-    404: HandlersErrorResponse;
-};
-
-export type GetMemoryProvidersByIdError = GetMemoryProvidersByIdErrors[keyof GetMemoryProvidersByIdErrors];
-
-export type GetMemoryProvidersByIdResponses = {
-    /**
-     * OK
-     */
-    200: AdaptersProviderGetResponse;
-};
-
-export type GetMemoryProvidersByIdResponse = GetMemoryProvidersByIdResponses[keyof GetMemoryProvidersByIdResponses];
-
-export type PutMemoryProvidersByIdData = {
-    /**
-     * Updated configuration
-     */
-    body: AdaptersProviderUpdateRequest;
-    path: {
-        /**
-         * Provider ID
-         */
-        id: string;
-    };
-    query?: never;
-    url: '/memory-providers/{id}';
-};
-
-export type PutMemoryProvidersByIdErrors = {
-    /**
-     * Bad Request
-     */
-    400: HandlersErrorResponse;
-    /**
-     * Internal Server Error
-     */
-    500: HandlersErrorResponse;
-};
-
-export type PutMemoryProvidersByIdError = PutMemoryProvidersByIdErrors[keyof PutMemoryProvidersByIdErrors];
-
-export type PutMemoryProvidersByIdResponses = {
-    /**
-     * OK
-     */
-    200: AdaptersProviderGetResponse;
-};
-
-export type PutMemoryProvidersByIdResponse = PutMemoryProvidersByIdResponses[keyof PutMemoryProvidersByIdResponses];
-
-export type GetMemoryProvidersByIdStatusData = {
-    body?: never;
-    path: {
-        /**
-         * Provider ID
-         */
-        id: string;
-    };
-    query?: never;
-    url: '/memory-providers/{id}/status';
-};
-
-export type GetMemoryProvidersByIdStatusErrors = {
-    /**
-     * Bad Request
-     */
-    400: HandlersErrorResponse;
-    /**
-     * Not Found
-     */
-    404: HandlersErrorResponse;
-    /**
-     * Internal Server Error
-     */
-    500: HandlersErrorResponse;
-};
-
-export type GetMemoryProvidersByIdStatusError = GetMemoryProvidersByIdStatusErrors[keyof GetMemoryProvidersByIdStatusErrors];
-
-export type GetMemoryProvidersByIdStatusResponses = {
-    /**
-     * OK
-     */
-    200: AdaptersProviderStatusResponse;
-};
-
-export type GetMemoryProvidersByIdStatusResponse = GetMemoryProvidersByIdStatusResponses[keyof GetMemoryProvidersByIdStatusResponses];
+export type PutMemoryConfigResponse = PutMemoryConfigResponses[keyof PutMemoryConfigResponses];
 
 export type GetModelsData = {
     body?: never;
@@ -14260,11 +14991,11 @@ export type GetModelsErrors = {
     /**
      * Bad Request
      */
-    400: HandlersErrorResponse;
+    400: ServerProblem;
     /**
      * Internal Server Error
      */
-    500: HandlersErrorResponse;
+    500: ServerProblem;
 };
 
 export type GetModelsError = GetModelsErrors[keyof GetModelsErrors];
@@ -14292,11 +15023,11 @@ export type PostModelsErrors = {
     /**
      * Bad Request
      */
-    400: HandlersErrorResponse;
+    400: ServerProblem;
     /**
      * Internal Server Error
      */
-    500: HandlersErrorResponse;
+    500: ServerProblem;
 };
 
 export type PostModelsError = PostModelsErrors[keyof PostModelsErrors];
@@ -14326,11 +15057,11 @@ export type GetModelsCountErrors = {
     /**
      * Bad Request
      */
-    400: HandlersErrorResponse;
+    400: ServerProblem;
     /**
      * Internal Server Error
      */
-    500: HandlersErrorResponse;
+    500: ServerProblem;
 };
 
 export type GetModelsCountError = GetModelsCountErrors[keyof GetModelsCountErrors];
@@ -14360,15 +15091,15 @@ export type DeleteModelsModelByModelIdErrors = {
     /**
      * Bad Request
      */
-    400: HandlersErrorResponse;
+    400: ServerProblem;
     /**
      * Not Found
      */
-    404: HandlersErrorResponse;
+    404: ServerProblem;
     /**
      * Internal Server Error
      */
-    500: HandlersErrorResponse;
+    500: ServerProblem;
 };
 
 export type DeleteModelsModelByModelIdError = DeleteModelsModelByModelIdErrors[keyof DeleteModelsModelByModelIdErrors];
@@ -14396,15 +15127,15 @@ export type GetModelsModelByModelIdErrors = {
     /**
      * Bad Request
      */
-    400: HandlersErrorResponse;
+    400: ServerProblem;
     /**
      * Not Found
      */
-    404: HandlersErrorResponse;
+    404: ServerProblem;
     /**
      * Internal Server Error
      */
-    500: HandlersErrorResponse;
+    500: ServerProblem;
 };
 
 export type GetModelsModelByModelIdError = GetModelsModelByModelIdErrors[keyof GetModelsModelByModelIdErrors];
@@ -14437,15 +15168,15 @@ export type PutModelsModelByModelIdErrors = {
     /**
      * Bad Request
      */
-    400: HandlersErrorResponse;
+    400: ServerProblem;
     /**
      * Not Found
      */
-    404: HandlersErrorResponse;
+    404: ServerProblem;
     /**
      * Internal Server Error
      */
-    500: HandlersErrorResponse;
+    500: ServerProblem;
 };
 
 export type PutModelsModelByModelIdError = PutModelsModelByModelIdErrors[keyof PutModelsModelByModelIdErrors];
@@ -14475,15 +15206,15 @@ export type DeleteModelsByIdErrors = {
     /**
      * Bad Request
      */
-    400: HandlersErrorResponse;
+    400: ServerProblem;
     /**
      * Not Found
      */
-    404: HandlersErrorResponse;
+    404: ServerProblem;
     /**
      * Internal Server Error
      */
-    500: HandlersErrorResponse;
+    500: ServerProblem;
 };
 
 export type DeleteModelsByIdError = DeleteModelsByIdErrors[keyof DeleteModelsByIdErrors];
@@ -14511,15 +15242,15 @@ export type GetModelsByIdErrors = {
     /**
      * Bad Request
      */
-    400: HandlersErrorResponse;
+    400: ServerProblem;
     /**
      * Not Found
      */
-    404: HandlersErrorResponse;
+    404: ServerProblem;
     /**
      * Internal Server Error
      */
-    500: HandlersErrorResponse;
+    500: ServerProblem;
 };
 
 export type GetModelsByIdError = GetModelsByIdErrors[keyof GetModelsByIdErrors];
@@ -14552,15 +15283,15 @@ export type PutModelsByIdErrors = {
     /**
      * Bad Request
      */
-    400: HandlersErrorResponse;
+    400: ServerProblem;
     /**
      * Not Found
      */
-    404: HandlersErrorResponse;
+    404: ServerProblem;
     /**
      * Internal Server Error
      */
-    500: HandlersErrorResponse;
+    500: ServerProblem;
 };
 
 export type PutModelsByIdError = PutModelsByIdErrors[keyof PutModelsByIdErrors];
@@ -14590,15 +15321,15 @@ export type PostModelsByIdTestErrors = {
     /**
      * Bad Request
      */
-    400: HandlersErrorResponse;
+    400: ServerProblem;
     /**
      * Not Found
      */
-    404: HandlersErrorResponse;
+    404: ServerProblem;
     /**
      * Internal Server Error
      */
-    500: HandlersErrorResponse;
+    500: ServerProblem;
 };
 
 export type PostModelsByIdTestError = PostModelsByIdTestErrors[keyof PostModelsByIdTestErrors];
@@ -14686,11 +15417,11 @@ export type GetProviderTemplatesErrors = {
     /**
      * Bad Request
      */
-    400: ApperrorProblem;
+    400: ServerProblem;
     /**
      * Internal Server Error
      */
-    500: ApperrorProblem;
+    500: ServerProblem;
 };
 
 export type GetProviderTemplatesError = GetProviderTemplatesErrors[keyof GetProviderTemplatesErrors];
@@ -14720,11 +15451,11 @@ export type GetProviderTemplatesByIdErrors = {
     /**
      * Not Found
      */
-    404: ApperrorProblem;
+    404: ServerProblem;
     /**
      * Internal Server Error
      */
-    500: ApperrorProblem;
+    500: ServerProblem;
 };
 
 export type GetProviderTemplatesByIdError = GetProviderTemplatesByIdErrors[keyof GetProviderTemplatesByIdErrors];
@@ -14749,7 +15480,7 @@ export type GetProvidersErrors = {
     /**
      * Internal Server Error
      */
-    500: HandlersErrorResponse;
+    500: ServerProblem;
 };
 
 export type GetProvidersError = GetProvidersErrors[keyof GetProvidersErrors];
@@ -14777,11 +15508,11 @@ export type PostProvidersErrors = {
     /**
      * Bad Request
      */
-    400: HandlersErrorResponse;
+    400: ServerProblem;
     /**
      * Internal Server Error
      */
-    500: HandlersErrorResponse;
+    500: ServerProblem;
 };
 
 export type PostProvidersError = PostProvidersErrors[keyof PostProvidersErrors];
@@ -14806,7 +15537,7 @@ export type GetProvidersCountErrors = {
     /**
      * Internal Server Error
      */
-    500: HandlersErrorResponse;
+    500: ServerProblem;
 };
 
 export type GetProvidersCountError = GetProvidersCountErrors[keyof GetProvidersCountErrors];
@@ -14834,19 +15565,19 @@ export type PostProvidersFromTemplateErrors = {
     /**
      * Bad Request
      */
-    400: ApperrorProblem;
+    400: ServerProblem;
     /**
      * Not Found
      */
-    404: ApperrorProblem;
+    404: ServerProblem;
     /**
      * Conflict
      */
-    409: ApperrorProblem;
+    409: ServerProblem;
     /**
      * Internal Server Error
      */
-    500: ApperrorProblem;
+    500: ServerProblem;
 };
 
 export type PostProvidersFromTemplateError = PostProvidersFromTemplateErrors[keyof PostProvidersFromTemplateErrors];
@@ -14876,15 +15607,15 @@ export type GetProvidersNameByNameErrors = {
     /**
      * Bad Request
      */
-    400: HandlersErrorResponse;
+    400: ServerProblem;
     /**
      * Not Found
      */
-    404: HandlersErrorResponse;
+    404: ServerProblem;
     /**
      * Internal Server Error
      */
-    500: HandlersErrorResponse;
+    500: ServerProblem;
 };
 
 export type GetProvidersNameByNameError = GetProvidersNameByNameErrors[keyof GetProvidersNameByNameErrors];
@@ -14918,7 +15649,7 @@ export type GetProvidersOauthCallbackErrors = {
     /**
      * Bad Request
      */
-    400: HandlersErrorResponse;
+    400: ServerProblem;
 };
 
 export type GetProvidersOauthCallbackError = GetProvidersOauthCallbackErrors[keyof GetProvidersOauthCallbackErrors];
@@ -14948,15 +15679,15 @@ export type DeleteProvidersByIdErrors = {
     /**
      * Bad Request
      */
-    400: HandlersErrorResponse;
+    400: ServerProblem;
     /**
      * Not Found
      */
-    404: HandlersErrorResponse;
+    404: ServerProblem;
     /**
      * Internal Server Error
      */
-    500: HandlersErrorResponse;
+    500: ServerProblem;
 };
 
 export type DeleteProvidersByIdError = DeleteProvidersByIdErrors[keyof DeleteProvidersByIdErrors];
@@ -14984,15 +15715,15 @@ export type GetProvidersByIdErrors = {
     /**
      * Bad Request
      */
-    400: HandlersErrorResponse;
+    400: ServerProblem;
     /**
      * Not Found
      */
-    404: HandlersErrorResponse;
+    404: ServerProblem;
     /**
      * Internal Server Error
      */
-    500: HandlersErrorResponse;
+    500: ServerProblem;
 };
 
 export type GetProvidersByIdError = GetProvidersByIdErrors[keyof GetProvidersByIdErrors];
@@ -15025,15 +15756,15 @@ export type PutProvidersByIdErrors = {
     /**
      * Bad Request
      */
-    400: HandlersErrorResponse;
+    400: ServerProblem;
     /**
      * Not Found
      */
-    404: HandlersErrorResponse;
+    404: ServerProblem;
     /**
      * Internal Server Error
      */
-    500: HandlersErrorResponse;
+    500: ServerProblem;
 };
 
 export type PutProvidersByIdError = PutProvidersByIdErrors[keyof PutProvidersByIdErrors];
@@ -15066,15 +15797,15 @@ export type PostProvidersByIdImportModelsErrors = {
     /**
      * Bad Request
      */
-    400: HandlersErrorResponse;
+    400: ServerProblem;
     /**
      * Not Found
      */
-    404: HandlersErrorResponse;
+    404: ServerProblem;
     /**
      * Internal Server Error
      */
-    500: HandlersErrorResponse;
+    500: ServerProblem;
 };
 
 export type PostProvidersByIdImportModelsError = PostProvidersByIdImportModelsErrors[keyof PostProvidersByIdImportModelsErrors];
@@ -15109,15 +15840,15 @@ export type GetProvidersByIdModelsErrors = {
     /**
      * Bad Request
      */
-    400: HandlersErrorResponse;
+    400: ServerProblem;
     /**
      * Not Found
      */
-    404: HandlersErrorResponse;
+    404: ServerProblem;
     /**
      * Internal Server Error
      */
-    500: HandlersErrorResponse;
+    500: ServerProblem;
 };
 
 export type GetProvidersByIdModelsError = GetProvidersByIdModelsErrors[keyof GetProvidersByIdModelsErrors];
@@ -15147,11 +15878,11 @@ export type GetProvidersByIdOauthAuthorizeErrors = {
     /**
      * Bad Request
      */
-    400: HandlersErrorResponse;
+    400: ServerProblem;
     /**
      * Not Found
      */
-    404: HandlersErrorResponse;
+    404: ServerProblem;
 };
 
 export type GetProvidersByIdOauthAuthorizeError = GetProvidersByIdOauthAuthorizeErrors[keyof GetProvidersByIdOauthAuthorizeErrors];
@@ -15181,11 +15912,11 @@ export type PostProvidersByIdOauthPollErrors = {
     /**
      * Bad Request
      */
-    400: HandlersErrorResponse;
+    400: ServerProblem;
     /**
      * Not Found
      */
-    404: HandlersErrorResponse;
+    404: ServerProblem;
 };
 
 export type PostProvidersByIdOauthPollError = PostProvidersByIdOauthPollErrors[keyof PostProvidersByIdOauthPollErrors];
@@ -15215,11 +15946,11 @@ export type GetProvidersByIdOauthStatusErrors = {
     /**
      * Bad Request
      */
-    400: HandlersErrorResponse;
+    400: ServerProblem;
     /**
      * Not Found
      */
-    404: HandlersErrorResponse;
+    404: ServerProblem;
 };
 
 export type GetProvidersByIdOauthStatusError = GetProvidersByIdOauthStatusErrors[keyof GetProvidersByIdOauthStatusErrors];
@@ -15249,11 +15980,11 @@ export type DeleteProvidersByIdOauthTokenErrors = {
     /**
      * Bad Request
      */
-    400: HandlersErrorResponse;
+    400: ServerProblem;
     /**
      * Not Found
      */
-    404: HandlersErrorResponse;
+    404: ServerProblem;
 };
 
 export type DeleteProvidersByIdOauthTokenError = DeleteProvidersByIdOauthTokenErrors[keyof DeleteProvidersByIdOauthTokenErrors];
@@ -15281,15 +16012,15 @@ export type PostProvidersByIdTestErrors = {
     /**
      * Bad Request
      */
-    400: HandlersErrorResponse;
+    400: ServerProblem;
     /**
      * Not Found
      */
-    404: HandlersErrorResponse;
+    404: ServerProblem;
     /**
      * Internal Server Error
      */
-    500: HandlersErrorResponse;
+    500: ServerProblem;
 };
 
 export type PostProvidersByIdTestError = PostProvidersByIdTestErrors[keyof PostProvidersByIdTestErrors];
@@ -15319,7 +16050,7 @@ export type GetSearchProvidersErrors = {
     /**
      * Internal Server Error
      */
-    500: HandlersErrorResponse;
+    500: ServerProblem;
 };
 
 export type GetSearchProvidersError = GetSearchProvidersErrors[keyof GetSearchProvidersErrors];
@@ -15347,11 +16078,11 @@ export type PostSearchProvidersErrors = {
     /**
      * Bad Request
      */
-    400: HandlersErrorResponse;
+    400: ServerProblem;
     /**
      * Internal Server Error
      */
-    500: HandlersErrorResponse;
+    500: ServerProblem;
 };
 
 export type PostSearchProvidersError = PostSearchProvidersErrors[keyof PostSearchProvidersErrors];
@@ -15397,11 +16128,11 @@ export type DeleteSearchProvidersByIdErrors = {
     /**
      * Bad Request
      */
-    400: HandlersErrorResponse;
+    400: ServerProblem;
     /**
      * Internal Server Error
      */
-    500: HandlersErrorResponse;
+    500: ServerProblem;
 };
 
 export type DeleteSearchProvidersByIdError = DeleteSearchProvidersByIdErrors[keyof DeleteSearchProvidersByIdErrors];
@@ -15429,11 +16160,11 @@ export type GetSearchProvidersByIdErrors = {
     /**
      * Bad Request
      */
-    400: HandlersErrorResponse;
+    400: ServerProblem;
     /**
      * Not Found
      */
-    404: HandlersErrorResponse;
+    404: ServerProblem;
 };
 
 export type GetSearchProvidersByIdError = GetSearchProvidersByIdErrors[keyof GetSearchProvidersByIdErrors];
@@ -15466,11 +16197,11 @@ export type PutSearchProvidersByIdErrors = {
     /**
      * Bad Request
      */
-    400: HandlersErrorResponse;
+    400: ServerProblem;
     /**
      * Internal Server Error
      */
-    500: HandlersErrorResponse;
+    500: ServerProblem;
 };
 
 export type PutSearchProvidersByIdError = PutSearchProvidersByIdErrors[keyof PutSearchProvidersByIdErrors];
@@ -15484,6 +16215,27 @@ export type PutSearchProvidersByIdResponses = {
 
 export type PutSearchProvidersByIdResponse = PutSearchProvidersByIdResponses[keyof PutSearchProvidersByIdResponses];
 
+export type GetSiteIconData = {
+    body?: never;
+    path?: never;
+    query: {
+        /**
+         * Public page or site URL; only its origin is fetched
+         */
+        url: string;
+    };
+    url: '/site-icon';
+};
+
+export type GetSiteIconResponses = {
+    /**
+     * OK
+     */
+    200: HandlersSiteIconResponse;
+};
+
+export type GetSiteIconResponse = GetSiteIconResponses[keyof GetSiteIconResponses];
+
 export type GetSpeechModelsData = {
     body?: never;
     path?: never;
@@ -15495,7 +16247,7 @@ export type GetSpeechModelsErrors = {
     /**
      * Internal Server Error
      */
-    500: HandlersErrorResponse;
+    500: ServerProblem;
 };
 
 export type GetSpeechModelsError = GetSpeechModelsErrors[keyof GetSpeechModelsErrors];
@@ -15525,7 +16277,7 @@ export type GetSpeechModelsByIdErrors = {
     /**
      * Not Found
      */
-    404: HandlersErrorResponse;
+    404: ServerProblem;
 };
 
 export type GetSpeechModelsByIdError = GetSpeechModelsByIdErrors[keyof GetSpeechModelsByIdErrors];
@@ -15558,11 +16310,11 @@ export type PutSpeechModelsByIdErrors = {
     /**
      * Bad Request
      */
-    400: HandlersErrorResponse;
+    400: ServerProblem;
     /**
      * Internal Server Error
      */
-    500: HandlersErrorResponse;
+    500: ServerProblem;
 };
 
 export type PutSpeechModelsByIdError = PutSpeechModelsByIdErrors[keyof PutSpeechModelsByIdErrors];
@@ -15592,7 +16344,7 @@ export type GetSpeechModelsByIdCapabilitiesErrors = {
     /**
      * Not Found
      */
-    404: HandlersErrorResponse;
+    404: ServerProblem;
 };
 
 export type GetSpeechModelsByIdCapabilitiesError = GetSpeechModelsByIdCapabilitiesErrors[keyof GetSpeechModelsByIdCapabilitiesErrors];
@@ -15625,11 +16377,11 @@ export type PostSpeechModelsByIdTestErrors = {
     /**
      * Bad Request
      */
-    400: HandlersErrorResponse;
+    400: ServerProblem;
     /**
      * Internal Server Error
      */
-    500: HandlersErrorResponse;
+    500: ServerProblem;
 };
 
 export type PostSpeechModelsByIdTestError = PostSpeechModelsByIdTestErrors[keyof PostSpeechModelsByIdTestErrors];
@@ -15652,7 +16404,7 @@ export type GetSpeechProvidersErrors = {
     /**
      * Internal Server Error
      */
-    500: HandlersErrorResponse;
+    500: ServerProblem;
 };
 
 export type GetSpeechProvidersError = GetSpeechProvidersErrors[keyof GetSpeechProvidersErrors];
@@ -15698,11 +16450,11 @@ export type GetSpeechProvidersByIdErrors = {
     /**
      * Bad Request
      */
-    400: HandlersErrorResponse;
+    400: ServerProblem;
     /**
      * Not Found
      */
-    404: HandlersErrorResponse;
+    404: ServerProblem;
 };
 
 export type GetSpeechProvidersByIdError = GetSpeechProvidersByIdErrors[keyof GetSpeechProvidersByIdErrors];
@@ -15732,15 +16484,15 @@ export type PostSpeechProvidersByIdImportModelsErrors = {
     /**
      * Bad Request
      */
-    400: HandlersErrorResponse;
+    400: ServerProblem;
     /**
      * Not Found
      */
-    404: HandlersErrorResponse;
+    404: ServerProblem;
     /**
      * Internal Server Error
      */
-    500: HandlersErrorResponse;
+    500: ServerProblem;
 };
 
 export type PostSpeechProvidersByIdImportModelsError = PostSpeechProvidersByIdImportModelsErrors[keyof PostSpeechProvidersByIdImportModelsErrors];
@@ -15770,11 +16522,11 @@ export type GetSpeechProvidersByIdModelsErrors = {
     /**
      * Bad Request
      */
-    400: HandlersErrorResponse;
+    400: ServerProblem;
     /**
      * Internal Server Error
      */
-    500: HandlersErrorResponse;
+    500: ServerProblem;
 };
 
 export type GetSpeechProvidersByIdModelsError = GetSpeechProvidersByIdModelsErrors[keyof GetSpeechProvidersByIdModelsErrors];
@@ -15787,6 +16539,68 @@ export type GetSpeechProvidersByIdModelsResponses = {
 };
 
 export type GetSpeechProvidersByIdModelsResponse = GetSpeechProvidersByIdModelsResponses[keyof GetSpeechProvidersByIdModelsResponses];
+
+export type GetSupermarketAppsData = {
+    body?: never;
+    path?: never;
+    query?: {
+        /**
+         * Search query
+         */
+        q?: string;
+        /**
+         * Registry ID
+         */
+        registry?: string;
+        /**
+         * Category ID
+         */
+        category?: string;
+        /**
+         * Exact tag
+         */
+        tag?: string;
+        /**
+         * Component filter
+         */
+        component?: 'skills' | 'dependencies' | 'connectors';
+        /**
+         * Page number
+         */
+        page?: number;
+        /**
+         * Items per page
+         */
+        limit?: number;
+        /**
+         * Sort order
+         */
+        sort?: string;
+    };
+    url: '/supermarket/apps';
+};
+
+export type GetSupermarketAppsErrors = {
+    /**
+     * Bad Request
+     */
+    400: ServerProblem;
+    /**
+     * Bad Gateway
+     */
+    502: ServerProblem;
+};
+
+export type GetSupermarketAppsError = GetSupermarketAppsErrors[keyof GetSupermarketAppsErrors];
+
+export type GetSupermarketAppsResponses = {
+    /**
+     * OK
+     */
+    200: HandlersSupermarketAppListResponse;
+};
+
+export type GetSupermarketAppsResponse = GetSupermarketAppsResponses[keyof GetSupermarketAppsResponses];
 
 export type GetSupermarketArtifactsIconByDigestData = {
     body?: never;
@@ -15804,15 +16618,15 @@ export type GetSupermarketArtifactsIconByDigestErrors = {
     /**
      * Bad Request
      */
-    400: HandlersErrorResponse;
+    400: ServerProblem;
     /**
      * Not Found
      */
-    404: HandlersErrorResponse;
+    404: ServerProblem;
     /**
      * Bad Gateway
      */
-    502: HandlersErrorResponse;
+    502: ServerProblem;
 };
 
 export type GetSupermarketArtifactsIconByDigestError = GetSupermarketArtifactsIconByDigestErrors[keyof GetSupermarketArtifactsIconByDigestErrors];
@@ -15824,63 +16638,43 @@ export type GetSupermarketArtifactsIconByDigestResponses = {
     200: unknown;
 };
 
-export type GetSupermarketPackagesData = {
+export type GetSupermarketCategoriesData = {
     body?: never;
     path?: never;
     query?: {
         /**
-         * Search query
-         */
-        q?: string;
-        /**
          * Registry ID
          */
         registry?: string;
-        /**
-         * Category ID
-         */
-        category?: string;
-        /**
-         * Exact tag
-         */
-        tag?: string;
-        /**
-         * Page number
-         */
-        page?: number;
-        /**
-         * Items per page
-         */
-        limit?: number;
-        /**
-         * Sort order
-         */
-        sort?: string;
     };
-    url: '/supermarket/packages';
+    url: '/supermarket/categories';
 };
 
-export type GetSupermarketPackagesErrors = {
+export type GetSupermarketCategoriesErrors = {
     /**
      * Bad Request
      */
-    400: HandlersErrorResponse;
+    400: ServerProblem;
+    /**
+     * Not Found
+     */
+    404: ServerProblem;
     /**
      * Bad Gateway
      */
-    502: HandlersErrorResponse;
+    502: ServerProblem;
 };
 
-export type GetSupermarketPackagesError = GetSupermarketPackagesErrors[keyof GetSupermarketPackagesErrors];
+export type GetSupermarketCategoriesError = GetSupermarketCategoriesErrors[keyof GetSupermarketCategoriesErrors];
 
-export type GetSupermarketPackagesResponses = {
+export type GetSupermarketCategoriesResponses = {
     /**
      * OK
      */
-    200: HandlersSupermarketSkillPackageListResponse;
+    200: HandlersSupermarketAppCategoryListResponse;
 };
 
-export type GetSupermarketPackagesResponse = GetSupermarketPackagesResponses[keyof GetSupermarketPackagesResponses];
+export type GetSupermarketCategoriesResponse = GetSupermarketCategoriesResponses[keyof GetSupermarketCategoriesResponses];
 
 export type GetSupermarketRegistriesData = {
     body?: never;
@@ -15893,7 +16687,7 @@ export type GetSupermarketRegistriesErrors = {
     /**
      * Bad Gateway
      */
-    502: HandlersErrorResponse;
+    502: ServerProblem;
 };
 
 export type GetSupermarketRegistriesError = GetSupermarketRegistriesErrors[keyof GetSupermarketRegistriesErrors];
@@ -15907,45 +16701,7 @@ export type GetSupermarketRegistriesResponses = {
 
 export type GetSupermarketRegistriesResponse = GetSupermarketRegistriesResponses[keyof GetSupermarketRegistriesResponses];
 
-export type GetSupermarketRegistriesByRegistryIdCategoriesData = {
-    body?: never;
-    path: {
-        /**
-         * Registry ID
-         */
-        registry_id: string;
-    };
-    query?: never;
-    url: '/supermarket/registries/{registry_id}/categories';
-};
-
-export type GetSupermarketRegistriesByRegistryIdCategoriesErrors = {
-    /**
-     * Bad Request
-     */
-    400: HandlersErrorResponse;
-    /**
-     * Not Found
-     */
-    404: HandlersErrorResponse;
-    /**
-     * Bad Gateway
-     */
-    502: HandlersErrorResponse;
-};
-
-export type GetSupermarketRegistriesByRegistryIdCategoriesError = GetSupermarketRegistriesByRegistryIdCategoriesErrors[keyof GetSupermarketRegistriesByRegistryIdCategoriesErrors];
-
-export type GetSupermarketRegistriesByRegistryIdCategoriesResponses = {
-    /**
-     * OK
-     */
-    200: HandlersSupermarketSkillCategoryListResponse;
-};
-
-export type GetSupermarketRegistriesByRegistryIdCategoriesResponse = GetSupermarketRegistriesByRegistryIdCategoriesResponses[keyof GetSupermarketRegistriesByRegistryIdCategoriesResponses];
-
-export type GetSupermarketRegistriesByRegistryIdPackagesData = {
+export type GetSupermarketRegistriesByRegistryIdAppsData = {
     body?: never;
     path: {
         /**
@@ -15979,36 +16735,36 @@ export type GetSupermarketRegistriesByRegistryIdPackagesData = {
          */
         sort?: string;
     };
-    url: '/supermarket/registries/{registry_id}/packages';
+    url: '/supermarket/registries/{registry_id}/apps';
 };
 
-export type GetSupermarketRegistriesByRegistryIdPackagesErrors = {
+export type GetSupermarketRegistriesByRegistryIdAppsErrors = {
     /**
      * Bad Request
      */
-    400: HandlersErrorResponse;
+    400: ServerProblem;
     /**
      * Not Found
      */
-    404: HandlersErrorResponse;
+    404: ServerProblem;
     /**
      * Bad Gateway
      */
-    502: HandlersErrorResponse;
+    502: ServerProblem;
 };
 
-export type GetSupermarketRegistriesByRegistryIdPackagesError = GetSupermarketRegistriesByRegistryIdPackagesErrors[keyof GetSupermarketRegistriesByRegistryIdPackagesErrors];
+export type GetSupermarketRegistriesByRegistryIdAppsError = GetSupermarketRegistriesByRegistryIdAppsErrors[keyof GetSupermarketRegistriesByRegistryIdAppsErrors];
 
-export type GetSupermarketRegistriesByRegistryIdPackagesResponses = {
+export type GetSupermarketRegistriesByRegistryIdAppsResponses = {
     /**
      * OK
      */
-    200: HandlersSupermarketSkillPackageListResponse;
+    200: HandlersSupermarketAppListResponse;
 };
 
-export type GetSupermarketRegistriesByRegistryIdPackagesResponse = GetSupermarketRegistriesByRegistryIdPackagesResponses[keyof GetSupermarketRegistriesByRegistryIdPackagesResponses];
+export type GetSupermarketRegistriesByRegistryIdAppsResponse = GetSupermarketRegistriesByRegistryIdAppsResponses[keyof GetSupermarketRegistriesByRegistryIdAppsResponses];
 
-export type GetSupermarketRegistriesByRegistryIdPackagesByPackageIdData = {
+export type GetSupermarketRegistriesByRegistryIdAppsByAppIdData = {
     body?: never;
     path: {
         /**
@@ -16016,41 +16772,41 @@ export type GetSupermarketRegistriesByRegistryIdPackagesByPackageIdData = {
          */
         registry_id: string;
         /**
-         * Package ID
+         * App ID
          */
-        package_id: string;
+        app_id: string;
     };
     query?: never;
-    url: '/supermarket/registries/{registry_id}/packages/{package_id}';
+    url: '/supermarket/registries/{registry_id}/apps/{app_id}';
 };
 
-export type GetSupermarketRegistriesByRegistryIdPackagesByPackageIdErrors = {
+export type GetSupermarketRegistriesByRegistryIdAppsByAppIdErrors = {
     /**
      * Bad Request
      */
-    400: HandlersErrorResponse;
+    400: ServerProblem;
     /**
      * Not Found
      */
-    404: HandlersErrorResponse;
+    404: ServerProblem;
     /**
      * Bad Gateway
      */
-    502: HandlersErrorResponse;
+    502: ServerProblem;
 };
 
-export type GetSupermarketRegistriesByRegistryIdPackagesByPackageIdError = GetSupermarketRegistriesByRegistryIdPackagesByPackageIdErrors[keyof GetSupermarketRegistriesByRegistryIdPackagesByPackageIdErrors];
+export type GetSupermarketRegistriesByRegistryIdAppsByAppIdError = GetSupermarketRegistriesByRegistryIdAppsByAppIdErrors[keyof GetSupermarketRegistriesByRegistryIdAppsByAppIdErrors];
 
-export type GetSupermarketRegistriesByRegistryIdPackagesByPackageIdResponses = {
+export type GetSupermarketRegistriesByRegistryIdAppsByAppIdResponses = {
     /**
      * OK
      */
-    200: HandlersSupermarketSkillPackageDescriptor;
+    200: HandlersSupermarketAppDescriptor;
 };
 
-export type GetSupermarketRegistriesByRegistryIdPackagesByPackageIdResponse = GetSupermarketRegistriesByRegistryIdPackagesByPackageIdResponses[keyof GetSupermarketRegistriesByRegistryIdPackagesByPackageIdResponses];
+export type GetSupermarketRegistriesByRegistryIdAppsByAppIdResponse = GetSupermarketRegistriesByRegistryIdAppsByAppIdResponses[keyof GetSupermarketRegistriesByRegistryIdAppsByAppIdResponses];
 
-export type GetSupermarketRegistriesByRegistryIdPackagesByPackageIdReleasesByRevisionData = {
+export type GetSupermarketRegistriesByRegistryIdAppsByAppIdReleasesByRevisionData = {
     body?: never;
     path: {
         /**
@@ -16058,45 +16814,45 @@ export type GetSupermarketRegistriesByRegistryIdPackagesByPackageIdReleasesByRev
          */
         registry_id: string;
         /**
-         * Package ID
+         * App ID
          */
-        package_id: string;
+        app_id: string;
         /**
-         * Package revision
+         * App revision
          */
         revision: string;
     };
     query?: never;
-    url: '/supermarket/registries/{registry_id}/packages/{package_id}/releases/{revision}';
+    url: '/supermarket/registries/{registry_id}/apps/{app_id}/releases/{revision}';
 };
 
-export type GetSupermarketRegistriesByRegistryIdPackagesByPackageIdReleasesByRevisionErrors = {
+export type GetSupermarketRegistriesByRegistryIdAppsByAppIdReleasesByRevisionErrors = {
     /**
      * Bad Request
      */
-    400: HandlersErrorResponse;
+    400: ServerProblem;
     /**
      * Not Found
      */
-    404: HandlersErrorResponse;
+    404: ServerProblem;
     /**
      * Bad Gateway
      */
-    502: HandlersErrorResponse;
+    502: ServerProblem;
 };
 
-export type GetSupermarketRegistriesByRegistryIdPackagesByPackageIdReleasesByRevisionError = GetSupermarketRegistriesByRegistryIdPackagesByPackageIdReleasesByRevisionErrors[keyof GetSupermarketRegistriesByRegistryIdPackagesByPackageIdReleasesByRevisionErrors];
+export type GetSupermarketRegistriesByRegistryIdAppsByAppIdReleasesByRevisionError = GetSupermarketRegistriesByRegistryIdAppsByAppIdReleasesByRevisionErrors[keyof GetSupermarketRegistriesByRegistryIdAppsByAppIdReleasesByRevisionErrors];
 
-export type GetSupermarketRegistriesByRegistryIdPackagesByPackageIdReleasesByRevisionResponses = {
+export type GetSupermarketRegistriesByRegistryIdAppsByAppIdReleasesByRevisionResponses = {
     /**
      * OK
      */
-    200: HandlersSupermarketSkillPackageDescriptor;
+    200: HandlersSupermarketAppDescriptor;
 };
 
-export type GetSupermarketRegistriesByRegistryIdPackagesByPackageIdReleasesByRevisionResponse = GetSupermarketRegistriesByRegistryIdPackagesByPackageIdReleasesByRevisionResponses[keyof GetSupermarketRegistriesByRegistryIdPackagesByPackageIdReleasesByRevisionResponses];
+export type GetSupermarketRegistriesByRegistryIdAppsByAppIdReleasesByRevisionResponse = GetSupermarketRegistriesByRegistryIdAppsByAppIdReleasesByRevisionResponses[keyof GetSupermarketRegistriesByRegistryIdAppsByAppIdReleasesByRevisionResponses];
 
-export type GetSupermarketRegistriesByRegistryIdPackagesByPackageIdSkillsBySkillIdData = {
+export type GetSupermarketRegistriesByRegistryIdAppsByAppIdSkillsBySkillIdData = {
     body?: never;
     path: {
         /**
@@ -16104,43 +16860,43 @@ export type GetSupermarketRegistriesByRegistryIdPackagesByPackageIdSkillsBySkill
          */
         registry_id: string;
         /**
-         * Package ID
+         * App ID
          */
-        package_id: string;
+        app_id: string;
         /**
          * Skill ID
          */
         skill_id: string;
     };
     query?: never;
-    url: '/supermarket/registries/{registry_id}/packages/{package_id}/skills/{skill_id}';
+    url: '/supermarket/registries/{registry_id}/apps/{app_id}/skills/{skill_id}';
 };
 
-export type GetSupermarketRegistriesByRegistryIdPackagesByPackageIdSkillsBySkillIdErrors = {
+export type GetSupermarketRegistriesByRegistryIdAppsByAppIdSkillsBySkillIdErrors = {
     /**
      * Bad Request
      */
-    400: HandlersErrorResponse;
+    400: ServerProblem;
     /**
      * Not Found
      */
-    404: HandlersErrorResponse;
+    404: ServerProblem;
     /**
      * Bad Gateway
      */
-    502: HandlersErrorResponse;
+    502: ServerProblem;
 };
 
-export type GetSupermarketRegistriesByRegistryIdPackagesByPackageIdSkillsBySkillIdError = GetSupermarketRegistriesByRegistryIdPackagesByPackageIdSkillsBySkillIdErrors[keyof GetSupermarketRegistriesByRegistryIdPackagesByPackageIdSkillsBySkillIdErrors];
+export type GetSupermarketRegistriesByRegistryIdAppsByAppIdSkillsBySkillIdError = GetSupermarketRegistriesByRegistryIdAppsByAppIdSkillsBySkillIdErrors[keyof GetSupermarketRegistriesByRegistryIdAppsByAppIdSkillsBySkillIdErrors];
 
-export type GetSupermarketRegistriesByRegistryIdPackagesByPackageIdSkillsBySkillIdResponses = {
+export type GetSupermarketRegistriesByRegistryIdAppsByAppIdSkillsBySkillIdResponses = {
     /**
      * OK
      */
     200: HandlersSupermarketCatalogSkill;
 };
 
-export type GetSupermarketRegistriesByRegistryIdPackagesByPackageIdSkillsBySkillIdResponse = GetSupermarketRegistriesByRegistryIdPackagesByPackageIdSkillsBySkillIdResponses[keyof GetSupermarketRegistriesByRegistryIdPackagesByPackageIdSkillsBySkillIdResponses];
+export type GetSupermarketRegistriesByRegistryIdAppsByAppIdSkillsBySkillIdResponse = GetSupermarketRegistriesByRegistryIdAppsByAppIdSkillsBySkillIdResponses[keyof GetSupermarketRegistriesByRegistryIdAppsByAppIdSkillsBySkillIdResponses];
 
 export type GetSupermarketSkillsData = {
     body?: never;
@@ -16155,9 +16911,9 @@ export type GetSupermarketSkillsData = {
          */
         registry?: string;
         /**
-         * Package ID
+         * App ID
          */
-        package?: string;
+        app?: string;
         /**
          * Category ID
          */
@@ -16186,11 +16942,11 @@ export type GetSupermarketSkillsErrors = {
     /**
      * Bad Request
      */
-    400: HandlersErrorResponse;
+    400: ServerProblem;
     /**
      * Bad Gateway
      */
-    502: HandlersErrorResponse;
+    502: ServerProblem;
 };
 
 export type GetSupermarketSkillsError = GetSupermarketSkillsErrors[keyof GetSupermarketSkillsErrors];
@@ -16215,7 +16971,7 @@ export type GetTranscriptionModelsErrors = {
     /**
      * Internal Server Error
      */
-    500: HandlersErrorResponse;
+    500: ServerProblem;
 };
 
 export type GetTranscriptionModelsError = GetTranscriptionModelsErrors[keyof GetTranscriptionModelsErrors];
@@ -16245,7 +17001,7 @@ export type GetTranscriptionModelsByIdErrors = {
     /**
      * Not Found
      */
-    404: HandlersErrorResponse;
+    404: ServerProblem;
 };
 
 export type GetTranscriptionModelsByIdError = GetTranscriptionModelsByIdErrors[keyof GetTranscriptionModelsByIdErrors];
@@ -16278,11 +17034,11 @@ export type PutTranscriptionModelsByIdErrors = {
     /**
      * Bad Request
      */
-    400: HandlersErrorResponse;
+    400: ServerProblem;
     /**
      * Internal Server Error
      */
-    500: HandlersErrorResponse;
+    500: ServerProblem;
 };
 
 export type PutTranscriptionModelsByIdError = PutTranscriptionModelsByIdErrors[keyof PutTranscriptionModelsByIdErrors];
@@ -16312,7 +17068,7 @@ export type GetTranscriptionModelsByIdCapabilitiesErrors = {
     /**
      * Not Found
      */
-    404: HandlersErrorResponse;
+    404: ServerProblem;
 };
 
 export type GetTranscriptionModelsByIdCapabilitiesError = GetTranscriptionModelsByIdCapabilitiesErrors[keyof GetTranscriptionModelsByIdCapabilitiesErrors];
@@ -16351,11 +17107,11 @@ export type PostTranscriptionModelsByIdTestErrors = {
     /**
      * Bad Request
      */
-    400: HandlersErrorResponse;
+    400: ServerProblem;
     /**
      * Internal Server Error
      */
-    500: HandlersErrorResponse;
+    500: ServerProblem;
 };
 
 export type PostTranscriptionModelsByIdTestError = PostTranscriptionModelsByIdTestErrors[keyof PostTranscriptionModelsByIdTestErrors];
@@ -16380,7 +17136,7 @@ export type GetTranscriptionProvidersErrors = {
     /**
      * Internal Server Error
      */
-    500: HandlersErrorResponse;
+    500: ServerProblem;
 };
 
 export type GetTranscriptionProvidersError = GetTranscriptionProvidersErrors[keyof GetTranscriptionProvidersErrors];
@@ -16426,11 +17182,11 @@ export type GetTranscriptionProvidersByIdErrors = {
     /**
      * Bad Request
      */
-    400: HandlersErrorResponse;
+    400: ServerProblem;
     /**
      * Not Found
      */
-    404: HandlersErrorResponse;
+    404: ServerProblem;
 };
 
 export type GetTranscriptionProvidersByIdError = GetTranscriptionProvidersByIdErrors[keyof GetTranscriptionProvidersByIdErrors];
@@ -16460,15 +17216,15 @@ export type PostTranscriptionProvidersByIdImportModelsErrors = {
     /**
      * Bad Request
      */
-    400: HandlersErrorResponse;
+    400: ServerProblem;
     /**
      * Not Found
      */
-    404: HandlersErrorResponse;
+    404: ServerProblem;
     /**
      * Internal Server Error
      */
-    500: HandlersErrorResponse;
+    500: ServerProblem;
 };
 
 export type PostTranscriptionProvidersByIdImportModelsError = PostTranscriptionProvidersByIdImportModelsErrors[keyof PostTranscriptionProvidersByIdImportModelsErrors];
@@ -16498,11 +17254,11 @@ export type GetTranscriptionProvidersByIdModelsErrors = {
     /**
      * Bad Request
      */
-    400: HandlersErrorResponse;
+    400: ServerProblem;
     /**
      * Internal Server Error
      */
-    500: HandlersErrorResponse;
+    500: ServerProblem;
 };
 
 export type GetTranscriptionProvidersByIdModelsError = GetTranscriptionProvidersByIdModelsErrors[keyof GetTranscriptionProvidersByIdModelsErrors];
@@ -16527,15 +17283,15 @@ export type GetUsersErrors = {
     /**
      * Bad Request
      */
-    400: HandlersErrorResponse;
+    400: ServerProblem;
     /**
      * Forbidden
      */
-    403: HandlersErrorResponse;
+    403: ServerProblem;
     /**
      * Internal Server Error
      */
-    500: HandlersErrorResponse;
+    500: ServerProblem;
 };
 
 export type GetUsersError = GetUsersErrors[keyof GetUsersErrors];
@@ -16563,15 +17319,15 @@ export type PostUsersErrors = {
     /**
      * Bad Request
      */
-    400: HandlersErrorResponse;
+    400: ServerProblem;
     /**
      * Forbidden
      */
-    403: HandlersErrorResponse;
+    403: ServerProblem;
     /**
      * Internal Server Error
      */
-    500: HandlersErrorResponse;
+    500: ServerProblem;
 };
 
 export type PostUsersError = PostUsersErrors[keyof PostUsersErrors];
@@ -16596,15 +17352,15 @@ export type GetUsersMeErrors = {
     /**
      * Bad Request
      */
-    400: HandlersErrorResponse;
+    400: ServerProblem;
     /**
      * Unauthorized
      */
-    401: HandlersErrorResponse;
+    401: ServerProblem;
     /**
      * Internal Server Error
      */
-    500: HandlersErrorResponse;
+    500: ServerProblem;
 };
 
 export type GetUsersMeError = GetUsersMeErrors[keyof GetUsersMeErrors];
@@ -16632,11 +17388,11 @@ export type PutUsersMeErrors = {
     /**
      * Bad Request
      */
-    400: ApperrorProblem;
+    400: ServerProblem;
     /**
      * Internal Server Error
      */
-    500: ApperrorProblem;
+    500: ServerProblem;
 };
 
 export type PutUsersMeError = PutUsersMeErrors[keyof PutUsersMeErrors];
@@ -16661,7 +17417,7 @@ export type GetUsersMeChannelIdentitiesErrors = {
     /**
      * Internal Server Error
      */
-    500: HandlersErrorResponse;
+    500: ServerProblem;
 };
 
 export type GetUsersMeChannelIdentitiesError = GetUsersMeChannelIdentitiesErrors[keyof GetUsersMeChannelIdentitiesErrors];
@@ -16691,11 +17447,11 @@ export type DeleteUsersMeChannelIdentitiesByChannelIdentityIdErrors = {
     /**
      * Bad Request
      */
-    400: HandlersErrorResponse;
+    400: ServerProblem;
     /**
      * Internal Server Error
      */
-    500: HandlersErrorResponse;
+    500: ServerProblem;
 };
 
 export type DeleteUsersMeChannelIdentitiesByChannelIdentityIdError = DeleteUsersMeChannelIdentitiesByChannelIdentityIdErrors[keyof DeleteUsersMeChannelIdentitiesByChannelIdentityIdErrors];
@@ -16721,11 +17477,11 @@ export type PostUsersMeChannelLinksErrors = {
     /**
      * Bad Request
      */
-    400: HandlersErrorResponse;
+    400: ServerProblem;
     /**
      * Internal Server Error
      */
-    500: HandlersErrorResponse;
+    500: ServerProblem;
 };
 
 export type PostUsersMeChannelLinksError = PostUsersMeChannelLinksErrors[keyof PostUsersMeChannelLinksErrors];
@@ -16755,15 +17511,15 @@ export type GetUsersMeChannelsByPlatformErrors = {
     /**
      * Bad Request
      */
-    400: HandlersErrorResponse;
+    400: ServerProblem;
     /**
      * Not Found
      */
-    404: HandlersErrorResponse;
+    404: ServerProblem;
     /**
      * Internal Server Error
      */
-    500: HandlersErrorResponse;
+    500: ServerProblem;
 };
 
 export type GetUsersMeChannelsByPlatformError = GetUsersMeChannelsByPlatformErrors[keyof GetUsersMeChannelsByPlatformErrors];
@@ -16796,11 +17552,11 @@ export type PutUsersMeChannelsByPlatformErrors = {
     /**
      * Bad Request
      */
-    400: HandlersErrorResponse;
+    400: ServerProblem;
     /**
      * Internal Server Error
      */
-    500: HandlersErrorResponse;
+    500: ServerProblem;
 };
 
 export type PutUsersMeChannelsByPlatformError = PutUsersMeChannelsByPlatformErrors[keyof PutUsersMeChannelsByPlatformErrors];
@@ -16825,11 +17581,11 @@ export type GetUsersMeComputerAccessErrors = {
     /**
      * Bad Request
      */
-    400: HandlersErrorResponse;
+    400: ServerProblem;
     /**
      * Internal Server Error
      */
-    500: HandlersErrorResponse;
+    500: ServerProblem;
 };
 
 export type GetUsersMeComputerAccessError = GetUsersMeComputerAccessErrors[keyof GetUsersMeComputerAccessErrors];
@@ -16857,11 +17613,11 @@ export type PutUsersMePasswordErrors = {
     /**
      * Bad Request
      */
-    400: HandlersErrorResponse;
+    400: ServerProblem;
     /**
      * Internal Server Error
      */
-    500: HandlersErrorResponse;
+    500: ServerProblem;
 };
 
 export type PutUsersMePasswordError = PutUsersMePasswordErrors[keyof PutUsersMePasswordErrors];
@@ -16884,7 +17640,7 @@ export type GetUsersMeRuntimesErrors = {
     /**
      * Internal Server Error
      */
-    500: HandlersErrorResponse;
+    500: ServerProblem;
 };
 
 export type GetUsersMeRuntimesError = GetUsersMeRuntimesErrors[keyof GetUsersMeRuntimesErrors];
@@ -16912,15 +17668,15 @@ export type PostUsersMeRuntimesErrors = {
     /**
      * Bad Request
      */
-    400: HandlersErrorResponse;
+    400: ServerProblem;
     /**
      * Conflict
      */
-    409: HandlersErrorResponse;
+    409: ServerProblem;
     /**
      * Internal Server Error
      */
-    500: HandlersErrorResponse;
+    500: ServerProblem;
 };
 
 export type PostUsersMeRuntimesError = PostUsersMeRuntimesErrors[keyof PostUsersMeRuntimesErrors];
@@ -16950,15 +17706,15 @@ export type DeleteUsersMeRuntimesByIdErrors = {
     /**
      * Bad Request
      */
-    400: HandlersErrorResponse;
+    400: ServerProblem;
     /**
      * Not Found
      */
-    404: HandlersErrorResponse;
+    404: ServerProblem;
     /**
      * Internal Server Error
      */
-    500: HandlersErrorResponse;
+    500: ServerProblem;
 };
 
 export type DeleteUsersMeRuntimesByIdError = DeleteUsersMeRuntimesByIdErrors[keyof DeleteUsersMeRuntimesByIdErrors];
@@ -16986,23 +17742,23 @@ export type DeleteUsersByIdErrors = {
     /**
      * Bad Request
      */
-    400: HandlersErrorResponse;
+    400: ServerProblem;
     /**
      * Forbidden
      */
-    403: HandlersErrorResponse;
+    403: ServerProblem;
     /**
      * Not Found
      */
-    404: HandlersErrorResponse;
+    404: ServerProblem;
     /**
      * Conflict
      */
-    409: HandlersErrorResponse;
+    409: ServerProblem;
     /**
      * Internal Server Error
      */
-    500: HandlersErrorResponse;
+    500: ServerProblem;
 };
 
 export type DeleteUsersByIdError = DeleteUsersByIdErrors[keyof DeleteUsersByIdErrors];
@@ -17030,19 +17786,19 @@ export type GetUsersByIdErrors = {
     /**
      * Bad Request
      */
-    400: HandlersErrorResponse;
+    400: ServerProblem;
     /**
      * Forbidden
      */
-    403: HandlersErrorResponse;
+    403: ServerProblem;
     /**
      * Not Found
      */
-    404: HandlersErrorResponse;
+    404: ServerProblem;
     /**
      * Internal Server Error
      */
-    500: HandlersErrorResponse;
+    500: ServerProblem;
 };
 
 export type GetUsersByIdError = GetUsersByIdErrors[keyof GetUsersByIdErrors];
@@ -17075,23 +17831,23 @@ export type PutUsersByIdErrors = {
     /**
      * Bad Request
      */
-    400: HandlersErrorResponse;
+    400: ServerProblem;
     /**
      * Forbidden
      */
-    403: HandlersErrorResponse;
+    403: ServerProblem;
     /**
      * Not Found
      */
-    404: HandlersErrorResponse;
+    404: ServerProblem;
     /**
      * Conflict
      */
-    409: HandlersErrorResponse;
+    409: ServerProblem;
     /**
      * Internal Server Error
      */
-    500: HandlersErrorResponse;
+    500: ServerProblem;
 };
 
 export type PutUsersByIdError = PutUsersByIdErrors[keyof PutUsersByIdErrors];
@@ -17116,7 +17872,7 @@ export type GetVideoModelsErrors = {
     /**
      * Internal Server Error
      */
-    500: HandlersErrorResponse;
+    500: ServerProblem;
 };
 
 export type GetVideoModelsError = GetVideoModelsErrors[keyof GetVideoModelsErrors];
@@ -17146,11 +17902,11 @@ export type GetVideoModelsByIdErrors = {
     /**
      * Bad Request
      */
-    400: HandlersErrorResponse;
+    400: ServerProblem;
     /**
      * Not Found
      */
-    404: HandlersErrorResponse;
+    404: ServerProblem;
 };
 
 export type GetVideoModelsByIdError = GetVideoModelsByIdErrors[keyof GetVideoModelsByIdErrors];
@@ -17183,15 +17939,15 @@ export type PutVideoModelsByIdErrors = {
     /**
      * Bad Request
      */
-    400: HandlersErrorResponse;
+    400: ServerProblem;
     /**
      * Not Found
      */
-    404: HandlersErrorResponse;
+    404: ServerProblem;
     /**
      * Internal Server Error
      */
-    500: HandlersErrorResponse;
+    500: ServerProblem;
 };
 
 export type PutVideoModelsByIdError = PutVideoModelsByIdErrors[keyof PutVideoModelsByIdErrors];
@@ -17216,7 +17972,7 @@ export type GetVideoProvidersErrors = {
     /**
      * Internal Server Error
      */
-    500: HandlersErrorResponse;
+    500: ServerProblem;
 };
 
 export type GetVideoProvidersError = GetVideoProvidersErrors[keyof GetVideoProvidersErrors];
@@ -17262,11 +18018,11 @@ export type GetVideoProvidersByIdErrors = {
     /**
      * Bad Request
      */
-    400: HandlersErrorResponse;
+    400: ServerProblem;
     /**
      * Not Found
      */
-    404: HandlersErrorResponse;
+    404: ServerProblem;
 };
 
 export type GetVideoProvidersByIdError = GetVideoProvidersByIdErrors[keyof GetVideoProvidersByIdErrors];
@@ -17296,11 +18052,11 @@ export type PostVideoProvidersByIdImportModelsErrors = {
     /**
      * Bad Request
      */
-    400: HandlersErrorResponse;
+    400: ServerProblem;
     /**
      * Internal Server Error
      */
-    500: HandlersErrorResponse;
+    500: ServerProblem;
 };
 
 export type PostVideoProvidersByIdImportModelsError = PostVideoProvidersByIdImportModelsErrors[keyof PostVideoProvidersByIdImportModelsErrors];
@@ -17330,11 +18086,11 @@ export type GetVideoProvidersByIdModelsErrors = {
     /**
      * Bad Request
      */
-    400: HandlersErrorResponse;
+    400: ServerProblem;
     /**
      * Internal Server Error
      */
-    500: HandlersErrorResponse;
+    500: ServerProblem;
 };
 
 export type GetVideoProvidersByIdModelsError = GetVideoProvidersByIdModelsErrors[keyof GetVideoProvidersByIdModelsErrors];
@@ -17364,39 +18120,30 @@ export type GetWebhookTunnelStatusResponses = {
 
 export type GetWebhookTunnelStatusResponse = GetWebhookTunnelStatusResponses[keyof GetWebhookTunnelStatusResponses];
 
-export type GetWorkspaceDependenciesCatalogData = {
+export type GetWorkspaceDependenciesData = {
     body?: never;
     path?: never;
-    query?: {
-        /**
-         * Refresh the remote catalog
-         */
-        refresh?: boolean;
-    };
-    url: '/workspace-dependencies/catalog';
+    query?: never;
+    url: '/workspace-dependencies';
 };
 
-export type GetWorkspaceDependenciesCatalogErrors = {
-    /**
-     * Unauthorized
-     */
-    401: HandlersErrorResponse;
+export type GetWorkspaceDependenciesErrors = {
     /**
      * Service Unavailable
      */
-    503: ApperrorProblem;
+    503: ServerProblem;
 };
 
-export type GetWorkspaceDependenciesCatalogError = GetWorkspaceDependenciesCatalogErrors[keyof GetWorkspaceDependenciesCatalogErrors];
+export type GetWorkspaceDependenciesError = GetWorkspaceDependenciesErrors[keyof GetWorkspaceDependenciesErrors];
 
-export type GetWorkspaceDependenciesCatalogResponses = {
+export type GetWorkspaceDependenciesResponses = {
     /**
      * OK
      */
     200: HandlersWorkspaceDependencyCatalogResponse;
 };
 
-export type GetWorkspaceDependenciesCatalogResponse = GetWorkspaceDependenciesCatalogResponses[keyof GetWorkspaceDependenciesCatalogResponses];
+export type GetWorkspaceDependenciesResponse = GetWorkspaceDependenciesResponses[keyof GetWorkspaceDependenciesResponses];
 
 export type GetWorkspaceDependenciesIconsByDigestData = {
     body?: never;
@@ -17414,11 +18161,11 @@ export type GetWorkspaceDependenciesIconsByDigestErrors = {
     /**
      * Bad Request
      */
-    400: ApperrorProblem;
+    400: ServerProblem;
     /**
      * Not Found
      */
-    404: ApperrorProblem;
+    404: ServerProblem;
 };
 
 export type GetWorkspaceDependenciesIconsByDigestError = GetWorkspaceDependenciesIconsByDigestErrors[keyof GetWorkspaceDependenciesIconsByDigestErrors];

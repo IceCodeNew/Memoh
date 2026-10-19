@@ -9,7 +9,6 @@ import (
 	"context"
 	"encoding/json"
 	"log/slog"
-	"regexp"
 	"strings"
 	"time"
 
@@ -21,21 +20,9 @@ import (
 	"github.com/felinics/memoh/internal/agent/runtime/codex/protocol"
 )
 
-// dispatchElicitation answers one MCP elicitation. A Memoh tool-call consent
-// is decided at the app-server level — it needs only the bot-scoped gateway
-// lookup, so concurrent turns cannot break it. Everything that needs a user
-// (forms, third-party consents) routes to the bot's sole active turn; with
-// zero or several candidates the owner is unknowable and declining is the
-// only safe answer.
+// dispatchElicitation sends runtime requests to a uniquely owned turn.
+// Even Memoh tool consents must reach a user or be declined.
 func (s *appServer) dispatchElicitation(req *protocol.Inbound, params *protocol.McpServerElicitationRequestParams) {
-	if toolName, ok := autoAcceptedConsentTool(s.mountCtx, params, s.toolLookup); ok {
-		s.logger.Debug("codex: auto-accepting Memoh MCP tool consent; the gateway enforces the real policy",
-			slog.String("tool", toolName))
-		_ = s.conn.Respond(req.ID, protocol.McpServerElicitationRequestResponse{
-			Action: protocol.McpServerElicitationActionAccept,
-		})
-		return
-	}
 	turn := s.soleActiveTurn()
 	if turn == nil {
 		s.logger.Warn("codex: declining MCP elicitation without a unique active turn", slog.String("mode", params.Tag))
@@ -45,51 +32,6 @@ func (s *appServer) dispatchElicitation(req *protocol.Inbound, params *protocol.
 		return
 	}
 	turn.handleElicitation(s.conn, req, params)
-}
-
-// autoAcceptedConsentTool reports whether the elicitation is a consent for a
-// tool the Memoh gateway itself serves. The gateway enforces the real
-// approval policy on the actual call; a codex-side card here would
-// double-approve every gateway tool. This trusts the workspace-owned codex
-// config not to alias a foreign server as "memoh" — anyone who can edit that
-// config already runs arbitrary commands as the agent, so the codex consent
-// layer is not a security boundary against them. Everything else fails
-// closed to the user-facing path.
-func autoAcceptedConsentTool(ctx context.Context, params *protocol.McpServerElicitationRequestParams, lookup func(context.Context, string) bool) (string, bool) {
-	message, _, ok := elicitationConsentEnvelope(params)
-	if !ok || lookup == nil {
-		return "", false
-	}
-	serverName, toolName, parsed := mcpConsentTarget(message)
-	if !parsed || serverName != memohMCPServerName || !lookup(ctx, toolName) {
-		return "", false
-	}
-	return toolName, true
-}
-
-// elicitationConsentEnvelope reports whether the elicitation is a codex MCP
-// tool-call consent, returning its message and _meta.
-func elicitationConsentEnvelope(params *protocol.McpServerElicitationRequestParams) (string, map[string]any, bool) {
-	var message string
-	var meta map[string]any
-	switch params.Tag {
-	case protocol.McpServerElicitationRequestParamsTagForm:
-		if params.Form == nil {
-			return "", nil, false
-		}
-		message, meta = params.Form.Message, anyToSchemaMap(params.Form.Meta)
-	case protocol.McpServerElicitationRequestParamsTagOpenaiForm:
-		if params.OpenaiForm == nil {
-			return "", nil, false
-		}
-		message, meta = params.OpenaiForm.Message, anyToSchemaMap(params.OpenaiForm.Meta)
-	default:
-		return "", nil, false
-	}
-	if kind, _ := meta["codex_approval_kind"].(string); kind == "mcp_tool_call" {
-		return message, meta, true
-	}
-	return "", nil, false
 }
 
 // soleActiveTurn returns the bot's only running turn, or nil when zero or
@@ -161,13 +103,20 @@ func (t *turnState) runElicitation(ctx context.Context, params *protocol.McpServ
 		message = params.OpenaiForm.Message
 		schema = anyToSchemaMap(params.OpenaiForm.RequestedSchema)
 		meta = anyToSchemaMap(params.OpenaiForm.Meta)
+	case protocol.McpServerElicitationRequestParamsTagOpenaiFormCamelCase:
+		if params.OpenaiFormCamelCase == nil {
+			return decline
+		}
+		message = params.OpenaiFormCamelCase.Message
+		schema = anyToSchemaMap(params.OpenaiFormCamelCase.RequestedSchema)
+		meta = anyToSchemaMap(params.OpenaiFormCamelCase.Meta)
 	case protocol.McpServerElicitationRequestParamsTagURL:
 		if params.URL == nil {
 			return decline
 		}
 		return t.runURLElicitation(ctx, params.URL)
 	default:
-		t.logger.Warn("codex: declining MCP elicitation with unsupported mode", slog.String("mode", params.Tag))
+		t.logger.WarnContext(ctx, "codex: declining MCP elicitation with unsupported mode", slog.String("mode", params.Tag))
 		t.emitElicitationDeclinedNotice("the requested interaction format is not supported")
 		return decline
 	}
@@ -179,14 +128,14 @@ func (t *turnState) runElicitation(ctx context.Context, params *protocol.McpServ
 		return t.runMCPToolConsent(ctx, message, meta)
 	}
 	if schema == nil {
-		t.logger.Warn("codex: declining MCP elicitation with unreadable schema", slog.String("mode", params.Tag))
+		t.logger.WarnContext(ctx, "codex: declining MCP elicitation with unreadable schema", slog.String("mode", params.Tag))
 		t.emitElicitationDeclinedNotice("the requested form cannot be read")
 		return decline
 	}
 
 	input, mapping, err := userinput.ElicitationFormInput(message, schema)
 	if err != nil {
-		t.logger.Warn("codex: declining unsupported MCP elicitation form",
+		t.logger.WarnContext(ctx, "codex: declining unsupported MCP elicitation form",
 			slog.String("mode", params.Tag), slog.Any("error", err))
 		t.emitElicitationDeclinedNotice("the requested form cannot be rendered safely")
 		return decline
@@ -199,7 +148,7 @@ func (t *turnState) runElicitation(ctx context.Context, params *protocol.McpServ
 	case userinput.StatusSubmitted:
 		content, err := mapping.Content(flow)
 		if err != nil {
-			t.logger.Warn("codex: elicitation answers did not satisfy the form schema", slog.Any("error", err))
+			t.logger.WarnContext(ctx, "codex: elicitation answers did not satisfy the form schema", slog.Any("error", err))
 			return cancel
 		}
 		return protocol.McpServerElicitationRequestResponse{
@@ -216,24 +165,7 @@ func (t *turnState) runElicitation(ctx context.Context, params *protocol.McpServ
 	}
 }
 
-// mcpConsentTarget extracts the server and tool a consent asks about from
-// codex's consent message. The template is hard-coded in the pinned codex
-// release ("Allow the <server> MCP server to run tool \"<tool>\"?"); a
-// non-matching message reports no target and the consent falls through to
-// the user's approval card (fail closed, never a false allow).
-var mcpConsentMessagePattern = regexp.MustCompile(`^Allow the (\S+) MCP server to run tool "([^"]+)"\?$`)
-
-func mcpConsentTarget(message string) (serverName, toolName string, ok bool) {
-	match := mcpConsentMessagePattern.FindStringSubmatch(strings.TrimSpace(message))
-	if match == nil {
-		return "", "", false
-	}
-	return match[1], match[2], true
-}
-
-// runMCPToolConsent asks the user about an MCP tool-call consent the
-// dispatch layer could not auto-accept — unknown servers, unknown tools,
-// unparseable messages — as a permission approval.
+// runMCPToolConsent forwards the runtime consent to the user.
 func (t *turnState) runMCPToolConsent(ctx context.Context, message string, meta map[string]any) protocol.McpServerElicitationRequestResponse {
 	decline := protocol.McpServerElicitationRequestResponse{Action: protocol.McpServerElicitationActionDecline}
 	cancel := protocol.McpServerElicitationRequestResponse{Action: protocol.McpServerElicitationActionCancel}
@@ -261,34 +193,22 @@ func (t *turnState) runMCPToolConsent(ctx context.Context, message string, meta 
 // user confirms, decline when they cancel.
 func (t *turnState) runURLElicitation(ctx context.Context, params *protocol.URLMcpServerElicitationRequestParams) protocol.McpServerElicitationRequestResponse {
 	decline := protocol.McpServerElicitationRequestResponse{Action: protocol.McpServerElicitationActionDecline}
-	url := strings.TrimSpace(params.URL)
-	if url == "" {
+	input, err := userinput.ElicitationURLInput(params.Message, params.URL)
+	if err != nil {
 		return decline
 	}
-	text := strings.TrimSpace(params.Message)
-	if text == "" {
-		text = "The agent needs you to complete a step in your browser"
-	}
-	input := map[string]any{"questions": []map[string]any{{
-		"text": text + ": " + url,
-		"kind": userinput.QuestionKindSingleSelect,
-		"options": []map[string]any{
-			{"label": "Done", "description": "I completed the step"},
-			{"label": "Cancel", "description": "Do not continue"},
-		},
-	}}}
 	flow, ok := t.runElicitationFlow(ctx, input)
 	if !ok || flow.Status != userinput.StatusSubmitted {
 		return decline
 	}
 	answers := userinput.AnswersFromResult(flow.Result)
-	if len(answers) == 1 && len(answers[0].Selected) == 1 && answers[0].Selected[0].Label == "Done" {
+	if len(answers) == 1 && len(answers[0].Selected) == 1 && answers[0].Selected[0].ID == "q1.o1" {
 		return protocol.McpServerElicitationRequestResponse{Action: protocol.McpServerElicitationActionAccept}
 	}
 	return decline
 }
 
-func (t *turnState) runElicitationFlow(ctx context.Context, input map[string]any) (userinput.Request, bool) {
+func (t *turnState) runElicitationFlow(ctx context.Context, input any) (userinput.Request, bool) {
 	expiresAt := time.Now().Add(userinput.DefaultWaitTimeout + time.Minute)
 	flow, err := userinput.RunFlow(ctx, t.userInput, userinput.FlowRequest{
 		Input: userinput.CreatePendingInput{
@@ -322,7 +242,7 @@ func (t *turnState) runElicitationFlow(ctx context.Context, input map[string]any
 	})
 	if err != nil {
 		if ctx.Err() == nil {
-			t.logger.Error("codex MCP elicitation flow failed", slog.String("thread_id", t.threadID), slog.Any("error", err))
+			t.logger.ErrorContext(ctx, "codex MCP elicitation flow failed", slog.String("thread_id", t.threadID), slog.Any("error", err))
 		}
 		return userinput.Request{}, false
 	}
@@ -333,9 +253,9 @@ func (t *turnState) runElicitationFlow(ctx context.Context, input map[string]any
 // conversation so the user knows a tool asked for input Memoh could not show.
 func (t *turnState) emitElicitationDeclinedNotice(reason string) {
 	t.emit(event.StreamEvent{
-		Type:  event.RuntimeNotice,
-		Code:  "elicitation_declined",
-		Delta: "A tool asked for user input that could not be shown: " + reason,
+		Type:       event.RuntimeNotice,
+		NoticeKind: event.NoticeElicitationDeclined,
+		Delta:      "A tool asked for user input that could not be shown: " + reason,
 	})
 }
 

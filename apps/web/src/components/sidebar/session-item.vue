@@ -1,30 +1,52 @@
 <template>
   <ContextMenu>
-    <ContextMenuTrigger as-child>
+    <!-- While selecting, a row only toggles its checkbox; the menus are what
+         entered the mode, so they stay out of the way until it ends. -->
+    <ContextMenuTrigger
+      as-child
+      :disabled="selecting"
+    >
       <!-- active: mirrors the hover fill so a touch press (incl. the hold that
            opens the context menu) gives visible feedback — touch has no hover,
            and without this the long-press felt dead until the menu appeared.
 
            data-menu-open is the ROW-EMPHASIZED contract: while the dropdown is
            open the cursor is over the portaled menu, so :hover is gone from
-           the row — everything that keyed off hover (row fill, actions slot,
+           the row — everything that keyed off hover (row fill, actions button,
            marquee scroll) must also key off this attribute, or the row
            visually collapses the moment the pointer moves onto the menu. -->
       <div
-        ref="rowEl"
-        role="button"
+        data-slot="sidebar-session-row"
+        :role="selecting ? 'checkbox' : 'button'"
+        :aria-checked="selecting ? selected : undefined"
         tabindex="0"
-        class="group relative flex items-center min-h-[2.125rem] w-full rounded-[9px] px-[11px] text-left transition-colors cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-        :class="rowClass"
+        class="group relative flex items-center min-h-[2.125rem] w-full rounded-[9px] px-[11px] text-left cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
         :data-ui-selected="isActive ? '' : undefined"
         :data-menu-open="menuOpen || undefined"
+        :data-streaming="streaming || undefined"
+        :data-selecting="selecting || undefined"
         :title="hoverTitle"
-        @mouseenter="syncHovered"
-        @mouseleave="syncHovered"
-        @click="$emit('select', session)"
-        @keydown.enter.prevent="$emit('select', session)"
-        @keydown.space.prevent="$emit('select', session)"
+        @click="activate"
+        @keydown.enter.exact.prevent="activate"
+        @keydown.space.prevent="activate"
+        @contextmenu="suppressNativeMenu"
       >
+        <!-- The row itself is the checkbox while selecting (role/aria-checked
+             above), so this box is display-only — the same non-interactive
+             library Checkbox as md-checkbox.vue, not a second focusable
+             control nested inside the row. -->
+        <span
+          v-if="selecting"
+          class="mr-2 flex size-4 shrink-0 items-center justify-center"
+        >
+          <Checkbox
+            :model-value="selected"
+            tabindex="-1"
+            aria-hidden="true"
+            class="pointer-events-none"
+          />
+        </span>
+
         <!-- Native session rows stay text-only. Agent rows carry the agent icon
              and schedule runs a yellow clock, because the unified Recents list
              mixes model chats, external-agent chats, and schedule runs. -->
@@ -35,7 +57,7 @@
           :aria-label="agentLabel"
         >
           <component
-            :is="acpAgentIcon(agentProvider, true)"
+            :is="externalAgentIcon(agentProvider, true)"
             class="size-4"
             aria-hidden="true"
           />
@@ -57,111 +79,113 @@
              per-script treatment as the chat body (.sidebar-cjk / .sidebar-latin reuse
              the --chat-*-body weight + Latin size/tracking). The only thing dropped vs
              the body is streaming — a title is a static one-line label. -->
-        <MarqueeText class="flex-1 min-w-0 text-control text-foreground dark:text-[color:oklch(0.92_0_0)]">
-          <span
-            v-for="(run, i) in titleRuns"
-            :key="i"
-            :class="run.script === 'cjk' ? 'sidebar-cjk' : 'sidebar-latin'"
-          >{{ run.text }}</span>
-        </MarqueeText>
-
-        <!-- Trailing slot: spinner and the actions button share one 24px right
-             slot so they sit at the same center and never both show at once. The
-             slot reserves its width IN FLOW whenever anything can be visible in
-             it — streaming or row emphasis (hover, or the dropdown being open —
-             keyed off data-menu-open on the row so the slot stays reserved while
-             the cursor is over the portaled menu) — so the title's display area
-             always ends before the icon zone instead of letting the icon float
-             over the text. Keyboard focus alone does NOT widen it (deliberate):
-             closing the dropdown refocuses its trigger inside the row, and a
-             focus-keyed rule would pin the slot open after an Esc close,
-             over-truncating the title. Idle rows keep w-0 (no dead gutter); the
-             width transition lets the title re-truncate smoothly as the slot
-             grows, and the actions button fades in over the same beat as the
-             spinner fades out. The button is ABSOLUTELY anchored to the slot's
-             right edge, never an in-flow flex child: a shrink-0 button beside
-             the 24px spinner out-competes it for flex width inside the fixed
-             w-6 slot and crushes the spinner's box to zero, off-centering the
-             loader. Sole in-flow child while streaming, the spinner keeps its
-             full box and center. -->
-        <div
-          class="relative ml-1.5 flex h-6 shrink-0 items-center justify-end transition-[width] duration-150"
-          :class="streaming || menuOpen ? 'w-6' : 'w-0 group-hover:w-6 group-data-[menu-open=true]:w-6'"
-        >
-          <div
-            v-if="streaming"
-            class="flex h-6 w-6 items-center justify-center transition-opacity duration-150 group-hover:opacity-0"
-            :class="menuOpen ? 'opacity-0' : 'opacity-100'"
+        <div class="relative min-w-0 flex-1">
+          <MarqueeText
+            :overlay="actionsEl"
+            class="mr-1.5 min-w-0 text-control text-foreground dark:text-[color:oklch(0.92_0_0)]"
           >
-            <LoaderCircle
-              class="size-3 animate-spin text-muted-foreground"
-              :aria-label="t('chat.sessionStreaming')"
-            />
-          </div>
+            <span
+              v-for="(run, i) in titleRuns"
+              :key="i"
+              :class="run.script === 'cjk' ? 'sidebar-cjk' : 'sidebar-latin'"
+            >{{ run.text }}</span>
+          </MarqueeText>
 
-          <DropdownMenu v-model:open="menuOpen">
-            <DropdownMenuTrigger as-child>
-              <!-- Plain button (not <Button variant="ghost">): the ghost chip color
-                   (--btn-ghost-hover) is the same gray as the row's own hover, so the
-                   button's hover was invisible while sitting on a hovered row. A
-                   translucent foreground mix darkens whatever is behind it, so the
-                   chip reads clearly on top of both the hover and active row fills. -->
-              <button
-                type="button"
-                class="absolute inset-y-0 right-0 my-auto inline-flex size-6 cursor-pointer items-center justify-center rounded-md text-muted-foreground outline-none transition-[opacity,background-color,color] duration-150 hover:bg-[color-mix(in_oklab,var(--foreground)_12%,transparent)] hover:text-foreground focus-visible:opacity-100 focus-visible:ring-2 focus-visible:ring-ring data-[state=open]:bg-[color-mix(in_oklab,var(--foreground)_12%,transparent)] data-[state=open]:text-foreground"
-                :class="menuOpen ? 'opacity-100' : 'opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto group-data-[menu-open=true]:opacity-100 group-data-[menu-open=true]:pointer-events-auto'"
-                :aria-label="t('chat.sessionActions')"
-                @click.stop
-                @keydown.enter.stop
-                @keydown.space.stop
-              >
-                <MoreHorizontal class="size-4" />
-              </button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent
-              align="end"
-              @click.stop
+          <!-- Keep the overlay out of flow so revealing actions never resizes
+               the title. The marquee masks this area while a control is visible.
+               A selecting row has no actions button, so data-selecting keeps
+               hover from masking the title or fading the spinner for nothing. -->
+          <div
+            ref="actionsEl"
+            data-slot="sidebar-session-overlay"
+            class="absolute right-0 top-1/2 flex h-6 w-6 -translate-y-1/2 items-center justify-end"
+          >
+            <div
+              v-if="streaming"
+              data-slot="sidebar-session-spinner"
+              class="flex h-6 w-6 items-center justify-center transition-opacity duration-150"
             >
-              <DropdownMenuItem
-                @select="$emit('rename', session)"
+              <LoaderCircle
+                class="size-3 animate-spin text-muted-foreground"
+                :aria-label="t('chat.sessionStreaming')"
+              />
+            </div>
+
+            <DropdownMenu
+              v-if="!selecting"
+              v-model:open="menuOpen"
+            >
+              <DropdownMenuTrigger as-child>
+                <!-- Plain button (not <Button variant="ghost">): the ghost chip color
+                     (--btn-ghost-hover) is the same gray as the row's own hover, so the
+                     button's hover was invisible while sitting on a hovered row. A
+                     translucent foreground mix darkens whatever is behind it, so the
+                     chip reads clearly on top of both the hover and active row fills. -->
+                <button
+                  type="button"
+                  class="absolute inset-y-0 right-0 my-auto inline-flex size-6 cursor-pointer items-center justify-center rounded-md text-muted-foreground outline-none transition-[opacity,background-color,color] duration-150 hover:bg-[color-mix(in_oklab,var(--foreground)_12%,transparent)] hover:text-foreground focus-visible:opacity-100 focus-visible:ring-2 focus-visible:ring-ring data-[state=open]:bg-[color-mix(in_oklab,var(--foreground)_12%,transparent)] data-[state=open]:text-foreground"
+                  :class="menuOpen ? 'opacity-100' : 'opacity-0 pointer-events-none group-hover:opacity-100 group-hover:pointer-events-auto group-data-[menu-open=true]:opacity-100 group-data-[menu-open=true]:pointer-events-auto'"
+                  :aria-label="t('chat.sessionActions')"
+                  @click.stop
+                  @keydown.enter.exact.stop
+                  @keydown.space.stop
+                >
+                  <MoreHorizontal class="size-4" />
+                </button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent
+                align="end"
+                @click.stop
               >
-                <Pencil class="mr-2 size-3.5" />
-                {{ t('common.rename') }}
-              </DropdownMenuItem>
-              <DropdownMenuItem
-                variant="destructive"
-                @select="$emit('delete', session)"
-              >
-                <Trash2 class="mr-2 size-3.5" />
-                {{ t('common.delete') }}
-              </DropdownMenuItem>
-            </DropdownMenuContent>
-          </DropdownMenu>
+                <DropdownMenuItem
+                  @select="$emit('rename', session)"
+                >
+                  <Pencil />
+                  {{ t('common.rename') }}
+                </DropdownMenuItem>
+                <DropdownMenuItem @select="startSelection">
+                  <ListChecks />
+                  {{ t('chat.selectSessions') }}
+                </DropdownMenuItem>
+                <DropdownMenuItem
+                  variant="destructive"
+                  @select="$emit('delete', session)"
+                >
+                  <Trash2 />
+                  {{ t('common.delete') }}
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
+          </div>
         </div>
       </div>
     </ContextMenuTrigger>
     <!-- Right-click menu: Open opens the session as its own pinned tab (a single
          click reuses the ephemeral preview slot; an explicit right-click means
-         "give me a separate tab"). Rename/Delete reuse the same emits as the
-         hover three-dot button so both affordances stay in sync. -->
+         "give me a separate tab"). Rename/Select/Delete mirror the hover
+         three-dot menu so both affordances stay in sync. -->
     <ContextMenuContent>
       <ContextMenuItem
         :disabled="isActive"
         @select="$emit('openNewTab', session)"
       >
-        <MessageSquare class="mr-2 size-3.5" />
+        <OpenInTabIcon />
         {{ t('common.open') }}
       </ContextMenuItem>
       <ContextMenuSeparator />
       <ContextMenuItem @select="$emit('rename', session)">
-        <Pencil class="mr-2 size-3.5" />
+        <Pencil />
         {{ t('common.rename') }}
+      </ContextMenuItem>
+      <ContextMenuItem @select="startSelection">
+        <ListChecks />
+        {{ t('chat.selectSessions') }}
       </ContextMenuItem>
       <ContextMenuItem
         variant="destructive"
         @select="$emit('delete', session)"
       >
-        <Trash2 class="mr-2 size-3.5" />
+        <Trash2 />
         {{ t('common.delete') }}
       </ContextMenuItem>
     </ContextMenuContent>
@@ -169,11 +193,14 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref } from 'vue'
-import { Clock, LoaderCircle, MessageSquare, MoreHorizontal, Pencil, Trash2 } from 'lucide-vue-next'
+import { externalAgentDisplayName, externalAgentIcon } from '@/utils/external-agent'
+import { computed, inject, ref } from 'vue'
+import { Clock, ListChecks, LoaderCircle, MoreHorizontal, Pencil, Trash2 } from 'lucide-vue-next'
 import { useI18n } from 'vue-i18n'
+import { OpenInTabIcon } from '@memohai/icon/ui'
 import type { SessionSummary } from '@/composables/api/useChat'
 import {
+  Checkbox,
   ContextMenu,
   ContextMenuContent,
   ContextMenuItem,
@@ -184,11 +211,11 @@ import {
   DropdownMenuContent,
   DropdownMenuItem,
 } from '@felinic/ui'
-import { acpAgentDisplayName, acpAgentIcon } from '@/utils/acp'
 import { sessionAgentProvider } from '@/utils/bot-agent'
 import { splitScriptRuns } from '@/utils/script-runs'
 import { isAgentRuntimeType, normalizedRuntimeType, normalizedSessionMode, routeConversationLabel } from '@/store/chat-list.utils'
 import MarqueeText from './marquee-text.vue'
+import { SessionSelectionKey } from './session-selection'
 
 const props = defineProps<{
   session: SessionSummary
@@ -196,7 +223,7 @@ const props = defineProps<{
   streaming?: boolean
 }>()
 
-defineEmits<{
+const emit = defineEmits<{
   select: [session: SessionSummary]
   openNewTab: [session: SessionSummary]
   rename: [session: SessionSummary]
@@ -205,42 +232,32 @@ defineEmits<{
 
 const { t } = useI18n()
 
+const injectedSelection = inject(SessionSelectionKey)
+if (!injectedSelection) throw new Error('SessionItem must be used within the sessions panel')
+const selection = injectedSelection
+const selecting = computed(() => selection.active.value)
+const selected = computed(() => selection.isSelected(props.session.id))
+
+function activate() {
+  if (selecting.value) selection.toggle(props.session.id)
+  else emit('select', props.session)
+}
+
+function startSelection() {
+  // Selecting unmounts the dropdown before reka emits its close, which would
+  // leave menuOpen stuck true and the row emphasized for good.
+  menuOpen.value = false
+  selection.select(props.session.id)
+}
+
+// A disabled reka ContextMenuTrigger lets the event through, which would pop
+// the browser's own menu over a selecting row.
+function suppressNativeMenu(event: MouseEvent) {
+  if (selecting.value) event.preventDefault()
+}
+
 const menuOpen = ref(false)
-const rowEl = ref<HTMLElement>()
-// Pure-CSS :hover re-read as state, so the rowEmphasized computed can consume
-// it (a computed can't match selectors directly). Note the dual channel: only
-// the row FILL flows through this JS predicate; the slot width, actions button
-// and marquee trigger key straight off CSS .group:hover. The channels diverge
-// transiently when the row slides under a STATIONARY cursor (list reorder,
-// folder expand/collapse): no mouseenter fires, so the fill lags one cursor
-// move while the CSS effects apply immediately — cosmetic, self-heals.
-const hovered = ref(false)
-const syncHovered = () => { hovered.value = rowEl.value?.matches(':hover') ?? false }
-
-// Row emphasis = hover OR open dropdown, as ONE predicate feeding the row fill
-// class, the data-menu-open attribute, and (via it) the trailing slot width and
-// the marquee's scroll trigger. One source of truth means the fill, the 24px
-// slot, and the scrolling can never disagree about which state the row is in —
-// previously three independent CSS :hover rules did, and each disagreement was
-// a separate bug report ("slot didn't restore"; "row collapsed while the menu
-// was open" — with the dropdown open the cursor sits over the PORTALED menu,
-// so :hover is gone from the row and hover-keyed effects snapped off mid-read).
-// Active rows are excluded: they already carry the stronger selected fill, and
-// layering hover gray on it reads as a flicker.
-const rowEmphasized = computed(() => !props.isActive && (hovered.value || menuOpen.value))
-
-const rowClass = computed(() => {
-  if (props.isActive) return ''
-  // :active fill is a SEPARATE contract from rowEmphasized, kept from the
-  // pre-marquee hover:/active: pair: it gives touch users press feedback
-  // (incl. the long-press that opens the context menu) where :hover never
-  // fires. It must not widen the slot or start the marquee — pressing is
-  // not emphasis — so it stays out of the predicate on purpose.
-  return [
-    'active:bg-[color:var(--sidebar-hover)]',
-    rowEmphasized.value ? 'bg-[color:var(--sidebar-hover)]' : '',
-  ]
-})
+const actionsEl = ref<HTMLElement>()
 
 function routeMeta(): Record<string, unknown> {
   return props.session.route_metadata ?? {}
@@ -270,7 +287,7 @@ const agentProvider = computed(() => sessionAgentProvider(
 ))
 const isAgentSession = computed(() => isAgentRuntimeType(normalizedRuntimeType(props.session)))
 const isScheduleSession = computed(() => normalizedSessionMode(props.session) === 'schedule')
-const agentLabel = computed(() => acpAgentDisplayName(agentProvider.value, t('chat.sessionTypeACPAgent')))
+const agentLabel = computed(() => externalAgentDisplayName(agentProvider.value, t('chat.sessionTypeACPAgent')))
 
 // The old two-line subLabel is folded into the native tooltip: channel handle
 // for IM sessions, agent name for ACP sessions.

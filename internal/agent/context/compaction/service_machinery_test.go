@@ -26,6 +26,7 @@ type stubModel struct {
 	calls        int
 	prompt       string // decoded text of the captured request messages
 	maxTokens    int    // captured max_tokens of the last request
+	reasoning    int    // output tokens spent on reasoning before the summary text
 }
 
 func (s *stubModel) RoundTrip(req *http.Request) (*http.Response, error) {
@@ -43,6 +44,9 @@ func (s *stubModel) RoundTrip(req *http.Request) (*http.Response, error) {
 	finishReason := s.finishReason
 	if finishReason == "" {
 		finishReason = "stop"
+	}
+	if s.reasoning > 0 && (s.maxTokens-s.reasoning)*4 < len(s.summary) {
+		finishReason = "length"
 	}
 	resp := `{"id":"stub","object":"chat.completion","created":0,"model":"stub",` +
 		`"choices":[{"index":0,"message":{"role":"assistant","content":` + jsonStr(s.summary) + `},"finish_reason":` + jsonStr(finishReason) + `}],` +
@@ -454,7 +458,7 @@ func TestDoCompactionAllEmptyWindowSkipsModelAndMarking(t *testing.T) {
 	}
 }
 
-func TestDoCompactionIncompleteToolExchangeSkipsModelAndMarking(t *testing.T) {
+func TestDoCompactionCoversToolExchangeWhoseResultRendersEmpty(t *testing.T) {
 	rows := []sqlc.ListUncompactedMessagesBySessionRow{
 		toolCallRow(t, 100),
 		mkRow(t, "tool", `[]`, 100),
@@ -467,23 +471,15 @@ func TestDoCompactionIncompleteToolExchangeSkipsModelAndMarking(t *testing.T) {
 	if _, err := svc.RunCompactionSync(context.Background(), machineryConfig(stub, 150)); err != nil {
 		t.Fatalf("RunCompactionSync: %v", err)
 	}
-	if stub.calls != 0 {
-		t.Fatalf("summarizer should not be called when no row can be marked (calls=%d)", stub.calls)
-	}
-	if q.created {
-		t.Fatal("a no-op compaction must not create a log row")
-	}
-	if len(q.markedIDs) != 0 {
-		t.Fatalf("nothing should be marked for an incomplete tool exchange (marked=%d)", len(q.markedIDs))
+	if stub.calls != 1 || len(q.markedIDs) != 2 || q.markedIDs[0] != rows[0].ID || q.markedIDs[1] != rows[1].ID {
+		t.Fatalf("calls=%d marked=%d, want the call and its empty result covered together", stub.calls, len(q.markedIDs))
 	}
 }
 
-func TestDoCompactionMarksOnlyContiguousRunAcrossEmptyMiddleRow(t *testing.T) {
+func TestDoCompactionCoversEmptyMiddleRowWithItsNeighbours(t *testing.T) {
 	// Window: an empty-rendering reasoning row sits between two rendered rows.
-	// Marking both rendered rows under one compact_id would leave the raw
-	// reasoning row between them and let the read path fold history out of
-	// order. doCompaction must mark only the first contiguous run (row 0) and
-	// leave row 2 for a later pass.
+	// All three are marked under one compact_id, so the range stays contiguous
+	// and the read path replaces it in place.
 	rows := []sqlc.ListUncompactedMessagesBySessionRow{
 		mkRow(t, "user", `[{"type":"text","text":"old question about a long-running project with plenty of detail to summarize"}]`, 100), // 0
 		mkRow(t, "assistant", `[{"type":"reasoning","text":"thinking"}]`, 100),                                                           // 1 renders empty
@@ -498,11 +494,11 @@ func TestDoCompactionMarksOnlyContiguousRunAcrossEmptyMiddleRow(t *testing.T) {
 	if _, err := svc.RunCompactionSync(context.Background(), machineryConfig(stub, 250)); err != nil {
 		t.Fatalf("RunCompactionSync: %v", err)
 	}
-	if len(q.markedIDs) != 1 || q.markedIDs[0] != rows[0].ID {
-		t.Fatalf("marked = %d ids, want only the contiguous leading run [row 0]", len(q.markedIDs))
+	if len(q.markedIDs) != 3 || q.markedIDs[0] != rows[0].ID || q.markedIDs[1] != rows[1].ID || q.markedIDs[2] != rows[2].ID {
+		t.Fatalf("marked = %d ids, want rows 0-2 as one contiguous run", len(q.markedIDs))
 	}
-	if q.completed.Status != "ok" || q.completed.MessageCount != 1 {
-		t.Fatalf("complete log = status=%q count=%d, want ok/1", q.completed.Status, q.completed.MessageCount)
+	if q.completed.Status != "ok" || q.completed.MessageCount != 3 {
+		t.Fatalf("complete log = status=%q count=%d, want ok/3", q.completed.Status, q.completed.MessageCount)
 	}
 }
 
@@ -522,15 +518,56 @@ func TestDoCompactionEmptyHistoryNoOp(t *testing.T) {
 	}
 }
 
+// failingModel refuses every request with an answer the summarizer does not
+// retry, so each compaction attempt makes exactly one call.
 type failingModel struct{ calls int }
 
 func (f *failingModel) RoundTrip(*http.Request) (*http.Response, error) {
 	f.calls++
 	return &http.Response{
-		StatusCode: http.StatusInternalServerError,
+		StatusCode: http.StatusBadRequest,
 		Body:       io.NopCloser(strings.NewReader(`{"error":{"message":"boom"}}`)),
 		Header:     http.Header{"Content-Type": []string{"application/json"}},
 	}, nil
+}
+
+// rateLimitedOnce answers the first request with a rate limit and passes the
+// rest to the stub.
+type rateLimitedOnce struct {
+	stub  *stubModel
+	calls int
+}
+
+func (r *rateLimitedOnce) RoundTrip(req *http.Request) (*http.Response, error) {
+	r.calls++
+	if r.calls == 1 {
+		return &http.Response{
+			StatusCode: http.StatusTooManyRequests,
+			Body:       io.NopCloser(strings.NewReader(`{"error":{"message":"slow down","type":"rate_limit_error"}}`)),
+			Header:     http.Header{"Content-Type": []string{"application/json"}},
+		}, nil
+	}
+	return r.stub.RoundTrip(req)
+}
+
+// A summarizer call the provider rate-limits is made again, and the pass
+// completes with the retried call's summary.
+func TestDoCompactionRetriesRateLimitedSummarizerCall(t *testing.T) {
+	t.Parallel()
+
+	q := &fakeQueries{uncompacted: machineryCorpus(t)}
+	stub := &stubModel{summary: "SUMMARY-RETRIED"}
+	transport := &rateLimitedOnce{stub: stub}
+	cfg := machineryConfig(stub, 450)
+	cfg.HTTPClient = &http.Client{Transport: transport}
+
+	res, err := newMachineryService(q).RunCompactionSync(context.Background(), cfg)
+	if err != nil {
+		t.Fatalf("RunCompactionSync: %v", err)
+	}
+	if transport.calls != 2 || res.Status != StatusOK || res.Summary != "SUMMARY-RETRIED" {
+		t.Fatalf("result = %+v after %d calls, want the retried summary after 2", res, transport.calls)
+	}
 }
 
 func TestDoCompactionSummarizerFailureRecordsErrorWithReclaimableClaims(t *testing.T) {

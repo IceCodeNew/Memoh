@@ -51,14 +51,13 @@ function sleep(ms: number) {
 }
 
 // Recovery must rerun the FULL bootstrap, not hand-patch the sessions list:
-// initialize() stops the WebSocket / activity streams before its first request
-// and restarts them (plus session selection and the session runtime) only on
-// the success path — a list-only retry would look recovered while realtime
-// stays dead. First-open failures are usually transient (server still booting
-// behind an already-serving proxy, a brief network blip), so retry with
-// exponential backoff until the bootstrap succeeds. Giving up after a single
-// retry used to leave the page with no WebSocket and no automatic recovery
-// until a manual refresh (#1070).
+// initialize() restarts bot-wide activity after the initial snapshot, but the
+// WebSocket, session selection, and session runtime still require the rest of
+// bootstrap to succeed. First-open failures are usually transient (the server
+// may still be booting behind an already-serving proxy, or a brief network blip
+// may occur), so retry with exponential backoff until the bootstrap succeeds.
+// Giving up after a single retry used to leave the page with no WebSocket and no
+// automatic recovery until a manual refresh (#1070).
 async function initializeWithRetry(
   deps: { currentBotId: Ref<string | null>; initialize: () => Promise<void> },
   botId: string,

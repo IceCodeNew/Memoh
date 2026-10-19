@@ -17,10 +17,10 @@ func TestAuthorizedOperationRequiresConfirmedRevisionAndSession(t *testing.T) {
 		t.Error("unapproved operation executed")
 		return OperationResult{}, nil
 	}
-	if _, err := f.svc.RunAuthorizedOperation(f.ctx(), testBot, testTarget, "agent-x", "", "Install Agent X", run, nil); err == nil {
+	if _, err := f.svc.RunAuthorizedOperation(f.ctx(), testBot, "agent-x", "", "Install Agent X", run, nil); err == nil {
 		t.Fatal("missing revision accepted")
 	}
-	if _, err := f.svc.RunAuthorizedOperation(WithDefinitionRevision(f.ctx(), "confirmed"), testBot, testTarget, "agent-x", "wrong-session", "Install Agent X", run, nil); err == nil {
+	if _, err := f.svc.RunAuthorizedOperation(WithDefinitionRevision(f.ctx(), "confirmed"), testBot, "agent-x", "wrong-session", "Install Agent X", run, nil); err == nil {
 		t.Fatal("unvalidated session accepted")
 	}
 }
@@ -42,7 +42,7 @@ func TestAuthorizedOperationKeepsRevisionAndExcludesConcurrentInstall(t *testing
 	done := make(chan error, 1)
 	parent, cancelParent := context.WithCancel(WithDefinitionRevision(f.ctx(), "confirmed-revision"))
 	go func() {
-		_, err := f.svc.RunAuthorizedOperation(parent, testBot, testTarget, "agent-x", "session-a", "Install Agent X", func(ctx context.Context, sink LogSink) (OperationResult, error) {
+		_, err := f.svc.RunAuthorizedOperation(parent, testBot, "agent-x", "session-a", "Install Agent X", func(ctx context.Context, sink LogSink) (OperationResult, error) {
 			if revision, _ := ctx.Value(revisionContextKey{}).(string); revision != "confirmed-revision" {
 				t.Error("confirmed revision lost")
 			}
@@ -66,7 +66,7 @@ func TestAuthorizedOperationKeepsRevisionAndExcludesConcurrentInstall(t *testing
 	}()
 	<-started
 	cancelParent()
-	_, err := f.svc.RunAuthorizedOperation(WithDefinitionRevision(f.ctx(), "confirmed-revision"), testBot, testTarget, "agent-x", "session-a", "Install Agent X", func(context.Context, LogSink) (OperationResult, error) {
+	_, err := f.svc.RunAuthorizedOperation(WithDefinitionRevision(f.ctx(), "confirmed-revision"), testBot, "agent-x", "session-a", "Install Agent X", func(context.Context, LogSink) (OperationResult, error) {
 		t.Error("concurrent install executed")
 		return OperationResult{}, nil
 	}, nil)
@@ -110,11 +110,11 @@ func TestSlowOperationNotificationDoesNotBlockOtherBotLaunchers(t *testing.T) {
 	})
 	finished := make(chan error, 1)
 	go func() {
-		_, err := f.svc.RunAuthorizedOperation(WithDefinitionRevision(f.ctx(), "confirmed"), testBot, testTarget, "agent-x", "", "Install Agent X", func(context.Context, LogSink) (OperationResult, error) { return OperationResult{}, nil }, nil)
+		_, err := f.svc.RunAuthorizedOperation(WithDefinitionRevision(f.ctx(), "confirmed"), testBot, "agent-x", "", "Install Agent X", func(context.Context, LogSink) (OperationResult, error) { return OperationResult{}, nil }, nil)
 		finished <- err
 	}()
 	<-blocked
-	f.svc.cache.Put("other-bot", testTarget, Snapshot{Platform: f.platform, Observed: map[string]Observed{"agent-x": {DepID: "agent-x", Present: true, Candidates: []Candidate{toolkit("2.0.0")}}}})
+	f.svc.cache.Put("other-bot", Snapshot{Platform: f.platform, Observed: map[string]Observed{"agent-x": {DepID: "agent-x", Present: true, Candidates: []Candidate{toolkit("2.0.0")}}}})
 	resolved := make(chan error, 1)
 	go func() { _, err := f.svc.ResolveLauncher(f.ctx(), "other-bot", "agent-x"); resolved <- err }()
 	ctx, cancel := context.WithTimeout(t.Context(), time.Second)
@@ -137,7 +137,7 @@ func TestAuthorizedOperationReportsUnconfirmedExecution(t *testing.T) {
 	f := newServiceFixture(t)
 	mgr := background.New(slog.New(slog.DiscardHandler))
 	f.svc.background = mgr
-	_, err := f.svc.RunAuthorizedOperation(WithDefinitionRevision(f.ctx(), "confirmed"), testBot, testTarget, "agent-x", "", "Install Agent X", func(context.Context, LogSink) (OperationResult, error) {
+	_, err := f.svc.RunAuthorizedOperation(WithDefinitionRevision(f.ctx(), "confirmed"), testBot, "agent-x", "", "Install Agent X", func(context.Context, LogSink) (OperationResult, error) {
 		return OperationResult{}, ErrOperationUncertain
 	}, nil)
 	if !errors.Is(err, ErrOperationUncertain) {

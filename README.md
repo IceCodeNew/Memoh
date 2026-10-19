@@ -21,7 +21,7 @@
     </a>
   </div>
   <h3>
-    <a href="https://memoh.ai/waitlist">Memoh Cloud</a> · <a href="#deploy-to-server">Deploy to Server</a> · <a href="https://docs.memoh.ai">Docs</a> · <a href="https://memoh.ai">Website</a> · <a href="https://x.com/memoh_ai">X</a>
+    <a href="https://app.memoh.net">Login</a> · <a href="#self-hosted">Self-hosted</a> · <a href="https://docs.memoh.ai">Docs</a> · <a href="https://memoh.ai">Website</a> · <a href="https://x.com/memoh_ai">X</a>
   </h3>
   <img src="./assets/hero.png" alt="Memoh" width="1000">
 </div>
@@ -38,10 +38,9 @@ Talk to them through Telegram, Discord, Lark, WeChat, Web UI, and more. They rem
 
 ### Memoh Cloud
 
-> [!TIP]
-> Memoh Cloud is coming soon — zero setup, always-on agents in the cloud. Join the waitlist at [memoh.ai/waitlist](https://memoh.ai/waitlist).
+You can now sign up or log in directly at [app.memoh.net](https://app.memoh.net).
 
-### Deploy to Server
+### Self-hosted
 
 Self-host the full stack on your own infrastructure.
 
@@ -65,7 +64,9 @@ docker compose up -d
 
 The Compose stack runs Server and Channel as separate services. Keep the internal RPC secret private and use the same value whenever the stack is recreated.
 
-Running without Docker (or upgrading an existing bare-metal install)? Leave `internal_rpc.shared_secret` empty in `config.toml`: the server then embeds the channel runtime and keeps running as a single all-in-one process — external channels, email, and webhook endpoints included — with no `memoh-channel` process required. Setting the secret opts into the split two-process deployment.
+In split deployments, Channel streams media through authenticated internal Storage RPC. Only Server needs access to the workspace and media storage. Upgrade Server before Channel so the Storage service is available.
+
+Running without Docker (or upgrading an existing bare-metal install)? Leave `internal_rpc.shared_secret` empty in `config.toml`: the server then embeds the channel runtime and keeps running as a single all-in-one process — external channels, and webhook endpoints included — with no `memoh-channel` process required. Setting the secret opts into the split two-process deployment.
 
 Existing setup checkouts can keep using `git pull`: the post-merge hook initializes the new
 submodule, and setup enables recursive updates for future pulls. If that hook was never installed,
@@ -90,19 +91,6 @@ See [DEPLOYMENT.md](DEPLOYMENT.md) for custom configuration and production setup
 - **Every agent gets its own computer**: An isolated workspace with its own filesystem, network, desktop, and browser.
 - **Multi-user, multi-bot**: Run one for yourself, deploy one for each family member, run a fleet on a single machine.
 - **Lightweight**: Self-host the server on your own infrastructure, or connect through Memoh Cloud.
-
-## Features
-
-- **Multi-bot & multi-user**: Multiple bots that chat privately, in groups, or with each other. Cross-platform identity binding.
-- **Isolated workspaces**: Each bot has a dedicated filesystem, network, tools, and desktop.
-- **Built-in memory**: Long-term memory across sessions and platforms, out of the box. Also supports [Mem0](https://mem0.ai), OpenViking.
-- **10+ channels**: Telegram, Discord, Lark, WeChat, QQ, Email, and more.
-- **MCP**: Connect external tool servers. Each bot manages its own connections.
-- **Agent Hosting**: Host external agents inside Memoh workspaces via ACP. Currently supports Codex and Claude Code, configured per bot.
-- **Browser Use**: Drive a browser inside the workspace.
-- **Computer Use**: Operate the workspace desktop for GUI workflows.
-- **Skills & Supermarket**: Modular skills, install curated templates from Supermarket, delegate to sub-agents.
-- **Automation**: Scheduled tasks for recurring workflows.
 
 ## Sub-projects
 

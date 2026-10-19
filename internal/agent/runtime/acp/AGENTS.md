@@ -4,16 +4,47 @@ This directory owns the boundary between durable ACP agent configuration and
 process-local agent state. ACP is the generic channel for custom,
 user-supplied agents speaking the Agent Client Protocol; the only registered
 profile is the generic `acp` profile (managed launch `command`/`arguments`,
-`api_key` setup mode). Built-in External Agents (Codex, Claude Code) are not
-ACP profiles — they run as direct external runtimes under
-`internal/agent/runtime/codex` and `internal/agent/runtime/claudecode`.
+`api_key` setup mode). Built-in External Agents (Codex, Claude Code, Grok
+Build) are not ACP profiles — they run as direct external runtimes under
+`internal/agent/runtime/codex`, `internal/agent/runtime/claudecode` and
+`internal/agent/runtime/grok`.
 
 Keep the boundary profile-driven. The launcher must not grow agent-name
 conditionals.
 
+## The ACP client is shared
+
+`client/` is the protocol client: the connection, sessions, event mapping and
+permission handling. It has two entry points.
+
+- `Runner.StartSession` is the pool's: it launches one process for one
+  session, advertises the client file and terminal capabilities, and looks the
+  agent up in the profile registry.
+- `Connect` returns a `Conn` over a process the caller started. A `Conn` hosts
+  any number of sessions, delivers each inbound call to the session it names,
+  and can resume a session the agent persisted. Updates are applied in the
+  connection's order, so a request returns once the updates sent before its
+  response have been applied. A prompt's sink is called on the loop every
+  session shares, so it must not wait on its consumer; the caller queues.
+  It advertises no client file
+  or terminal capability and looks nothing up: everything agent-specific
+  (`_meta`, MCP servers, how the agent names an MCP tool call) arrives in
+  `SessionConfig`, and the agent's own methods go through `Call`,
+  `Authenticate` and `Subscribe`, whose method names and shapes the caller
+  owns.
+
+A built-in agent whose own protocol is ACP (Grok Build) is a direct runtime
+that uses `Connect`. It must not import the pool or `profile/`
+(`internal/arch` enforces this), and the client must not learn its name: add
+a field to `SessionConfig` or expose a response value instead.
+
 ## Required invariants
 
-- Every ACP process receives a fresh runtime directory under
+These hold for the processes and sessions the pool starts. A direct runtime
+on `Connect` owns its own process environment and session continuity (Grok
+Build resumes its sessions; see `docs/agent-runtime.md`).
+
+- Every pool-started ACP process receives a fresh runtime directory under
   `/tmp/memoh-acp-runtime/<agent>/<uuid>` with mode `0700`. It holds only
   ephemeral state (`TMPDIR`) and is removed when the process exits.
 - The agent's durable state lives directly under `HOME=/data` (the workspace
@@ -27,8 +58,8 @@ conditionals.
   Never call recursive mkdir on an unvalidated runtime or cache parent.
   Pre-planted symlinks under `/tmp` (runtime and shared-cache tiers) must fail
   the lease with no side effects at the symlink target.
-- Conversation continuity is Memoh's context document. Every ACP session
-  starts fresh; each completed turn publishes an explicit reset head
+- Conversation continuity is Memoh's context document. Every pool session
+  starts fresh; each completed turn publishes a publication head
   (`agent_session_publications`) in the same transaction as the round's
   messages. The durable head is the single authority: a warm process records
   the head its native conversation corresponds to and compares it against the
@@ -40,9 +71,18 @@ conditionals.
 
 ## Profiles
 
-`profile.RuntimeStoragePolicy` is the source of truth. Each profile declares
-its launcher-owned environment bindings (`HOME=/data`, runtime-local `TMPDIR`,
-shared `NPM_CONFIG_CACHE`) and the setup modes allowed to start a process.
+`profile.RuntimeStoragePolicy` declares launcher-owned environment bindings
+(`HOME=/data`, runtime-local `TMPDIR`, shared `NPM_CONFIG_CACHE`).
+`Profile.SetupModes` declares the setup modes allowed to start a process.
+
+A profile is a kind of agent, not an agent: every custom agent on a bot shares
+the one generic profile id. An Agent instance therefore owns its setup — the
+managed fields live on its `bot_agents` row (`metadata.managed`), and warm
+processes are matched and reset by instance id. Never key a setup or a process
+by profile id alone. Resolve setups through
+`botagents.Service.ResolveACPSetup`; instances that predate per-instance
+setups still read the bot's `metadata.acp.agents.<profile>` slot, which is
+read-only and must not gain new writers.
 
 The ACP terminal/tool environment is separate from the agent environment. Its
 working directory and `HOME` remain under `/data`; do not expose the agent's
@@ -60,9 +100,8 @@ Behavior-level coverage should include:
 - consecutive processes get different runtime roots;
 - startup failure removes its runtime root without changing `/data`;
 - pre-planted symlinks under `/tmp` fail the lease with no side effects;
-- a completed prompt records a reset publication head under the round's fence;
-- a legacy checkpoint head found on cold start logs a warning and starts a
-  fresh session.
+- a completed prompt records a publication head under the round's fence;
+- history clear removes the publication head and fences stale processes.
 
 Run at minimum:
 

@@ -3,6 +3,7 @@
        section label over a card of label-left / control-right rows. -->
   <form
     class="space-y-8"
+    novalidate
     @submit.prevent="handleSubmit"
   >
     <SettingsSection :title="t('bots.steps.basicInfo')">
@@ -14,6 +15,7 @@
           <Input
             id="sched-name"
             v-model="form.name"
+            :aria-invalid="submitted && !form.name.trim()"
             :placeholder="t('bots.schedule.form.namePlaceholder')"
           />
         </div>
@@ -84,26 +86,26 @@
             </Select>
 
             <template v-if="patternState.mode === 'minutes'">
-              <Input
-                type="number"
+              <NumberField
                 :min="1"
                 :max="59"
                 :model-value="patternState.intervalMinutes"
-                class="w-20 text-center"
-                @update:model-value="v => patchState({ intervalMinutes: clampInt(v, 1, 59, 1) })"
+                class="w-28"
+                disable-wheel-change
+                @update:model-value="v => patchState({ intervalMinutes: v ?? 1 })"
               />
               <span class="text-sm text-muted-foreground">{{ t('bots.schedule.picker.minutes') }}</span>
             </template>
 
             <template v-else-if="patternState.mode === 'hourly'">
               <span class="text-sm text-muted-foreground">{{ t('bots.schedule.picker.atMinute') }}</span>
-              <Input
-                type="number"
+              <NumberField
                 :min="0"
                 :max="59"
                 :model-value="patternState.minute"
-                class="w-20 text-center"
-                @update:model-value="v => patchState({ minute: clampInt(v, 0, 59, 0) })"
+                class="w-28"
+                disable-wheel-change
+                @update:model-value="v => patchState({ minute: v ?? 0 })"
               />
             </template>
 
@@ -125,13 +127,13 @@
 
             <template v-else-if="patternState.mode === 'monthly'">
               <span class="text-sm text-muted-foreground">{{ t('bots.schedule.picker.day') }}</span>
-              <Input
-                type="number"
+              <NumberField
                 :min="1"
                 :max="31"
                 :model-value="patternState.monthDays[0] ?? 1"
-                class="w-16 text-center"
-                @update:model-value="v => patchState({ monthDays: [clampInt(v, 1, 31, 1)] })"
+                class="w-28"
+                disable-wheel-change
+                @update:model-value="v => patchState({ monthDays: [v ?? 1] })"
               />
               <TimeInput
                 :hour="patternState.hours[0] ?? 9"
@@ -166,6 +168,7 @@
           >
             <Input
               :model-value="patternState.advancedPattern"
+              :aria-invalid="submitted && !isValidCron(manualCron)"
               class="font-mono"
               placeholder="0 9 * * *"
               @update:model-value="v => patchState({ advancedPattern: String(v) })"
@@ -202,6 +205,7 @@
       <Textarea
         id="sched-command"
         v-model="form.command"
+        :aria-invalid="submitted && !form.command.trim()"
         size="lg"
         class="min-h-[9rem] resize-none bg-card font-mono"
         :placeholder="t('bots.schedule.form.commandPlaceholder')"
@@ -218,7 +222,30 @@
         ref="executionFields"
         :bot-id="botId"
         :form="execution"
+        :submitted="submitted"
       />
+      <SettingsRow
+        :label="t('bots.schedule.form.maxRunMinutes')"
+        :description="t('bots.schedule.form.maxRunMinutesHelp')"
+        stack="sm"
+      >
+        <div class="w-full sm:w-56">
+          <NumberField
+            id="sched-max-run-minutes"
+            v-model="maxRunMinutes"
+            :min="5"
+            :max="1440"
+            :aria-label="t('bots.schedule.form.maxRunMinutes')"
+            disable-wheel-change
+          />
+          <p
+            v-if="durationError"
+            class="text-caption text-destructive"
+          >
+            {{ durationError }}
+          </p>
+        </div>
+      </SettingsRow>
       <!-- The placeholder carries the empty-value meaning, so no help line
            repeats it. -->
       <SettingsRow
@@ -274,7 +301,7 @@
         </Button>
         <Button
           type="submit"
-          :disabled="!canSubmit"
+          :disabled="isSaving"
           :loading="isSaving"
         >
           {{ mode === 'create' ? t('common.create') : t('common.confirm') }}
@@ -287,11 +314,15 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
+import { useForm } from 'vee-validate'
+import { toTypedSchema } from '@vee-validate/zod'
+import { z } from 'zod'
 import { Trash2 } from 'lucide-vue-next'
 import {
   Button,
   DialogFooter,
   Input,
+  NumberField,
   SectionGroup,
   Select,
   SelectContent,
@@ -312,6 +343,7 @@ import {
 import type { ScheduleCreateRequest, ScheduleSchedule, ScheduleUpdateRequest } from '@memohai/sdk'
 import ScheduleExecutionFields, { type ScheduleExecutionForm } from './schedule-execution-fields.vue'
 import { resolveApiErrorMessage } from '@/utils/api-error'
+import { isAgentRuntimeType } from '@/store/chat-list.utils'
 import {
   describeCron,
   defaultScheduleFormState,
@@ -336,6 +368,14 @@ const emit = defineEmits<{
 }>()
 
 const { t, locale } = useI18n()
+const durationForm = useForm({
+  validationSchema: computed(() => toTypedSchema(z.object({
+    maxRunMinutes: z.number({ required_error: t('bots.schedule.form.invalidMaxRunMinutes'), invalid_type_error: t('bots.schedule.form.invalidMaxRunMinutes') }).int(t('bots.schedule.form.invalidMaxRunMinutes')).min(5, t('bots.schedule.form.invalidMaxRunMinutes')).max(1440, t('bots.schedule.form.invalidMaxRunMinutes')),
+  }))),
+  initialValues: { maxRunMinutes: 60 },
+})
+const [maxRunMinutes] = durationForm.defineField('maxRunMinutes')
+const durationError = computed(() => durationForm.errors.value.maxRunMinutes)
 
 const SCHEDULE_MODES: { value: ScheduleMode; labelKey: string }[] = [
   { value: 'minutes', labelKey: 'bots.schedule.mode.minutes' },
@@ -364,7 +404,8 @@ const form = reactive<SchedulePlainForm>({
 const patternState = ref<ScheduleFormState>(defaultScheduleFormState())
 const execution = reactive<ScheduleExecutionForm>(defaultExecutionForm())
 const executionFields = ref<InstanceType<typeof ScheduleExecutionFields> | null>(null)
-const manualCron = ref('')
+const manualCron = computed(() => toCron(patternState.value))
+const submitted = ref(false)
 const isSaving = ref(false)
 const submitError = ref<string | null>(null)
 const botTimezone = ref<string | undefined>(undefined)
@@ -376,12 +417,6 @@ const effectiveTimezone = computed(() => {
   if (tz) return tz
   try { return Intl.DateTimeFormat().resolvedOptions().timeZone } catch { return 'UTC' }
 })
-
-function clampInt(value: unknown, min: number, max: number, fallback: number): number {
-  const n = Number(value)
-  if (!Number.isFinite(n)) return fallback
-  return Math.max(min, Math.min(max, Math.round(n)))
-}
 
 function patchState(patch: Partial<ScheduleFormState>) {
   patternState.value = { ...patternState.value, ...patch }
@@ -417,22 +452,6 @@ const schedulePreviewText = computed(() => {
   const description = describeCron(manualCron.value, cronLocale.value) || ''
   if (!description) return ''
   return effectiveTimezone.value ? `${description} · ${effectiveTimezone.value}` : description
-})
-
-watch(
-  () => patternState.value,
-  (next) => {
-    try {
-      const canonical = toCron(next)
-      if (toCron(fromCron(manualCron.value)) !== canonical) manualCron.value = canonical
-    } catch { /* invalid intermediate state */ }
-  },
-  { deep: true },
-)
-
-watch(manualCron, (next) => {
-  const nextState = fromCron(next)
-  if (JSON.stringify(patternState.value) !== JSON.stringify(nextState)) patternState.value = nextState
 })
 
 const runLimitModel = computed({
@@ -483,11 +502,7 @@ function defaultExecutionForm(): ScheduleExecutionForm {
 function hydrateExecution(schedule: ScheduleSchedule) {
   execution.runTarget = schedule.run_target === 'existing_session' ? 'existing_session' : 'new_session'
   execution.targetSessionId = schedule.target_session_id ?? ''
-  execution.runtimeType = schedule.runtime_type === 'acp_agent'
-    || schedule.runtime_type === 'codex'
-    || schedule.runtime_type === 'claude-code'
-    ? schedule.runtime_type
-    : ''
+  execution.runtimeType = isAgentRuntimeType(schedule.runtime_type) ? schedule.runtime_type : ''
   execution.botAgentId = schedule.bot_agent_id ?? ''
   execution.acpAgentId = schedule.acp_agent_id ?? ''
   execution.modelId = schedule.model_id ?? ''
@@ -498,6 +513,7 @@ function hydrateExecution(schedule: ScheduleSchedule) {
 
 function executionRequestBlock() {
   return {
+    max_run_seconds: (maxRunMinutes.value ?? 60) * 60,
     run_target: execution.runTarget,
     target_session_id: execution.targetSessionId || undefined,
     runtime_type: execution.runTarget === 'new_session' && execution.runtimeType ? execution.runtimeType : undefined,
@@ -511,18 +527,20 @@ function executionRequestBlock() {
 }
 
 function resetForm() {
+  durationForm.resetForm({ values: { maxRunMinutes: 60 } })
   form.name = ''
   form.description = ''
   form.command = ''
   form.maxCalls = null
   form.enabled = true
   patternState.value = defaultScheduleFormState()
-  manualCron.value = toCron(patternState.value)
   Object.assign(execution, defaultExecutionForm())
   submitError.value = null
+  submitted.value = false
 }
 
 function hydrateForm(schedule: ScheduleSchedule) {
+  durationForm.resetForm({ values: { maxRunMinutes: (schedule.max_run_seconds || 3600) / 60 } })
   form.name = schedule.name ?? ''
   form.description = schedule.description ?? ''
   form.command = schedule.command ?? ''
@@ -530,9 +548,9 @@ function hydrateForm(schedule: ScheduleSchedule) {
   form.maxCalls = (typeof raw === 'number' && raw > 0) ? raw : null
   form.enabled = schedule.enabled ?? true
   patternState.value = fromCron(schedule.pattern ?? '')
-  manualCron.value = schedule.pattern ?? ''
   hydrateExecution(schedule)
   submitError.value = null
+  submitted.value = false
 }
 
 function hydrateFromProps() {
@@ -555,8 +573,10 @@ async function fetchBotSettings() {
 }
 
 async function handleSubmit() {
-  if (!canSubmit.value) return
+  if (isSaving.value) return
+  submitted.value = true
   submitError.value = null
+  if (!canSubmit.value || !(await durationForm.validate()).valid) return
   isSaving.value = true
   try {
     const base = {

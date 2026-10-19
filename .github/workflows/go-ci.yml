@@ -7,12 +7,18 @@ on:
       - "**/*.go"
       - "go.mod"
       - "go.sum"
-      - ".golangci.yml"
-      - "db/postgres/queries/**/*.sql"
-      - "db/postgres/migrations/**/*.sql"
-      - "db/pgvector/queries/**/*.sql"
-      - "db/pgvector/migrations/**/*.sql"
-      - "internal/workspacedeps/catalog/**"
+      - "go.work*"
+      - ".golangci.*"
+      # Include embedded assets and test fixtures, not just source extensions.
+      - "internal/**"
+      - "cmd/**"
+      - "db/**"
+      - "templates/**"
+      - "conf/**"
+      - "docker/**"
+      - "spec/**"
+      - "scripts/**"
+      - "mise.toml"
       - ".github/workflows/go-ci.yml"
   pull_request:
     branches: ["main"]
@@ -20,12 +26,18 @@ on:
       - "**/*.go"
       - "go.mod"
       - "go.sum"
-      - ".golangci.yml"
-      - "db/postgres/queries/**/*.sql"
-      - "db/postgres/migrations/**/*.sql"
-      - "db/pgvector/queries/**/*.sql"
-      - "db/pgvector/migrations/**/*.sql"
-      - "internal/workspacedeps/catalog/**"
+      - "go.work*"
+      - ".golangci.*"
+      # Include embedded assets and test fixtures, not just source extensions.
+      - "internal/**"
+      - "cmd/**"
+      - "db/**"
+      - "templates/**"
+      - "conf/**"
+      - "docker/**"
+      - "spec/**"
+      - "scripts/**"
+      - "mise.toml"
       - ".github/workflows/go-ci.yml"
   workflow_dispatch:
 
@@ -44,6 +56,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
+          persist-credentials: false
           fetch-depth: 0
       - uses: actions/setup-go@v5
         with:
@@ -61,6 +74,8 @@ jobs:
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
@@ -94,6 +109,8 @@ jobs:
           --health-retries 5
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
@@ -129,6 +146,8 @@ jobs:
           --health-retries 5
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
@@ -145,6 +164,15 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     services:
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379/tcp
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
       postgres:
         image: postgres:18-alpine
         env:
@@ -160,21 +188,39 @@ jobs:
           --health-retries 10
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
           cache: true
       - name: Run durable runtime fencing contracts
         env:
+          MEMOH_TEST_DISTRIBUTED_REQUIRED: "1"
+          MEMOH_TEST_REDIS_URL: redis://127.0.0.1:${{ job.services.redis.ports['6379'] }}/0
           MEMOH_TEST_POSTGRES_REQUIRED: "1"
           TEST_POSTGRES_BOOTSTRAP_SCHEMA: "1"
           TEST_POSTGRES_DSN: postgres://postgres:postgres@127.0.0.1:${{ job.services.postgres.ports['5432'] }}/memoh_runtime_test?sslmode=disable
         run: |
           go test -v -race -count=1 -timeout 90s \
-            -run '^TestPostgresRuntimeFence' ./internal/runtimefence
+            -run '^TestPostgres(RuntimeFence|WaitingDecision)' ./internal/runtimefence
           TEST_POSTGRES_BOOTSTRAP_SCHEMA=0 go test -v -race -count=1 -timeout 90s \
             -run '^TestPostgresRuntimeFence' ./internal/chat/message
           TEST_POSTGRES_BOOTSTRAP_SCHEMA=0 go test -v -race -count=1 -timeout 90s \
             -run '^TestPostgresRuntimeFence' ./internal/agent/runtime/acp
           TEST_POSTGRES_BOOTSTRAP_SCHEMA=0 go test -v -race -count=1 -timeout 90s \
             ./internal/agent/runtime/session/ledger
+          TEST_POSTGRES_BOOTSTRAP_SCHEMA=0 go test -v -race -count=1 -timeout 90s \
+            -run '^TestPostgres(ResumeScopes|WSStepHistory|ProviderUsage|RedisDecision|NativeDecisionAcceptance|HistoryReset|RedisHistoryReset)' ./internal/agent/application
+          TEST_POSTGRES_BOOTSTRAP_SCHEMA=0 go test -v -race -count=1 -timeout 90s \
+            -run '^TestPostgresBotCreate' ./internal/bots
+          TEST_POSTGRES_BOOTSTRAP_SCHEMA=0 go test -v -race -count=1 -timeout 90s \
+            -run '^TestPostgresDiscuss(RecoveryPreservesBatchAcrossCompactorRestart|BacklogOverBudgetIsAnsweredAndNextRoundContinues|BacklogWithoutCompactionIsAnsweredAndRecordsOmission|OversizedInputFailsOnceThenNextMessageIsAnswered|ImageBacklogKeepsImagesOnTheirMessages|OversizedImageInputFailsOnceThenNextMessageIsAnswered|ImageBacklogYieldsAnsweredHistoryFirst|CompactedImageInputIsRecorded|CompactionKeepsBatchTextOverImages)$' ./cmd/agent
+          TEST_POSTGRES_BOOTSTRAP_SCHEMA=0 go test -v -race -count=1 -timeout 90s \
+            -run '^TestPostgres(SummaryOnlyRollup|CompleteCompactionRollup)' ./internal/chat/message
+      - name: Verify atomic connector disconnect and tenant isolation
+        env:
+          TEST_POSTGRES_DSN: postgres://postgres:postgres@127.0.0.1:${{ job.services.postgres.ports['5432'] }}/memoh_runtime_test?sslmode=disable
+        run: >-
+          go test -v -race -tags=integration -count=1 -timeout 90s
+          -run '^TestConnectorDisconnectFinalizationIsAtomicAndScoped$' ./internal/db

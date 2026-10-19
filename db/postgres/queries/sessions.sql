@@ -310,6 +310,15 @@ WHERE team_id = public.memoh_current_team_id()
   AND deleted_at IS NULL
 FOR UPDATE;
 
+-- name: ListBotSessionIDs :many
+-- Every session a bot-wide runtime reset covers, deleted ones included, as
+-- ClearHistoryByBot does.
+SELECT id
+FROM bot_sessions
+WHERE team_id = public.memoh_current_team_id()
+  AND bot_id = sqlc.arg(bot_id)
+ORDER BY id;
+
 -- name: ListSessionsByBot :many
 SELECT
   s.id, s.bot_id, s.bot_agent_id, s.route_id, s.channel_type, s.type, s.session_mode, s.runtime_type, s.visibility, s.runtime_metadata, s.title, s.metadata,
@@ -336,7 +345,10 @@ ORDER BY s.updated_at DESC;
 -- updated_at. Callers always pass an explicit types filter; to opt out of
 -- filtering, pass every known type. The workdir filter is three-state:
 -- disabled, "sessions of this workdir", or "sessions with no workdir"
--- (workdir_unassigned) for the sidebar's ungrouped bucket.
+-- (workdir_unassigned) for the sidebar's ungrouped bucket. hide_schedule_runs
+-- drops the sessions schedule fires created (type 'schedule'), which the
+-- sidebar lists under their schedule instead, except one a schedule still
+-- runs in (existing_session target): that conversation stays a normal row.
 SELECT
   s.id, s.bot_id, s.bot_agent_id, s.route_id, s.channel_type, s.type, s.session_mode, s.runtime_type, s.visibility, s.runtime_metadata, s.title, s.metadata,
   s.parent_session_id, s.created_by_user_id, s.workdir_id, s.created_at, s.updated_at, s.deleted_at, s.preferred_chat_model_id, s.preferred_reasoning_effort, s.preferred_external_model_id, s.model_preference_revision
@@ -359,6 +371,14 @@ WHERE s.team_id = public.memoh_current_team_id()
   AND (
     NOT sqlc.arg(use_visibility)::bool
     OR s.visibility = sqlc.arg(visibility)::text
+  )
+  AND (
+    NOT sqlc.arg(hide_schedule_runs)::bool
+    OR s.type <> 'schedule'
+    OR EXISTS (
+      SELECT 1 FROM schedule sc
+      WHERE sc.team_id = s.team_id AND sc.target_session_id = s.id
+    )
   )
   AND (
     NOT sqlc.arg(use_cursor)::bool
@@ -391,6 +411,14 @@ WHERE s.team_id = public.memoh_current_team_id()
   AND (
     NOT sqlc.arg(use_visibility)::bool
     OR s.visibility = sqlc.arg(visibility)::text
+  )
+  AND (
+    NOT sqlc.arg(hide_schedule_runs)::bool
+    OR s.type <> 'schedule'
+    OR EXISTS (
+      SELECT 1 FROM schedule sc
+      WHERE sc.team_id = s.team_id AND sc.target_session_id = s.id
+    )
   )
   AND (
     NOT sqlc.arg(use_cursor)::bool
@@ -480,9 +508,7 @@ WHERE team_id = public.memoh_current_team_id() AND id = sqlc.arg(id) AND deleted
 RETURNING *;
 
 -- name: SoftDeleteSession :exec
--- ACP state is removed in full: soft delete never fires the hard-delete FK
--- cascades, so headers, the shared line set, and the publication head must
--- all be dropped here or they orphan forever.
+-- Soft delete does not fire FK cascades; remove the runtime publication head.
 WITH invalidated_session AS MATERIALIZED (
   UPDATE bot_sessions
   SET deleted_at = now(),
@@ -493,27 +519,11 @@ WITH invalidated_session AS MATERIALIZED (
     AND id = sqlc.arg(id)
     AND deleted_at IS NULL
   RETURNING id
-),
-deleted_acp_states AS (
-  DELETE FROM agent_session_states state
-  USING invalidated_session invalidated
-  WHERE state.team_id = public.memoh_current_team_id()
-    AND state.session_id = invalidated.id
-  RETURNING state.session_id
-),
-deleted_acp_lines AS (
-  DELETE FROM agent_session_state_lines line
-  USING invalidated_session invalidated
-  WHERE line.team_id = public.memoh_current_team_id()
-    AND line.session_id = invalidated.id
-  RETURNING line.session_id
 )
 DELETE FROM agent_session_publications publication
 USING invalidated_session invalidated
 WHERE publication.team_id = public.memoh_current_team_id()
-  AND publication.session_id = invalidated.id
-  AND (SELECT count(*) FROM deleted_acp_states) >= 0
-  AND (SELECT count(*) FROM deleted_acp_lines) >= 0;
+  AND publication.session_id = invalidated.id;
 
 -- name: TouchSession :exec
 UPDATE bot_sessions
@@ -606,27 +616,11 @@ invalidated_sessions AS MATERIALIZED (
   WHERE session.team_id = public.memoh_current_team_id()
     AND session.id = target.id
   RETURNING session.id
-),
-deleted_acp_states AS (
-  DELETE FROM agent_session_states state
-  USING invalidated_sessions invalidated
-  WHERE state.team_id = public.memoh_current_team_id()
-    AND state.session_id = invalidated.id
-  RETURNING state.session_id
-),
-deleted_acp_lines AS (
-  DELETE FROM agent_session_state_lines line
-  USING invalidated_sessions invalidated
-  WHERE line.team_id = public.memoh_current_team_id()
-    AND line.session_id = invalidated.id
-  RETURNING line.session_id
 )
 DELETE FROM agent_session_publications publication
 USING invalidated_sessions invalidated
 WHERE publication.team_id = public.memoh_current_team_id()
-  AND publication.session_id = invalidated.id
-  AND (SELECT count(*) FROM deleted_acp_states) >= 0
-  AND (SELECT count(*) FROM deleted_acp_lines) >= 0;
+  AND publication.session_id = invalidated.id;
 
 -- name: UpdateSessionModelPreference :exec
 -- Preference write-back (issue #879). Deliberately does NOT touch

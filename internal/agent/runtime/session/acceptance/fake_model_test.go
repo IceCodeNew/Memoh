@@ -240,6 +240,12 @@ func (m *fakeModel) handleChatCompletions(writer http.ResponseWriter, request *h
 		}
 		return
 	}
+	if directive.mode == "binary_output" && !hasToolResult(payload) {
+		if err := writeExecToolCall(writer, flusher, requestID, directive.marker, `printf 'SQLite format 3\000中文'`); err != nil {
+			m.markDisconnected(directive.marker)
+		}
+		return
+	}
 	if directive.mode == "tool_approval" && !hasToolResult(payload) {
 		if err := writeApprovalRequiredToolCall(writer, flusher, requestID, directive.marker); err != nil {
 			m.markDisconnected(directive.marker)
@@ -465,8 +471,12 @@ func writeAskUserCall(writer http.ResponseWriter, flusher http.Flusher, requestI
 }
 
 func writeApprovalRequiredToolCall(writer http.ResponseWriter, flusher http.Flusher, requestID, marker string) error {
+	return writeExecToolCall(writer, flusher, requestID, marker, "printf 'session-runtime-approval-"+marker+"'")
+}
+
+func writeExecToolCall(writer http.ResponseWriter, flusher http.Flusher, requestID, marker, command string) error {
 	arguments, err := json.Marshal(map[string]any{
-		"command": "printf 'session-runtime-approval-" + marker + "'",
+		"command": command,
 	})
 	if err != nil {
 		return err

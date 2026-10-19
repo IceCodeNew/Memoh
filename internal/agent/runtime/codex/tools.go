@@ -1,6 +1,6 @@
 // Memoh tool-gateway injection for codex threads. Each thread gets its own
 // reverse-HTTP route into the workspace tools proxy, configured through the
-// thread's `mcp_servers` config override at start/resume. The route outlives
+// thread's `mcp_servers` config override at start/resume/fork. The route outlives
 // individual turns (thread config is start-time), so the tool session
 // identity resolves live from the thread's active turn.
 package codex
@@ -13,6 +13,7 @@ import (
 	"github.com/felinics/memoh/internal/agent/runtime/external"
 	"github.com/felinics/memoh/internal/agent/runtime/toolmount"
 	"github.com/felinics/memoh/internal/agent/sessionmode"
+	"github.com/felinics/memoh/internal/errs"
 	"github.com/felinics/memoh/internal/mcp"
 	"github.com/felinics/memoh/internal/runtimefence"
 )
@@ -46,13 +47,13 @@ func (r *threadRef) get() string {
 	return r.id
 }
 
-// prepareThreadTools mounts the gateway for a thread about to start or
-// resume. The returned function binds the mount to the created thread or
+// prepareThreadTools mounts the gateway for a thread about to start,
+// resume, or fork. The returned function binds the mount to the thread or
 // closes it when creation fails.
 func (d *Driver) prepareThreadTools(srv *appServer, input external.PromptInput) (map[string]any, func(threadID string), error) {
 	baseURL := toolmount.ResolveBaseURL(srv.workspaceInfo, input.ToolHTTPURL)
 	if baseURL == "" {
-		return nil, nil, fmt.Errorf("resolve Memoh tool gateway URL for %s workspace", srv.workspaceInfo.Backend)
+		return nil, nil, errs.New(fmt.Sprintf("resolve Memoh tool gateway URL for %s workspace", srv.workspaceInfo.Backend))
 	}
 	ref := &threadRef{}
 	mount, err := toolmount.Serve(srv.mountCtx, srv.client, baseURL, d.toolGateway, func() mcp.ToolSessionContext {
@@ -146,7 +147,6 @@ func (s *appServer) toolSessionForThread(threadID string) mcp.ToolSessionContext
 	session.RuntimeActive = true
 	session.SupportsImageInput = true
 	session.ContextBudgetMaxTokens = in.ContextBudgetMaxTokens
-	session.ContextToolExchangePolicy = in.ContextToolExchangePolicy
 	if fence, ok := runtimefence.FromContext(turn.ctx); ok {
 		session.RuntimeFence = fence
 	}

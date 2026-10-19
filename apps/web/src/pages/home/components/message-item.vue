@@ -78,8 +78,8 @@
             size="lg"
             class="max-h-52 min-h-20 resize-none rounded-none border-0 bg-transparent p-0 text-foreground shadow-none placeholder:text-muted-foreground focus-visible:ring-0"
             :aria-label="t('chat.actions.edit')"
-            @keydown.enter.meta.prevent="submitEdit"
-            @keydown.enter.ctrl.prevent="submitEdit"
+            @keydown.enter.meta.exact.prevent="submitEdit"
+            @keydown.enter.ctrl.exact.prevent="submitEdit"
             @keydown.escape.stop.prevent="cancelEdit"
           />
           <div class="mt-2 flex justify-end gap-1.5">
@@ -184,6 +184,13 @@
             :text="userBubbleText"
           />
         </div>
+        <p
+          v-if="isGoalMessage"
+          class="flex items-center gap-1.5 text-caption text-muted-foreground"
+        >
+          <Target class="size-3.5" />
+          {{ $t('chat.goal.sentAsGoal') }}
+        </p>
         <MessageActions
           v-if="!isEditingUserMessage"
           class="-mt-1"
@@ -208,7 +215,7 @@
               :items="node.items"
               :show-execution-location="showExecutionLocation"
               :message-id="message.id"
-              :active="message.streaming && node.lastIndex === message.messages.length - 1"
+              :active="isAssistantBlockStreaming(node.lastIndex)"
             />
 
             <!-- Completed ask_user: the Q&A card, broken out of the process
@@ -220,15 +227,16 @@
 
             <template v-else>
               <!-- Text block -->
-              <!-- Headings split into two spacing groups, not one flat ramp:
-                 h1–h3 (true section breaks) get more air above and a clear gap
-                 below (so an h3 immediately followed by an h4 isn't cramped);
-                 h4–h6 (sub-labels close to their text) get less. Reads as two
-                 tiers rather than six evenly-spaced rungs. -->
+              <!-- Block rhythm is owned by style.css (.markstream-vue
+                 .node-slot rules): markstream 2.0 wraps every top-level node
+                 in its own .node-slot, so element-level spacing here (p+p,
+                 heading margins) can never match — keep this wrapper free of
+                 spacing utilities. li inter-item tightening and the outer
+                 edge trims are the only exceptions. -->
               <div
                 v-if="node.block.type === 'text' && node.block.content"
                 :lang="contentLang(node.block.content)"
-                class="prose prose-sm dark:prose-invert max-w-none [&_p]:my-0! [&_p+p]:mt-2! [&_ul]:my-1.5! [&_ol]:my-1.5! [&_li]:my-0.5! [&_:is(h1,h2,h3)]:mt-5! [&_:is(h1,h2,h3)]:mb-2! [&_:is(h4,h5,h6)]:mt-3! [&_:is(h4,h5,h6)]:mb-1! [&>*:first-child]:mt-0! [&>*:last-child]:mb-0!"
+                class="prose prose-sm dark:prose-invert max-w-none [&_li]:my-0.5! [&>*:first-child]:mt-0! [&>*:last-child]:mb-0!"
               >
                 <!-- mode="chat" selects the upstream chat profile (32/48/6ms
                      batches, no live-node virtualization cap) instead of the
@@ -259,25 +267,35 @@
                 :session-id="sessionId"
               />
 
-              <!-- Error block -->
+              <!-- Native command output, kept separate from model prose. -->
               <div
-                v-else-if="node.block.type === 'error' && (node.block.code || node.block.content)"
-                class="flex items-start gap-2 rounded-md border border-destructive/25 bg-destructive/10 px-3 py-2 text-xs text-destructive"
+                v-else-if="node.block.type === 'command'"
+                class="space-y-1 text-sm text-muted-foreground"
               >
-                <CircleAlert class="mt-0.5 size-3.5 shrink-0" />
-                <span class="min-w-0 whitespace-pre-wrap break-words">{{ errorBlockContent(node.block) }}</span>
+                <div class="font-medium">
+                  {{ node.block.name ? `/${node.block.name}` : $t('chat.slash.commandResult') }}
+                </div>
+                <div class="whitespace-pre-wrap break-words">
+                  {{ node.block.content }}
+                </div>
               </div>
+
+              <CalloutBanner
+                v-else-if="node.block.type === 'error' && (node.block.code || node.block.content)"
+                tone="destructive"
+                size="sm"
+                :description="errorBlockContent(node.block)"
+              />
 
               <!-- Runtime notice block: a degradation the runtime wants the
                    user to see (tools unavailable, an interaction declined).
                    Warning-toned, quieter than an error — the turn continues. -->
-              <div
+              <CalloutBanner
                 v-else-if="node.block.type === 'notice' && node.block.content"
-                class="flex items-start gap-2 rounded-md border border-warning-border bg-warning-soft px-3 py-2 text-xs text-warning-foreground"
-              >
-                <TriangleAlert class="mt-0.5 size-3.5 shrink-0" />
-                <span class="min-w-0 whitespace-pre-wrap break-words">{{ node.block.content }}</span>
-              </div>
+                tone="warning"
+                size="sm"
+                :description="noticeBlockContent(node.block)"
+              />
 
               <!-- Attachment block. An assistant turn posts images as reply
                    content, so they render inline at natural aspect ratio rather
@@ -291,6 +309,14 @@
             </template>
           </template>
 
+          <div
+            v-if="runtimeStatusText"
+            role="status"
+            class="text-sm text-cop-title"
+          >
+            {{ runtimeStatusText }}
+          </div>
+
           <!-- Local "the turn is running" indicator: shown only before the first
                block streams in. Same scale/weight as the process headers, and the
                same shimmer the Thinking/running states use (running = shimmer,
@@ -299,7 +325,7 @@
                also types in (a stepped clip-path wipe) on entry; keyed by the message
                so it replays once per turn. -->
           <div
-            v-if="message.streaming && !hasVisibleAssistantBlocks"
+            v-if="message.streaming && !hasVisibleAssistantBlocks && !runtimeStatusText"
             class="font-[400] text-[0.90625rem]"
           >
             <div class="flex items-center gap-1.5 py-px text-cop-title select-none">
@@ -320,7 +346,8 @@
           class="mt-2"
           role="assistant"
           :copy-text="assistantPlainText"
-          :menu-time="calendarTimestamp"
+          :inline-actions="inlineActions"
+          :time-label="calendarTimestamp"
           :full-time="fullTimestamp"
           align="start"
           :persistent="isLastMessage"
@@ -379,9 +406,9 @@ if (typeof document !== 'undefined') {
 
 <script setup lang="ts">
 import { computed, nextTick, ref, toRef, useTemplateRef, watch } from 'vue'
-import { CircleAlert, Sparkles, TriangleAlert } from 'lucide-vue-next'
+import { Sparkles, Target } from 'lucide-vue-next'
 import { formatRelativeTime, formatDateTime, formatCalendarTime } from '@/utils/date-time'
-import { Avatar, AvatarImage, AvatarFallback, Button, Textarea } from '@felinic/ui'
+import { Avatar, AvatarImage, AvatarFallback, Button, CalloutBanner, Textarea } from '@felinic/ui'
 import MarkdownRender, { enableKatex, enableMermaid } from 'markstream-vue'
 import { useSettingsStore } from '@/store/settings'
 import ToolCallGroup from './tool-call-group.vue'
@@ -393,6 +420,7 @@ import MessageActions from './message-actions.vue'
 import BackgroundTaskBlock from './background-task-block.vue'
 import DependencyMissingBlock from './dependency-missing-block.vue'
 import { isDependencyMissingBlock } from './dependency-missing'
+import { errorBlockText } from './error-block'
 import ChannelBadge from '@/components/chat-list/channel-badge/index.vue'
 import { useUserStore } from '@/store/user'
 import { useI18n } from 'vue-i18n'
@@ -405,6 +433,7 @@ import type {
   AttachmentBlock as AttachmentBlockType,
 } from '@/store/chat-list'
 import { structuredToolResult } from '@/store/chat-list.normalize'
+import { runtimeGoalObjective } from '@/utils/runtime-slash-commands'
 
 import { resolveUrl } from '../composables/useMediaGallery'
 import { useElementVisibility } from '@vueuse/core'
@@ -444,6 +473,8 @@ const props = defineProps<{
   canRetryLatestAssistant?: boolean
   canEditLatestUser?: boolean
   canForkAssistant?: boolean
+  inlineActions?: boolean
+  goalRuntime?: string
   isScrolling: boolean
   isLastMessage?: boolean
 }>()
@@ -558,9 +589,14 @@ const skillActivationNames = computed(() => {
 
 const skillActivationPrompt = computed(() => skillActivation.value?.prompt?.trim() ?? '')
 
+const goalObjective = computed(() => props.message.role === 'user'
+  ? runtimeGoalObjective(cleanUserText(props.message.text), props.goalRuntime)
+  : null)
+const isGoalMessage = computed(() => goalObjective.value !== null)
 const userBubbleText = computed(() => {
   if (props.message.role !== 'user') return ''
   const text = cleanUserText(props.message.text)
+  if (goalObjective.value !== null) return goalObjective.value
   if (!isSkillActivationMessage.value) return text
   if (skillActivationPrompt.value) return skillActivationPrompt.value
   if (text.startsWith('/') || text.startsWith('The user activated the following skill for this turn without an additional prompt:')) {
@@ -626,11 +662,13 @@ const canForkAssistantMessage = computed(() =>
   && turnId.value !== '',
 )
 
+// Resubmitting the same text is a valid edit: the server replaces the turn and
+// reruns it either way, so an unchanged draft is the way to re-roll a turn
+// without rewording it. Only an empty draft has nothing to submit.
 const canSubmitEdit = computed(() =>
   props.message.role === 'user'
   && props.canEditLatestUser === true
   && editDraft.value.trim().length > 0
-  && editDraft.value.trim() !== cleanCurrentUserText.value.trim()
   && !editSubmitting.value,
 )
 
@@ -761,7 +799,7 @@ const userBubbleRadiusClass = computed(() => {
 })
 
 function hasLaterAssistantMessage(index: number): boolean {
-  return props.message.role === 'assistant' && props.message.messages.slice(index + 1).length > 0
+  return props.message.role === 'assistant' && props.message.messages.slice(index + 1).some(block => block.type !== 'status')
 }
 
 function isAssistantBlockStreaming(index: number): boolean {
@@ -789,23 +827,38 @@ const hasVisibleAssistantBlocks = computed(() =>
   && props.message.messages.some(isVisibleAssistantBlock),
 )
 
+const runtimeStatusText = computed(() => {
+  if (props.message.role !== 'assistant' || !props.message.streaming) return ''
+  const status = props.message.messages.find(block => block.type === 'status')
+  if (status?.type !== 'status' || !status.name) return ''
+  const key = `chat.runtimeStatus.${status.name}`
+  return te(key) ? t(key, status.args ?? {}) : ''
+})
+
 const shouldRenderMessage = computed(() =>
   props.message.role !== 'assistant' || hasVisibleAssistantBlocks.value || props.message.streaming,
 )
 
 function isVisibleAssistantBlock(block: ContentBlock): boolean {
+  if (block.type === 'status') return false
   if (block.type === 'tool') return true
   if (block.type === 'text') return Boolean(block.content)
+  if (block.type === 'command') return Boolean(block.content)
   if (block.type === 'error') return Boolean(block.code || block.content)
   if (block.type === 'notice') return Boolean(block.content)
   if (block.type === 'attachments') return block.attachments.length > 0
   return true
 }
 
-function errorBlockContent(block: ErrorBlock): string {
-  const code = block.code?.trim()
+function errorBlockContent(block: Pick<ErrorBlock, 'code' | 'content'> & { args?: Record<string, string> }): string {
+  return errorBlockText(block, t, te)
+}
+
+// A notice's name may be a catalog code with copy; otherwise its own text stands.
+function noticeBlockContent(block: { name?: string; content: string; args?: Record<string, string> }): string {
+  const code = block.name?.trim()
   const key = code ? `errors.${code}` : ''
-  return key && te(key) ? t(key) : block.content
+  return key && te(key) ? t(key, block.args ?? {}) : block.content
 }
 
 // Consecutive tools and reasoning form one process, regardless of tool kind.
@@ -870,7 +923,7 @@ const renderNodes = computed<RenderNode[]>(() => {
 // call — so they show a real "Thought for Ns" instead of a bare "Thought".
 watch(
   () => (props.message.role === 'assistant' && props.message.streaming
-    ? `${props.message.id}|${props.message.messages.map(block => `${block.type}:${block.id}`).join('|')}`
+    ? `${props.message.id}|${props.message.messages.filter(block => block.type !== 'status').map(block => `${block.type}:${block.id}`).join('|')}`
     : ''),
   () => {
     if (props.message.role !== 'assistant' || !props.message.streaming) return
@@ -878,7 +931,7 @@ watch(
     blocks.forEach((block, index) => {
       if (block.type !== 'reasoning') return
       markReasoningSeen(props.message.id, block)
-      if (index < blocks.length - 1) finalizeReasoning(props.message.id, block)
+      if (hasLaterAssistantMessage(index)) finalizeReasoning(props.message.id, block)
     })
   },
   { immediate: true },
@@ -902,7 +955,7 @@ const relativeTimestamp = computed(() =>
 const fullTimestamp = computed(() =>
   formatDateTime(props.message.timestamp, { locale: locale.value }),
 )
-// Precise, calendar-anchored time shown inside the assistant "more" menu —
+// Precise, calendar-anchored time for the assistant action bar or menu —
 // "Today 10:11 PM" rather than the decaying "3 hours ago".
 const calendarTimestamp = computed(() =>
   formatCalendarTime(props.message.timestamp, { locale: locale.value }),
@@ -916,8 +969,8 @@ const userCopyText = computed(() =>
 const assistantPlainText = computed(() => {
   if (props.message.role !== 'assistant') return ''
   return props.message.messages
-    .filter((block): block is Extract<ContentBlock, { type: 'text' }> =>
-      block.type === 'text' && Boolean((block as { content?: string }).content),
+    .filter((block): block is Extract<ContentBlock, { type: 'text' | 'command' }> =>
+      (block.type === 'text' || block.type === 'command') && Boolean(block.content),
     )
     .map(block => block.content)
     .join('\n\n')

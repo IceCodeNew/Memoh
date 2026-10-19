@@ -1,21 +1,16 @@
 <script setup lang="ts">
-import { ref, reactive, computed, watch, onMounted, onBeforeUnmount } from 'vue'
+import { ref, reactive, computed, watch, onDeactivated, onMounted, onBeforeUnmount } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { ConfirmPopover, InlineLoadingRow, PageShell, SettingsRow, SettingsSection, toast } from '@felinic/ui'
-import { Box } from 'lucide-vue-next'
+import { ConfirmPopover, InlineLoadingRow, SectionGroup, SettingsRow, SettingsSection, toast } from '@felinic/ui'
 import {
-  ActionCard, Button, Badge, Dialog, DialogBody, DialogDescription, DialogHeader, DialogPanel, DialogTitle,
-  Empty, EmptyDescription, EmptyHeader, EmptyTitle, Select, SelectContent, SelectItem, SelectTrigger, SelectValue, Switch, Input, Label,
+  Button, Badge, Dialog, DialogBody, DialogHeader, DialogPanel, DialogTitle,
+  Empty, EmptyDescription, EmptyHeader, EmptyTitle, Select, SelectContent, SelectItem, SelectTrigger, SelectValue, Switch, NumberField,
   Pagination, PaginationContent, PaginationEllipsis,
   PaginationFirst, PaginationItem, PaginationLast,
   PaginationNext, PaginationPrevious,
 } from '@felinic/ui'
 import ModelSelect from './model-select.vue'
 import { filterCompactionModels } from './compaction-models'
-import {
-  compactionTargetPercentAfterToggle,
-  isCompactionTargetPercentInvalid,
-} from './compaction-target'
 import {
   getBotsByBotIdSettings, putBotsByBotIdSettings,
   getBotsByBotIdCompactionLogs, deleteBotsByBotIdCompactionLogs,
@@ -27,6 +22,9 @@ import { resolveApiErrorMessage } from '@/utils/api-error'
 import { formatDateTime } from '@/utils/date-time'
 import { useAutosaveQueue, type AutosaveJob } from '@/composables/use-autosave-queue'
 import type { Ref } from 'vue'
+
+const logsOpen = ref(false)
+onDeactivated(() => { logsOpen.value = false })
 
 const props = defineProps<{
   botId: string
@@ -69,10 +67,10 @@ const compactionModels = computed(() => filterCompactionModels(models.value, pro
 
 // ---- Settings (autosaved) ----
 // No Save button by design (web skill §8); same autosave contract as
-// bot-settings.vue. Number inputs are free-typing drafts committed on
-// blur/Enter so autosave fires once per edit, never per keystroke; an invalid
-// draft never enters `form` (it reverts on commit), which replaces the old
-// "Save button stays disabled while invalid" gate.
+// bot-settings.vue. The NumberFields only emit on a COMMIT (blur, Enter,
+// stepper, arrow keys) — reka clamps to min/max, snaps to step and reverts an
+// invalid draft before emitting — so autosave fires once per edit, never per
+// keystroke, and an out-of-range value can never enter `form`.
 // A type alias (not interface) so the record satisfies the queue's
 // Record<string, unknown> constraint.
 type CompactionForm = {
@@ -109,71 +107,9 @@ watch(settings, (val: SettingsSettings | undefined) => {
   }
 }, { immediate: true })
 
-const advancedOpen = ref(false)
-
-// Threshold draft: commits on blur/Enter; non-integer or negative reverts.
-const thresholdDraft = ref(String(form.compaction_threshold))
-const thresholdFocused = ref(false)
-
-watch(() => form.compaction_threshold, (value) => {
-  if (!thresholdFocused.value) thresholdDraft.value = String(value)
-})
-
-function commitThresholdDraft() {
-  const parsed = Number(thresholdDraft.value.trim())
-  if (!Number.isInteger(parsed) || parsed < 0) {
-    thresholdDraft.value = String(form.compaction_threshold)
-    return
-  }
-  form.compaction_threshold = parsed
-  thresholdDraft.value = String(form.compaction_threshold)
-}
-
-// Target-percent draft: '' means "use the default" (null → backend clears the
-// override). The inline error is live typing feedback; the value only reaches
-// `form` via commit, so an invalid draft can never be saved.
-const percentDraft = ref(form.compaction_target_percent === null ? '' : String(form.compaction_target_percent))
-const percentFocused = ref(false)
-
-watch(() => form.compaction_target_percent, (value) => {
-  if (!percentFocused.value) percentDraft.value = value === null ? '' : String(value)
-})
-
-const parsedPercentDraft = computed(() => {
-  const raw = percentDraft.value.trim()
-  if (raw === '') return null
-  const parsed = Number(raw)
-  return Number.isNaN(parsed) ? null : parsed
-})
-
-const compactionTargetPercentInvalid = computed(() => {
-  if (percentDraft.value.trim() === '') return false
-  const parsed = Number(percentDraft.value.trim())
-  return Number.isNaN(parsed) || isCompactionTargetPercentInvalid(parsed)
-})
-
-function commitPercentDraft() {
-  if (compactionTargetPercentInvalid.value) {
-    percentDraft.value = form.compaction_target_percent === null ? '' : String(form.compaction_target_percent)
-    return
-  }
-  form.compaction_target_percent = parsedPercentDraft.value
-  percentDraft.value = form.compaction_target_percent === null ? '' : String(form.compaction_target_percent)
-}
-
 // Logs context follows the SAVED state, not an in-flight edit: the panel must
 // describe what is actually running.
 const savedEnabled = computed(() => synced.compaction_enabled)
-
-function updateCompactionEnabled(value: boolean) {
-  // Toggling off drops an invalid in-progress draft (helper returns the saved
-  // value); a valid draft is kept so the toggle doesn't eat typing.
-  const kept = compactionTargetPercentAfterToggle(value, parsedPercentDraft.value, form.compaction_target_percent)
-  if (kept !== parsedPercentDraft.value) {
-    percentDraft.value = kept === null ? '' : String(kept)
-  }
-  form.compaction_enabled = value
-}
 
 function buildJobs(changed: (keyof CompactionForm)[]): AutosaveJob<CompactionForm>[] {
   const payload: SettingsUpsertRequest = {}
@@ -266,7 +202,10 @@ function toggleExpand(id: string | undefined) {
 }
 
 // silent = background poll: no loading flicker, no error toast, keep expanded rows.
+watch(logsOpen, (open) => { if (open) void fetchLogs() })
+
 async function fetchLogs(silent = false) {
+  if (!logsOpen.value) return
   if (!props.botId) return
   if (!silent) isLoading.value = true
   try {
@@ -297,7 +236,7 @@ function tickPoll() {
 }
 
 function onVisibilityChange() {
-  if (!document.hidden && savedEnabled.value) void fetchLogs(true)
+  if (logsOpen.value && !document.hidden && savedEnabled.value) void fetchLogs(true)
 }
 
 async function handleClear() {
@@ -319,7 +258,6 @@ async function handleClear() {
 }
 
 onMounted(() => {
-  fetchLogs()
   pollTimer = setInterval(tickPoll, POLL_INTERVAL)
   document.addEventListener('visibilitychange', onVisibilityChange)
 })
@@ -331,43 +269,47 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <PageShell
-    variant="tab"
+  <SectionGroup
     :title="$t('bots.tabs.compaction')"
   >
     <div class="space-y-8">
-      <SettingsSection :title="$t('bots.compaction.settingsTitle')">
+      <SettingsSection>
         <SettingsRow
           :label="$t('bots.settings.compactionEnabled')"
           :description="$t('bots.settings.compactionDescription')"
         >
           <Switch
             :model-value="form.compaction_enabled"
-            @update:model-value="updateCompactionEnabled"
+            @update:model-value="(value) => form.compaction_enabled = value"
           />
         </SettingsRow>
 
         <template v-if="form.compaction_enabled">
           <SettingsRow stack="sm">
             <template #content>
-              <Label for="compaction-threshold">
+              <label
+                for="compaction-threshold"
+                class="text-control font-medium text-foreground"
+              >
                 {{ $t('bots.settings.compactionThreshold') }}
-              </Label>
+              </label>
+              <p
+                id="compaction-threshold-description"
+                class="mt-0.5 text-body text-muted-foreground"
+              >
+                {{ $t('bots.settings.compactionThresholdDescription') }}
+              </p>
             </template>
-            <Input
+            <NumberField
               id="compaction-threshold"
-              :model-value="thresholdDraft"
-              type="number"
+              aria-describedby="compaction-threshold-description"
+              :model-value="form.compaction_threshold"
               :min="0"
               :step="1"
               placeholder="0"
-              size="sm"
-              class="w-32 tabular-nums"
-              @update:model-value="(value) => thresholdDraft = String(value ?? '')"
-              @focus="thresholdFocused = true"
-              @change="commitThresholdDraft"
-              @blur="thresholdFocused = false; commitThresholdDraft()"
-              @keydown.enter="commitThresholdDraft"
+              disable-wheel-change
+              class="w-32"
+              @update:model-value="(value) => form.compaction_threshold = value ?? 0"
             />
           </SettingsRow>
 
@@ -375,315 +317,290 @@ onBeforeUnmount(() => {
             stack="sm"
           >
             <template #content>
-              <Label for="compaction-target-percent">
+              <label
+                for="compaction-target-percent"
+                class="text-control font-medium text-foreground"
+              >
                 {{ $t('bots.settings.compactionTargetPercent') }}
-              </Label>
+              </label>
               <p
                 id="compaction-target-percent-description"
                 class="mt-0.5 text-body text-muted-foreground"
               >
                 {{ $t('bots.settings.compactionTargetPercentDescription') }}
               </p>
-              <p
-                v-if="compactionTargetPercentInvalid"
-                id="compaction-target-percent-error"
-                class="mt-1 text-body text-destructive"
-              >
-                {{ $t('bots.settings.compactionTargetPercentInvalid') }}
-              </p>
             </template>
-            <Input
+            <!-- Empty means "use the default" (null → backend clears the
+                 override); reka commits undefined for an empty field. -->
+            <NumberField
               id="compaction-target-percent"
-              :model-value="percentDraft"
-              type="number"
+              aria-describedby="compaction-target-percent-description"
+              :model-value="form.compaction_target_percent"
               :min="1"
               :max="99"
               :step="1"
               placeholder="40"
-              size="sm"
-              class="w-32 tabular-nums"
-              :aria-describedby="compactionTargetPercentInvalid
-                ? 'compaction-target-percent-description compaction-target-percent-error'
-                : 'compaction-target-percent-description'"
-              :aria-invalid="compactionTargetPercentInvalid"
-              @update:model-value="(value) => percentDraft = String(value ?? '')"
-              @focus="percentFocused = true"
-              @change="commitPercentDraft"
-              @blur="percentFocused = false; commitPercentDraft()"
-              @keydown.enter="commitPercentDraft"
+              disable-wheel-change
+              class="w-32"
+              @update:model-value="(value) => form.compaction_target_percent = value ?? null"
             />
           </SettingsRow>
         </template>
-      </SettingsSection>
-
-      <!-- Model override is a power-user facet (defaults to the bot's chat
-           model), so it lives behind a named ActionCard entry opening a
-           focused dialog — the house replacement for the old in-card
-           "Advanced" expand row. The dialog edits the same autosaved form, so
-           a selection persists the moment it is made. -->
-      <section
-        v-if="form.compaction_enabled"
-        class="space-y-2.5"
-      >
-        <h2 class="px-2 text-label font-medium text-muted-foreground">
-          {{ $t('bots.compaction.advanced') }}
-        </h2>
-        <!-- Slim single-line entry, per the ActionCard contract: NO description
-             (it would grow the row past the 48px rung) — the dialog's own
-             DialogDescription carries the explanation. Box = the house icon
-             for "model" (providers page: Boxes count / Box empty state). -->
-        <ActionCard
-          :title="$t('bots.settings.compactionModel')"
-          @click="advancedOpen = true"
-        >
-          <template #icon>
-            <Box />
-          </template>
-        </ActionCard>
-      </section>
-
-      <SettingsSection :title="$t('bots.compaction.title')">
         <SettingsRow
-          v-if="totalCount > 0"
-          :label="$t('common.status')"
+          v-if="form.compaction_enabled"
+          stack="sm"
+          :label="$t('bots.settings.compactionModel')"
+          :description="$t('bots.settings.compactionModelDescription')"
         >
-          <Select v-model="statusFilter">
-            <SelectTrigger class="w-32">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="all">
-                {{ $t('bots.compaction.filterAll') }}
-              </SelectItem>
-              <SelectItem value="ok">
-                {{ $t('bots.compaction.statusOk') }}
-              </SelectItem>
-              <SelectItem value="pending">
-                {{ $t('bots.compaction.statusPending') }}
-              </SelectItem>
-              <SelectItem value="error">
-                {{ $t('bots.compaction.statusError') }}
-              </SelectItem>
-            </SelectContent>
-          </Select>
+          <ModelSelect
+            v-model="form.compaction_model_id"
+            :models="compactionModels"
+            :providers="providers"
+            model-type="chat"
+            :placeholder="$t('bots.settings.compactionModelPlaceholder')"
+            :none-label="$t('bots.settings.compactionModelPlaceholder')"
+            class="w-full sm:w-56"
+          />
         </SettingsRow>
-
-        <InlineLoadingRow
-          v-if="isLoading && logs.length === 0"
-          size="md"
-          surface="card-row"
-        >
-          {{ $t('common.loading') }}
-        </InlineLoadingRow>
-
-        <Empty
-          v-else-if="!isLoading && totalCount === 0 && !savedEnabled"
-          class="py-12"
-        >
-          <EmptyHeader>
-            <EmptyTitle>{{ $t('bots.compaction.logsDisabledTitle') }}</EmptyTitle>
-            <EmptyDescription>{{ $t('bots.compaction.logsDisabledHint') }}</EmptyDescription>
-          </EmptyHeader>
-        </Empty>
-
-        <Empty
-          v-else-if="!isLoading && totalCount === 0"
-          class="py-12"
-        >
-          <EmptyHeader>
-            <EmptyTitle>{{ $t('bots.compaction.empty') }}</EmptyTitle>
-            <EmptyDescription>{{ $t('bots.compaction.emptyHint') }}</EmptyDescription>
-          </EmptyHeader>
-        </Empty>
-
-        <Empty
-          v-else-if="filteredLogs.length === 0"
-          class="py-12"
-        >
-          <EmptyHeader>
-            <EmptyTitle>{{ $t('bots.compaction.empty') }}</EmptyTitle>
-            <EmptyDescription>{{ $t('bots.compaction.filterEmpty') }}</EmptyDescription>
-          </EmptyHeader>
-        </Empty>
-
-        <template v-else>
-          <div class="overflow-x-auto">
-            <table class="w-full text-xs">
-              <thead>
-                <tr class="border-b border-border">
-                  <th class="px-4 py-2.5 text-left font-medium text-muted-foreground">
-                    {{ $t('bots.compaction.status') }}
-                  </th>
-                  <th class="px-4 py-2.5 text-left font-medium text-muted-foreground">
-                    {{ $t('bots.compaction.time') }}
-                  </th>
-                  <th class="px-4 py-2.5 text-left font-medium text-muted-foreground">
-                    {{ $t('bots.compaction.duration') }}
-                  </th>
-                  <th class="px-4 py-2.5 text-left font-medium text-muted-foreground">
-                    {{ $t('bots.compaction.error') }}
-                  </th>
-                </tr>
-              </thead>
-              <tbody class="divide-y divide-border">
-                <template
-                  v-for="log in filteredLogs"
-                  :key="log.id"
+        <SettingsRow :label="$t('bots.compaction.title')">
+          <Button
+            variant="outline"
+            size="sm"
+            @click="logsOpen = true"
+          >
+            {{ $t('common.open') }}
+          </Button>
+        </SettingsRow>
+      </SettingsSection>
+      <Dialog v-model:open="logsOpen">
+        <DialogPanel width="3xl">
+          <DialogHeader>
+            <DialogTitle>{{ $t('bots.compaction.title') }}</DialogTitle>
+          </DialogHeader>
+          <DialogBody>
+            <div class="space-y-8">
+              <SettingsSection>
+                <SettingsRow
+                  v-if="totalCount > 0"
+                  :label="$t('common.status')"
                 >
-                  <tr
-                    class="cursor-pointer transition-colors hover:bg-accent"
-                    @click="toggleExpand(log.id)"
+                  <Select v-model="statusFilter">
+                    <SelectTrigger class="w-32">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="all">
+                        {{ $t('bots.compaction.filterAll') }}
+                      </SelectItem>
+                      <SelectItem value="ok">
+                        {{ $t('bots.compaction.statusOk') }}
+                      </SelectItem>
+                      <SelectItem value="pending">
+                        {{ $t('bots.compaction.statusPending') }}
+                      </SelectItem>
+                      <SelectItem value="error">
+                        {{ $t('bots.compaction.statusError') }}
+                      </SelectItem>
+                    </SelectContent>
+                  </Select>
+                </SettingsRow>
+
+                <InlineLoadingRow
+                  v-if="isLoading && logs.length === 0"
+                  size="md"
+                  surface="card-row"
+                >
+                  {{ $t('common.loading') }}
+                </InlineLoadingRow>
+
+                <Empty
+                  v-else-if="!isLoading && totalCount === 0 && !savedEnabled"
+                  class="py-12"
+                >
+                  <EmptyHeader>
+                    <EmptyTitle>{{ $t('bots.compaction.logsDisabledTitle') }}</EmptyTitle>
+                    <EmptyDescription>{{ $t('bots.compaction.logsDisabledHint') }}</EmptyDescription>
+                  </EmptyHeader>
+                </Empty>
+
+                <Empty
+                  v-else-if="!isLoading && totalCount === 0"
+                  class="py-12"
+                >
+                  <EmptyHeader>
+                    <EmptyTitle>{{ $t('bots.compaction.empty') }}</EmptyTitle>
+                    <EmptyDescription>{{ $t('bots.compaction.emptyHint') }}</EmptyDescription>
+                  </EmptyHeader>
+                </Empty>
+
+                <Empty
+                  v-else-if="filteredLogs.length === 0"
+                  class="py-12"
+                >
+                  <EmptyHeader>
+                    <EmptyTitle>{{ $t('bots.compaction.empty') }}</EmptyTitle>
+                    <EmptyDescription>{{ $t('bots.compaction.filterEmpty') }}</EmptyDescription>
+                  </EmptyHeader>
+                </Empty>
+
+                <template v-else>
+                  <div class="overflow-x-auto">
+                    <table class="w-full text-xs">
+                      <thead>
+                        <tr class="border-b border-border">
+                          <th class="px-4 py-2.5 text-left font-medium text-muted-foreground">
+                            {{ $t('bots.compaction.status') }}
+                          </th>
+                          <th class="px-4 py-2.5 text-left font-medium text-muted-foreground">
+                            {{ $t('bots.compaction.time') }}
+                          </th>
+                          <th class="px-4 py-2.5 text-left font-medium text-muted-foreground">
+                            {{ $t('bots.compaction.duration') }}
+                          </th>
+                          <th class="px-4 py-2.5 text-left font-medium text-muted-foreground">
+                            {{ $t('bots.compaction.error') }}
+                          </th>
+                        </tr>
+                      </thead>
+                      <tbody class="divide-y divide-border">
+                        <template
+                          v-for="log in filteredLogs"
+                          :key="log.id"
+                        >
+                          <tr
+                            class="cursor-pointer transition-colors hover:bg-accent"
+                            @click="toggleExpand(log.id)"
+                          >
+                            <td class="px-4 py-3">
+                              <Badge
+                                :variant="statusVariant(log.status)"
+                                size="sm"
+                              >
+                                {{ statusLabel(log.status) }}
+                              </Badge>
+                            </td>
+                            <td class="px-4 py-3 font-mono text-muted-foreground">
+                              {{ formatDateTime(log.started_at) }}
+                            </td>
+                            <td class="px-4 py-3 font-mono text-muted-foreground">
+                              {{ formatDuration(log.started_at, log.completed_at) }}
+                            </td>
+                            <td class="px-4 py-3">
+                              <span
+                                v-if="log.error_message"
+                                class="block max-w-[200px] truncate text-destructive"
+                              >{{ log.error_message }}</span>
+                              <span
+                                v-else
+                                class="text-muted-foreground"
+                              >—</span>
+                            </td>
+                          </tr>
+                          <tr
+                            v-if="log.id && expandedIds.has(log.id)"
+                            class="border-t border-border"
+                          >
+                            <td
+                              colspan="4"
+                              class="px-4 py-4"
+                            >
+                              <div class="space-y-3">
+                                <div
+                                  v-if="log.error_message"
+                                  class="rounded-md border border-border bg-card p-3"
+                                >
+                                  <p class="whitespace-pre-wrap font-mono text-xs text-destructive">
+                                    {{ log.error_message }}
+                                  </p>
+                                </div>
+                                <div
+                                  v-if="log.usage"
+                                  class="space-y-1"
+                                >
+                                  <span class="text-xs font-medium text-muted-foreground">{{ $t('common.usage') }}</span>
+                                  <div class="whitespace-pre-wrap rounded-md border border-border bg-card p-3 font-mono text-xs text-muted-foreground">
+                                    {{ JSON.stringify(log.usage, null, 2) }}
+                                  </div>
+                                </div>
+                              </div>
+                            </td>
+                          </tr>
+                        </template>
+                      </tbody>
+                    </table>
+                  </div>
+
+                  <div
+                    v-if="totalPages > 1"
+                    class="flex items-center justify-between border-t border-border p-4"
                   >
-                    <td class="px-4 py-3">
-                      <Badge
-                        :variant="statusVariant(log.status)"
-                        size="sm"
-                      >
-                        {{ statusLabel(log.status) }}
-                      </Badge>
-                    </td>
-                    <td class="px-4 py-3 font-mono text-muted-foreground">
-                      {{ formatDateTime(log.started_at) }}
-                    </td>
-                    <td class="px-4 py-3 font-mono text-muted-foreground">
-                      {{ formatDuration(log.started_at, log.completed_at) }}
-                    </td>
-                    <td class="px-4 py-3">
-                      <span
-                        v-if="log.error_message"
-                        class="block max-w-[200px] truncate text-destructive"
-                      >{{ log.error_message }}</span>
-                      <span
-                        v-else
-                        class="text-muted-foreground"
-                      >—</span>
-                    </td>
-                  </tr>
-                  <tr
-                    v-if="log.id && expandedIds.has(log.id)"
-                    class="border-t border-border"
-                  >
-                    <td
-                      colspan="4"
-                      class="px-4 py-4"
+                    <span class="text-xs tabular-nums text-muted-foreground">
+                      {{ paginationSummary }}
+                    </span>
+                    <Pagination
+                      :total="totalCount"
+                      :items-per-page="PAGE_SIZE"
+                      :sibling-count="1"
+                      :page="currentPage"
+                      show-edges
+                      @update:page="currentPage = $event"
                     >
-                      <div class="space-y-3">
-                        <div
-                          v-if="log.error_message"
-                          class="rounded-md border border-border bg-card p-3"
+                      <PaginationContent v-slot="{ items }">
+                        <PaginationFirst />
+                        <PaginationPrevious />
+                        <template
+                          v-for="(item, index) in items"
+                          :key="index"
                         >
-                          <p class="whitespace-pre-wrap font-mono text-xs text-destructive">
-                            {{ log.error_message }}
-                          </p>
-                        </div>
-                        <div
-                          v-if="log.usage"
-                          class="space-y-1"
-                        >
-                          <span class="text-xs font-medium text-muted-foreground">{{ $t('common.usage') }}</span>
-                          <div class="whitespace-pre-wrap rounded-md border border-border bg-card p-3 font-mono text-xs text-muted-foreground">
-                            {{ JSON.stringify(log.usage, null, 2) }}
-                          </div>
-                        </div>
-                      </div>
-                    </td>
-                  </tr>
+                          <PaginationEllipsis
+                            v-if="item.type === 'ellipsis'"
+                            :index="index"
+                          />
+                          <PaginationItem
+                            v-else
+                            :value="item.value"
+                            :is-active="item.value === currentPage"
+                          />
+                        </template>
+                        <PaginationNext />
+                        <PaginationLast />
+                      </PaginationContent>
+                    </Pagination>
+                  </div>
                 </template>
-              </tbody>
-            </table>
-          </div>
+              </SettingsSection>
 
-          <div
-            v-if="totalPages > 1"
-            class="flex items-center justify-between border-t border-border p-4"
-          >
-            <span class="text-xs tabular-nums text-muted-foreground">
-              {{ paginationSummary }}
-            </span>
-            <Pagination
-              :total="totalCount"
-              :items-per-page="PAGE_SIZE"
-              :sibling-count="1"
-              :page="currentPage"
-              show-edges
-              @update:page="currentPage = $event"
-            >
-              <PaginationContent v-slot="{ items }">
-                <PaginationFirst />
-                <PaginationPrevious />
-                <template
-                  v-for="(item, index) in items"
-                  :key="index"
-                >
-                  <PaginationEllipsis
-                    v-if="item.type === 'ellipsis'"
-                    :index="index"
-                  />
-                  <PaginationItem
-                    v-else
-                    :value="item.value"
-                    :is-active="item.value === currentPage"
-                  />
-                </template>
-                <PaginationNext />
-                <PaginationLast />
-              </PaginationContent>
-            </Pagination>
-          </div>
-        </template>
-      </SettingsSection>
-
-      <SettingsSection
-        v-if="logs.length > 0"
-        :title="$t('common.dangerZone')"
-      >
-        <SettingsRow
-          :label="$t('bots.compaction.clearLogs')"
-          :description="$t('bots.compaction.clearConfirm')"
-        >
-          <ConfirmPopover
-            :message="$t('bots.compaction.clearConfirm')"
-            :loading="isClearing"
-            :cancel-text="$t('common.cancel')"
-            :confirm-text="$t('bots.compaction.clearLogs')"
-            @confirm="handleClear"
-          >
-            <template #trigger>
-              <Button
-                variant="destructive"
-                size="sm"
-                :loading="isClearing"
+              <SettingsSection
+                v-if="logs.length > 0"
+                :title="$t('common.dangerZone')"
               >
-                {{ $t('bots.compaction.clearLogs') }}
-              </Button>
-            </template>
-          </ConfirmPopover>
-        </SettingsRow>
-      </SettingsSection>
+                <SettingsRow
+                  :label="$t('bots.compaction.clearLogs')"
+                  :description="$t('bots.compaction.clearConfirm')"
+                >
+                  <ConfirmPopover
+                    :message="$t('bots.compaction.clearConfirm')"
+                    :loading="isClearing"
+                    :cancel-text="$t('common.cancel')"
+                    :confirm-text="$t('bots.compaction.clearLogs')"
+                    @confirm="handleClear"
+                  >
+                    <template #trigger>
+                      <Button
+                        variant="destructive"
+                        size="sm"
+                        :loading="isClearing"
+                      >
+                        {{ $t('bots.compaction.clearLogs') }}
+                      </Button>
+                    </template>
+                  </ConfirmPopover>
+                </SettingsRow>
+              </SettingsSection>
+            </div>
+          </DialogBody>
+        </DialogPanel>
+      </Dialog>
     </div>
-  </PageShell>
-
-  <!-- Advanced model override dialog (workbench form). Edits the autosaved
-       form directly: picking a model (or None, which clears the override)
-       saves immediately, so closing the dialog never loses or applies
-       anything by itself. -->
-  <Dialog v-model:open="advancedOpen">
-    <DialogPanel width="lg">
-      <DialogHeader>
-        <DialogTitle>{{ $t('bots.settings.compactionModel') }}</DialogTitle>
-        <DialogDescription>{{ $t('bots.settings.compactionModelDescription') }}</DialogDescription>
-      </DialogHeader>
-      <DialogBody>
-        <ModelSelect
-          v-model="form.compaction_model_id"
-          :models="compactionModels"
-          :providers="providers"
-          model-type="chat"
-          :placeholder="$t('bots.settings.compactionModelPlaceholder')"
-          :none-label="$t('bots.settings.compactionModelPlaceholder')"
-          class="w-full"
-        />
-      </DialogBody>
-    </DialogPanel>
-  </Dialog>
+  </SectionGroup>
 </template>

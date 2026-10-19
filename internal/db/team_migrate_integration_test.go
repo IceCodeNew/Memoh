@@ -246,19 +246,19 @@ func TestCanonicalInitContainsFinalTeamMembershipSchema(t *testing.T) {
 		t.Fatalf("canonical membership protection = rls:%v forced:%v policies:%d", rls, forced, policyCount)
 	}
 
-	var packageInstallations, pluginInstallations, pluginResources bool
+	var appInstallations, pluginInstallations, pluginResources bool
 	if err := pool.QueryRow(ctx, `
-		SELECT to_regclass('public.bot_skill_package_installations') IS NOT NULL,
+		SELECT to_regclass('public.bot_app_installations') IS NOT NULL,
 		       to_regclass('public.bot_plugin_installations') IS NOT NULL,
 		       to_regclass('public.bot_plugin_resources') IS NOT NULL`).Scan(
-		&packageInstallations, &pluginInstallations, &pluginResources,
+		&appInstallations, &pluginInstallations, &pluginResources,
 	); err != nil {
 		t.Fatalf("inspect canonical extension relations: %v", err)
 	}
-	if !packageInstallations || pluginInstallations || pluginResources {
+	if !appInstallations || pluginInstallations || pluginResources {
 		t.Fatalf(
-			"canonical extension relations = packages:%v plugin_installations:%v plugin_resources:%v",
-			packageInstallations, pluginInstallations, pluginResources,
+			"canonical extension relations = apps:%v plugin_installations:%v plugin_resources:%v",
+			appInstallations, pluginInstallations, pluginResources,
 		)
 	}
 
@@ -368,6 +368,10 @@ func TestMigrationsDoNotRequireClusterRolePrivileges(t *testing.T) {
 	if err := db.RunMigrate(logger, pgConfigFromDSN(t, limitedDSN), postgresMigrationsFS(t), "up", nil); err != nil {
 		t.Fatalf("migrate as database owner without CREATEROLE/BYPASSRLS: %v", err)
 	}
+	// Down migrations run under the same role and must not touch FORCE RLS
+	// tables through a policy that needs memoh.team_id either.
+	stepDown(t, limitedDSN, 1)
+	stepUp(t, limitedDSN, 1)
 }
 
 // stepDown rolls back exactly n migration steps using the golang-migrate library

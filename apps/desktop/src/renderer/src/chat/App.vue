@@ -1,38 +1,38 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, provide, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, provide } from 'vue'
 import { RouterView, useRouter, useRoute } from 'vue-router'
 import { Toaster } from '@felinic/ui'
-import { useSettingsStore } from '@memohai/web/store/settings'
 import {
   DesktopRuntimeKey,
   DesktopShellKey,
   DesktopUpdatesKey,
+  DesktopWindowKey,
   type DesktopRuntimeBridge,
   type DesktopUpdateBridge,
+  type DesktopWindowBridge,
 } from '@memohai/web/lib/desktop-shell'
 import MainSection from '@memohai/web/pages/main-section/index.vue'
 
 provide(DesktopShellKey, true)
+provide(DesktopWindowKey, {
+  isFullScreen: window.api.desktop.isFullScreen,
+  onFullScreenChanged: window.api.desktop.onFullScreenChanged,
+  setIgnoreMenuShortcuts: window.api.window.setIgnoreMenuShortcuts,
+} satisfies DesktopWindowBridge)
 provide(DesktopRuntimeKey, {
   runtimeState: window.api.desktop.runtimeState,
   configureRuntime: window.api.desktop.configureRuntime,
+  setRuntimePaused: window.api.desktop.setRuntimePaused,
   onRuntimeStateChanged: window.api.desktop.onRuntimeStateChanged,
 } satisfies DesktopRuntimeBridge)
 provide(DesktopUpdatesKey, {
   getInfo: window.api.desktop.updates.getInfo,
   getState: window.api.desktop.updates.getState,
   check: window.api.desktop.updates.check,
-  download: window.api.desktop.updates.download,
+  setAutoUpdate: window.api.desktop.updates.setAutoUpdate,
   install: window.api.desktop.updates.install,
   onStateChanged: window.api.desktop.updates.onStateChanged,
 } satisfies DesktopUpdateBridge)
-const settingsStore = useSettingsStore()
-watch(
-  () => settingsStore.theme,
-  themeSource => void window.api.desktop.setThemeSource(themeSource).catch((error) => {
-    console.warn('failed to synchronize desktop native theme', error)
-  }),
-)
 
 // Mirror apps/web App.vue: keep chat dockview/scroll alive (DOM attached,
 // full-size) while in settings, so returning has no black flash / re-scroll /
@@ -61,10 +61,7 @@ onBeforeUnmount(() => window.removeEventListener('keydown', onDevKey))
 
 <template>
   <section>
-    <MainSection
-      v-if="isAppArea"
-      :data-native-sidebar-underlay-clear="isSettingsRoute || undefined"
-    />
+    <MainSection v-if="isAppArea" />
     <!-- Permanent fixed settings layer (see apps/web App.vue): TRANSPARENT wrapper
          toggled with `visibility` only. settings-section paints its own opaque
          bg, so chat (not black) shows behind its slide/fade. No v-if (avoids

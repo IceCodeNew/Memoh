@@ -26,7 +26,7 @@ func (s *Service) ValidateOperationSession(ctx context.Context, botID, sessionID
 // The caller has authorized Manage access and pinned the script preview revision;
 // this method preserves that context rather than resolving a newer definition.
 // Only its optional, validated origin session receives lifecycle messages.
-func (s *Service) RunAuthorizedOperation(ctx context.Context, botID, targetID, depID, sessionID, description string, run func(context.Context, LogSink) (OperationResult, error), sink LogSink) (OperationResult, error) {
+func (s *Service) RunAuthorizedOperation(ctx context.Context, botID, depID, sessionID, description string, run func(context.Context, LogSink) (OperationResult, error), sink LogSink) (OperationResult, error) {
 	if err := s.ValidateOperationSession(ctx, botID, sessionID); err != nil {
 		return OperationResult{}, err
 	}
@@ -36,7 +36,7 @@ func (s *Service) RunAuthorizedOperation(ctx context.Context, botID, targetID, d
 	if revision, _ := ctx.Value(revisionContextKey{}).(string); strings.TrimSpace(revision) == "" {
 		return OperationResult{}, errors.New("dependency operation requires a confirmed definition revision")
 	}
-	key := InstallationKey{BotID: botID, WorkspaceTargetID: normalizeTargetID(targetID), DependencyID: strings.TrimSpace(depID)}
+	key := InstallationKey{BotID: botID, DependencyID: strings.TrimSpace(depID)}
 	reserved, release, err := s.reserveOperation(ctx, key)
 	if err != nil {
 		return OperationResult{}, err

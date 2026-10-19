@@ -6,6 +6,7 @@ import (
 	sdk "github.com/felinics/twilight/sdk"
 
 	historyfrag "github.com/felinics/memoh/internal/agent/context/history"
+	turnpkg "github.com/felinics/memoh/internal/agent/turn"
 )
 
 // sdkMessagesToModelMessages converts SDK messages to the persistence/API format
@@ -54,4 +55,24 @@ func modelQueryText(req ChatRequest) string {
 // modelMessagesToSDKMessages converts a slice of persistence messages to SDK messages.
 func modelMessagesToSDKMessages(msgs []ModelMessage) []sdk.Message {
 	return historyfrag.StoredModelMessagesToSDKMessages(msgs)
+}
+
+// Convert origins alongside each message so a rejected SDK message cannot
+// shift the source marker onto a different user input.
+func sdkMessagesWithOrigins(msgs []sdk.Message, indexes []int) []ModelMessage {
+	feedback := make(map[int]bool, len(indexes))
+	for _, index := range indexes {
+		feedback[index] = true
+	}
+	var result []ModelMessage
+	for index, msg := range msgs {
+		converted := sdkMessagesToModelMessages([]sdk.Message{msg})
+		if feedback[index] && msg.Role == sdk.MessageRoleUser {
+			for i := range converted {
+				converted[i].Source = turnpkg.MessageSourceInternalFeedback
+			}
+		}
+		result = append(result, converted...)
+	}
+	return result
 }

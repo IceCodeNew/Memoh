@@ -233,6 +233,12 @@ func TestNormalizeExecutionNewSessionRules(t *testing.T) {
 	if _, err := svc.normalizeExecution(ctx, execTestBotID, ExecutionConfig{ReasoningEffort: "extreme"}); err == nil {
 		t.Fatal("expected error: unknown native reasoning effort")
 	}
+	if _, err := svc.normalizeExecution(ctx, execTestBotID, ExecutionConfig{RuntimeType: "claude-code"}); err == nil {
+		t.Fatal("expected error: direct runtime claude-code without bot_agent_id")
+	}
+	if _, err := svc.normalizeExecution(ctx, execTestBotID, ExecutionConfig{RuntimeType: "unknown-kind"}); err == nil || !strings.Contains(err.Error(), "unknown runtime_type") {
+		t.Fatalf("error = %v, want unknown runtime_type rejection", err)
+	}
 	// "disable" is not a wire tier, so it is absent from the tier list, but it
 	// is the stored on/off value everywhere else reasoning is configured.
 	disabled, err := svc.normalizeExecution(ctx, execTestBotID, ExecutionConfig{ReasoningEffort: "disable"})
@@ -417,11 +423,23 @@ func TestIsAgentRuntimeSessionRowCoversDirectRuntimes(t *testing.T) {
 
 func TestRunTimeoutForCoversEveryExternalRuntime(t *testing.T) {
 	for _, runtimeType := range []string{"acp_agent", "codex", "claude-code"} {
-		if got := runTimeoutFor(Schedule{ExecutionConfig: ExecutionConfig{RuntimeType: runtimeType}}); got != 30*time.Minute {
-			t.Fatalf("runTimeoutFor(%q) = %s, want 30m", runtimeType, got)
+		if got := runTimeoutFor(Schedule{ExecutionConfig: ExecutionConfig{RuntimeType: runtimeType}}); got != time.Hour {
+			t.Fatalf("runTimeoutFor(%q) = %s, want 1h", runtimeType, got)
 		}
 	}
-	if got := runTimeoutFor(Schedule{ExecutionConfig: ExecutionConfig{RuntimeType: "model"}}); got != 5*time.Minute {
-		t.Fatalf("runTimeoutFor(model) = %s, want 5m", got)
+	if got := runTimeoutFor(Schedule{ExecutionConfig: ExecutionConfig{RuntimeType: "model"}}); got != time.Hour {
+		t.Fatalf("runTimeoutFor(model) = %s, want 1h", got)
+	}
+}
+
+func TestScheduleBudgetValidation(t *testing.T) {
+	svc := newExecutionService(t, &executionQueries{}, nil)
+	for _, seconds := range []int{-1, 299, 86401} {
+		if _, err := svc.normalizeExecution(t.Context(), execTestBotID, ExecutionConfig{MaxRunSeconds: seconds}); err == nil {
+			t.Fatalf("accepted %d", seconds)
+		}
+	}
+	if got := runTimeoutFor(Schedule{ExecutionConfig: ExecutionConfig{MaxRunSeconds: 7200}}); got != 2*time.Hour {
+		t.Fatalf("budget=%v", got)
 	}
 }

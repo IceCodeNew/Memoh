@@ -24,7 +24,7 @@ import type { RuntimeTranscriptSlice } from './runtime-projection'
 import { createTranscriptHistory } from './transcript-history'
 import { createTranscriptDecisions } from './transcript-decisions'
 import { createTranscriptQueries } from './transcript-queries'
-import { markRuntimeTurn, reconcileRuntimeTurns } from './runtime-transcript-merge'
+import { admissibleRuntimeTurns, fillTurnErrorDetails, insertRuntimeTurns, markRuntimeTurn, reconcileRuntimeTurns } from './runtime-transcript-merge'
 
 export interface TranscriptDeps {
   currentBotId: Ref<string | null>
@@ -38,9 +38,13 @@ export interface TranscriptDeps {
   // this turn? Settled reconciliation uses it to tell an in-flight boundary
   // turn (retain) from a vanished one (drop).
   isTurnLive?: (sessionId: string, turnId: string) => boolean
+  // The view registry's stale-mark version: captured when a history fetch
+  // starts and handed back through the refresh hook, so a stale mark that
+  // landed mid-refresh is not mistaken for covered by the fetched history.
+  historyRefreshToken?: () => number
 }
 
-type RefreshAppliedHook = (targetSessionId: string, latestTimestamp?: string) => void
+type RefreshAppliedHook = (targetSessionId: string, latestTimestamp?: string, refreshToken?: number) => void
 type CommitInitialHistory = (applyHistory: () => void) => Promise<void>
 type AfterHistoryCommit = () => void
 
@@ -62,6 +66,7 @@ export function createTranscriptController({
   fetchMessages,
   locateMessage,
   isTurnLive: isTurnLiveDep,
+  historyRefreshToken,
 }: TranscriptDeps) {
   const messages = reactive<ChatMessage[]>([])
   const loadingMessages = ref(false)
@@ -158,7 +163,9 @@ export function createTranscriptController({
     loadingOlder.value = false
   }
 
-  function applyFetchedHistory(botId: string, targetSessionId: string, generation: number, turns: UITurn[]) {
+  function applyFetchedHistory(
+    botId: string, targetSessionId: string, generation: number, turns: UITurn[], refreshToken?: number,
+  ) {
     if (!isCurrentHistoryContext(botId, targetSessionId, generation)) return
     if (hasLoadedOlder.value) {
       mergeMessages(turns, targetSessionId)
@@ -168,7 +175,7 @@ export function createTranscriptController({
       // page is not proof that history ended. Only pagination can settle it.
       hasMoreOlder.value = true
     }
-    onRefreshApplied(targetSessionId, messages[messages.length - 1]?.timestamp)
+    onRefreshApplied(targetSessionId, messages[messages.length - 1]?.timestamp, refreshToken)
   }
 
   async function refreshCurrentSession(
@@ -193,10 +200,11 @@ export function createTranscriptController({
 
     const afterHistoryCallbacks = new Set<AfterHistoryCommit>()
     if (afterHistory) afterHistoryCallbacks.add(afterHistory)
+    const refreshToken = historyRefreshToken?.()
     const promise = (async () => {
       const turns = await fetchMessages(bid, sid, { limit: PAGE_SIZE })
       if (!isCurrentHistoryContext(bid, sid, generation)) return
-      applyFetchedHistory(bid, sid, generation, turns)
+      applyFetchedHistory(bid, sid, generation, turns, refreshToken)
       // Keep a replacement Runtime projection in the same synchronous commit
       // as the refreshed anchor so Vue cannot paint the database-only state.
       for (const apply of afterHistoryCallbacks) apply()
@@ -211,21 +219,33 @@ export function createTranscriptController({
     botId: string,
     targetSessionId: string,
     commitInitialHistory: CommitInitialHistory,
+    // mask=true (default) hides the cached transcript behind loadingMessages
+    // until fresh history commits. mask=false keeps a trusted cache visible
+    // and revalidates in the open. Both paths commit fetched history and its
+    // runtime projection together, without a database-only intermediate frame.
+    options: { mask?: boolean } = {},
   ) {
     const bid = botId.trim()
     const sid = targetSessionId.trim()
     if (!bid || !sid) return
-    loadingMessages.value = true
-    const version = ++loadingMessagesVersion
+    const mask = options.mask !== false
+    if (mask) loadingMessages.value = true
+    // Only a masked load owns the loadingMessages lifecycle: bumping the
+    // version here (or clearing in finally) when unmasked could strand a
+    // concurrent masked load's flag.
+    const version = mask ? ++loadingMessagesVersion : loadingMessagesVersion
     const generation = historyGeneration
+    // Captured before the fetch: marks already present are covered by this
+    // read; only later marks must survive the refresh-applied hook.
+    const refreshToken = historyRefreshToken?.()
     try {
       const turns = await fetchMessages(bid, sid, { limit: PAGE_SIZE })
       if (!isCurrentHistoryContext(bid, sid, generation)) return
       await commitInitialHistory(() => {
-        applyFetchedHistory(bid, sid, generation, turns)
+        applyFetchedHistory(bid, sid, generation, turns, refreshToken)
       })
     } finally {
-      if (version === loadingMessagesVersion) loadingMessages.value = false
+      if (mask && version === loadingMessagesVersion) loadingMessages.value = false
     }
   }
 
@@ -233,13 +253,13 @@ export function createTranscriptController({
     return fetchMessages(botId, targetSessionId, { limit: PAGE_SIZE })
   }
 
-  // The oldest turn the database has actually numbered. turnPosition is that
-  // signal exactly: the visible-history view cannot return a row without one,
-  // and a live turn carries none until its settled twin arrives. Paging from
-  // messages[0] instead would hand the server a render identity whenever a
-  // live turn sits at the head of an otherwise unsettled transcript.
+  // The oldest turn the database has actually returned. `settled` is that
+  // signal exactly: it is set only by the history normalizer, so it marks a
+  // turn the server can address by id. turnPosition is deliberately NOT the
+  // test — live runtime turns now carry a position too, and paging from one
+  // would hand the server a render identity as a cursor.
   function oldestSettledTurn(): ChatMessage | undefined {
-    return messages.find(turn => turn.turnPosition !== undefined)
+    return messages.find(turn => turn.settled === true)
   }
 
   async function loadOlderMessages(): Promise<number> {
@@ -450,7 +470,7 @@ export function createTranscriptController({
     }
   }
 
-  function bindRuntimeTurn(invocationId: string, turnId: string, runId: string) {
+  function bindRuntimeTurn(invocationId: string, turnId: string, runId: string, turnPosition?: number) {
     const invocation = invocationId.trim()
     const turn = turnId.trim()
     const run = runId.trim()
@@ -471,6 +491,9 @@ export function createTranscriptController({
       if (message.role === 'system' || message.invocationId !== invocation) continue
       message.turnId = turn
       message.runtimeRunId = run
+      // Numbering the optimistic pair here is what lets a sort that mixes it
+      // with settled turns place it correctly before its own twin lands.
+      if (turnPosition !== undefined) message.turnPosition = turnPosition
     }
   }
 
@@ -482,7 +505,7 @@ export function createTranscriptController({
     // local send: bind the optimistic pair before merging so the merge below
     // finds it by turnId. The frame itself is the pairing — correct no matter
     // how it interleaves with run_accepted, with no grace window to guess in.
-    if (slice.invocationId) bindRuntimeTurn(slice.invocationId, slice.turnId, slice.runId)
+    if (slice.invocationId) bindRuntimeTurn(slice.invocationId, slice.turnId, slice.runId, slice.turnPosition)
     let firstUser = true
     const incoming = slice.turns
       .map(normalizeTurn)
@@ -502,7 +525,9 @@ export function createTranscriptController({
       if (turn.runtimeRunId === slice.runId || turn.turnId === slice.turnId) return true
       return incomingKeys.has(`${turn.role}\u0000${turn.turnId ?? ''}`)
     })
-    const resolved = reconcileRuntimeTurns(existing, incoming)
+    // Every turn still on screen survives; the window decides the rest.
+    const resolved = admissibleRuntimeTurns(messages, slice, reconcileRuntimeTurns(existing, incoming))
+    if (resolved.length === 0) return true
 
     const operationAnchor = slice.operation?.replace_from_message_id?.trim() ?? ''
     const anchor = operationAnchor
@@ -512,12 +537,10 @@ export function createTranscriptController({
       replaceTailFromTurn(anchor, resolved)
       return true
     }
-    if (operationAnchor && existing.length === 0) {
-      return false
-    }
+    if (operationAnchor && existing.length === 0) return false
 
     if (existing.length === 0) {
-      appendToView(...resolved)
+      insertRuntimeTurns(messages, resolved, messages.length)
       return true
     }
     const indices = existing
@@ -528,14 +551,7 @@ export function createTranscriptController({
     for (let index = indices.length - 1; index >= 0; index -= 1) {
       messages.splice(indices[index]!, 1)
     }
-    // The runtime frame already orders a run's turns: request users first,
-    // then assistant segments split around each steer by after_message_id.
-    // Insert that block as delivered. Re-sorting the whole transcript here
-    // would fall back to timestamps wherever a live assistant turn has no
-    // turn_position yet, and a request user persisted at step commit carries
-    // a later timestamp than the assistant turn that started streaming
-    // before it, which rendered the reply above its own request.
-    messages.splice(insertAt, 0, ...resolved)
+    insertRuntimeTurns(messages, resolved, insertAt)
     return true
   }
 
@@ -551,6 +567,7 @@ export function createTranscriptController({
       output: incoming.output ?? existing.output,
       approval: mergeApprovalState(existing.approval, incoming.approval),
       execution_location: incoming.execution_location ?? existing.execution_location,
+      elapsed_time_seconds: incoming.elapsed_time_seconds ?? existing.elapsed_time_seconds,
       userInput: incoming.userInput ?? existing.userInput,
       user_input: incoming.user_input ?? existing.user_input,
       backgroundTask: incoming.backgroundTask ?? existing.backgroundTask,
@@ -581,7 +598,7 @@ export function createTranscriptController({
 
   function hasVisibleAssistantBlocks(turn: ChatAssistantTurn): boolean {
     return turn.messages.some(block =>
-      block.type !== 'error' || Boolean(block.code || block.content),
+      block.type !== 'status' && (block.type !== 'error' || Boolean(block.code || block.content)),
     )
   }
 
@@ -598,11 +615,12 @@ export function createTranscriptController({
     assistantTurn.messages.push({ id, type: 'error', code, content: text, args: stringRecord(args) })
   }
 
-  function finalizeStreamFailure(assistantTurn: ChatAssistantTurn, botId: string, targetSessionId: string, error: Error) {
+  // keepTurn: history keeps this turn, so an empty one shows its failure instead of being removed.
+  function finalizeStreamFailure(assistantTurn: ChatAssistantTurn, botId: string, targetSessionId: string, error: Error, keepTurn = false) {
     const parsed = parseMemohError(error)
     if (!hasVisibleAssistantBlocks(assistantTurn)) {
-      if (parsed?.code) {
-        appendAssistantError(assistantTurn, error.message, parsed.code, parsed.args)
+      if (parsed?.code || keepTurn) {
+        appendAssistantError(assistantTurn, error.message, parsed?.code, parsed?.args)
         return
       }
       const turnId = assistantTurn.turnId?.trim()
@@ -614,7 +632,7 @@ export function createTranscriptController({
       return
     }
     if (error.name === 'AbortError') return
-    if (assistantTurn.messages.some(block => block.type === 'error')) return
+    if (fillTurnErrorDetails(assistantTurn, { code: parsed?.code, content: error.message.trim(), args: stringRecord(parsed?.args) })) return
     appendAssistantError(assistantTurn, error.message, parsed?.code, parsed?.args)
   }
 

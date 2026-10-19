@@ -9,8 +9,9 @@ installation scripts. Adding a CLI or correcting its recipe is a registry releas
 not a Memoh release. Adding an Agent runtime driver still requires Memoh code.
 
 The first release supports the official registry only and includes Codex, Claude
-Code, Node.js, Python, and uv. Skill Packages remain a separate resource and retain
-their existing installer and `postinstall` behavior.
+Code, Node.js, Python, and uv. Apps compose Skills, workspace dependencies and
+connectors as one installable unit. Dependencies retain their independent definitions
+and releases; Apps orchestrate their installation. See [Apps](apps.md).
 
 ## Definition protocol
 
@@ -115,9 +116,9 @@ Managed dependencies live under `<data root>/.memoh/deps/<id>/versions/<version>
 `current` identifies the active version, `state.json` records its publication and
 entrypoints, and generated shims in `.memoh/deps/bin` precede the image toolkit on
 PATH for every bridge command, including both pipe and PTY exec, not just the Codex
-and Claude Code drivers. Native workspaces use `/data`; remote dependency-management
-targets supply their own data root. The direct Codex and Claude Code runtimes currently
-require a native workspace and reject remote targets before launcher resolution.
+and Claude Code drivers. Dependency management always uses the bot container and
+its `/data` root, independently of the selected computer. The direct runtimes retain
+their container requirement before launcher resolution.
 
 The image keeps Node.js, Python, uv, display tools and the bridge contract paths.
 Node.js/Python/uv installations add managed copies. Removing a dependency from a
@@ -126,7 +127,7 @@ files in that container. The Debian image's additional system Python is removed
 through its package manager, including packages that require the interpreter; unrelated
 packages are not autoremoved. A removed dependency is no longer discovered or listed
 as installed. Recreating the container from an image restores that image's contents.
-Remote targets continue to use their reviewed removal recipes. Codex and Claude Code
+User computers are not dependency-management targets. Codex and Claude Code
 are downloaded per workspace and are absent from the
 image. The old workspace-contract JSON gate is removed. Server and image upgrades
 must follow the [upgrade and rollback procedure](../workspace-dependencies-upgrade.md);

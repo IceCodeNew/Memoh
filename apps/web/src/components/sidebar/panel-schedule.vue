@@ -77,11 +77,23 @@
               :description="item.description?.trim() || describeItem(item.pattern) || item.pattern || ''"
               :time-label="nextRunTimeLabel(item)"
               :busy="busyIds.has(item.id ?? '')"
-              @open="handleOpenTask(item)"
+              :expandable="!pinnedSessionId(item)"
+              :expanded="expandedScheduleId === item.id"
+              :pinned-session="!!pinnedSessionId(item)"
+              :running="isPinnedSessionRunning(item)"
+              @open="handleOpen(item)"
               @edit="handleOpenTask(item)"
               @delete="deleteTarget = item"
               @toggle="(enabled) => handleToggleEnabled(item, enabled)"
-            />
+            >
+              <ScheduleRunSessions
+                v-if="currentBotId && item.id"
+                :bot-id="currentBotId"
+                :schedule-id="item.id"
+                :schedule-name="item.name ?? ''"
+                :revision="currentScheduleRevision"
+              />
+            </ScheduleItem>
           </div>
         </div>
       </template>
@@ -91,7 +103,7 @@
     <ConfirmDeleteDialog
       :open="!!deleteTarget"
       :title="t('bots.schedule.deleteTitle')"
-      :description="t('bots.schedule.deleteConfirm', { name: deleteTarget?.name ?? '' })"
+      :description="t(scheduleDeleteConfirmKey(deleteTarget), { name: deleteTarget?.name ?? '' })"
       :cancel-label="t('common.cancel')"
       :confirm-label="t('bots.schedule.delete')"
       :loading="isDeleting"
@@ -102,9 +114,10 @@
 </template>
 
 <script setup lang="ts">
-import { ref, watch, computed, onMounted, reactive } from 'vue'
+import { ref, watch, computed, reactive } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { storeToRefs } from 'pinia'
+import { useLocalStorage } from '@vueuse/core'
 import { Plus } from 'lucide-vue-next'
 import { ConfirmDeleteDialog, toast } from '@felinic/ui'
 import {
@@ -116,7 +129,9 @@ import { useChatStore } from '@/store/chat-list'
 import { useWorkspaceTabsStore } from '@/store/workspace-tabs'
 import { resolveApiErrorMessage } from '@/utils/api-error'
 import { describeCron, nextRuns } from '@/utils/cron-pattern'
+import { scheduleDeleteConfirmKey } from '@/utils/schedule-delete'
 import ScheduleItem from './schedule-item.vue'
+import ScheduleRunSessions from './schedule-run-sessions.vue'
 import SidebarPanelHeader from './panel-header.vue'
 // The shared sidebar scroll treatment (fade, thumb ink, skeleton tuning) lives
 // in this stylesheet — NOT a scoped style, because it is used by both
@@ -126,7 +141,7 @@ import '@/styles/sidebar-scroll.css'
 
 const { t, locale } = useI18n()
 const chatStore = useChatStore()
-const { currentBotId } = storeToRefs(chatStore)
+const { currentBotId, scheduleActivityRevisions } = storeToRefs(chatStore)
 const workspaceTabs = useWorkspaceTabsStore()
 const { sidebarView } = storeToRefs(workspaceTabs)
 
@@ -240,13 +255,21 @@ async function fetchSchedules() {
   }
 }
 
-// Refresh when user switches TO the schedule tab
-watch(sidebarView, (view) => {
-  if (view === 'schedule') void fetchSchedules()
+const currentScheduleRevision = computed(() => {
+  const botId = currentBotId.value
+  return botId ? scheduleActivityRevisions.value[botId] ?? 0 : 0
 })
 
-// Refresh when active bot changes
-watch(currentBotId, () => void fetchSchedules())
+// The panel stays mounted while Chat is selected. A single watcher covers its
+// three snapshot boundaries: opening Schedule, switching bots, and receiving a
+// server-side change from an agent tool or schedule run.
+watch([currentBotId, sidebarView, currentScheduleRevision], ([botId, view]) => {
+  if (!botId) {
+    schedules.value = []
+    return
+  }
+  if (view === 'schedule') void fetchSchedules()
+}, { immediate: true })
 
 async function confirmDelete() {
   const item = deleteTarget.value
@@ -298,5 +321,47 @@ function handleOpenTask(item: ScheduleSchedule) {
   workspaceTabs.openSchedule(item.id, item.name)
 }
 
-onMounted(() => void fetchSchedules())
+/**
+ * The conversation a schedule always runs in, or '' when every run opens a
+ * fresh session. A pinned schedule whose target is gone has no conversation to
+ * open; its card falls back to the editor.
+ */
+function pinnedSessionId(item: ScheduleSchedule): string {
+  if (item.run_target !== 'existing_session') return ''
+  return item.target_session_id?.trim() ?? ''
+}
+
+function isPinnedSessionRunning(item: ScheduleSchedule): boolean {
+  const sessionId = pinnedSessionId(item)
+  return !!sessionId && chatStore.isSessionStreaming(currentBotId.value, sessionId)
+}
+
+// One expanded card per bot, like an accordion: opening a card closes the
+// previous one so a single schedule's history never pushes the rest away.
+// Persisted as a reading preference, the same way folders keep theirs.
+const expandedScheduleByBot = useLocalStorage<Record<string, string>>(
+  'workspace-sidebar-expanded-schedule',
+  {},
+)
+const expandedScheduleId = computed(() => expandedScheduleByBot.value[currentBotId.value ?? ''] ?? '')
+
+function handleOpen(item: ScheduleSchedule) {
+  const botId = (currentBotId.value ?? '').trim()
+  const id = item.id ?? ''
+  if (!botId || !id) return
+  const sessionId = pinnedSessionId(item)
+  if (sessionId) {
+    workspaceTabs.openSessionChat({ sessionId })
+    return
+  }
+  if (item.run_target === 'existing_session') {
+    handleOpenTask(item)
+    return
+  }
+  expandedScheduleByBot.value = {
+    ...expandedScheduleByBot.value,
+    [botId]: expandedScheduleId.value === id ? '' : id,
+  }
+}
+
 </script>

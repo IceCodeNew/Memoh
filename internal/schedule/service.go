@@ -15,13 +15,16 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/robfig/cron/v3"
 
+	"github.com/felinics/memoh/internal/apperror"
 	"github.com/felinics/memoh/internal/auth"
 	"github.com/felinics/memoh/internal/boot"
 	"github.com/felinics/memoh/internal/botagents"
+	messageevent "github.com/felinics/memoh/internal/chat/event"
 	"github.com/felinics/memoh/internal/db"
 	"github.com/felinics/memoh/internal/db/postgres/sqlc"
 	dbstore "github.com/felinics/memoh/internal/db/store"
-	"github.com/felinics/memoh/internal/runtimekind"
+	"github.com/felinics/memoh/internal/job"
+	memtimezone "github.com/felinics/memoh/internal/timezone"
 	"github.com/felinics/memoh/internal/workdir"
 )
 
@@ -60,6 +63,8 @@ type WorkdirValidator interface {
 }
 
 type Service struct {
+	lifecycleCtx    context.Context
+	stop            context.CancelFunc
 	queries         dbstore.Queries
 	cron            *cron.Cron
 	parser          cron.Parser
@@ -67,6 +72,7 @@ type Service struct {
 	sessionCreator  SessionCreator
 	workdirs        WorkdirValidator
 	botAgents       *botagents.Service
+	events          messageevent.Publisher
 	jwtSecret       string
 	logger          *slog.Logger
 	defaultLocation *time.Location
@@ -76,6 +82,11 @@ type Service struct {
 
 func (s *Service) SetBotAgents(service *botagents.Service) {
 	s.botAgents = service
+}
+
+// SetEventPublisher wires bot-scoped schedule snapshot invalidations.
+func (s *Service) SetEventPublisher(publisher messageevent.Publisher) {
+	s.events = publisher
 }
 
 func NewService(log *slog.Logger, queries dbstore.Queries, triggerer Triggerer, sessionCreator SessionCreator, workdirService *workdir.Service, runtimeConfig *boot.RuntimeConfig) *Service {
@@ -89,7 +100,9 @@ func NewService(log *slog.Logger, queries dbstore.Queries, triggerer Triggerer, 
 	if workdirService != nil {
 		workdirs = workdirService
 	}
+	lifecycleCtx, stop := context.WithCancel(context.Background())
 	service := &Service{
+		lifecycleCtx: lifecycleCtx, stop: stop,
 		queries:         queries,
 		cron:            c,
 		parser:          parser,
@@ -125,11 +138,17 @@ func (s *Service) Create(ctx context.Context, botID string, req CreateRequest) (
 	if s.queries == nil {
 		return Schedule{}, errors.New("schedule queries not configured")
 	}
-	if strings.TrimSpace(req.Name) == "" || strings.TrimSpace(req.Description) == "" || strings.TrimSpace(req.Pattern) == "" || strings.TrimSpace(req.Command) == "" {
-		return Schedule{}, errors.New("name, description, pattern, command are required")
+	if strings.TrimSpace(req.Name) == "" {
+		return Schedule{}, requiredField("name", "name, pattern, command are required")
+	}
+	if strings.TrimSpace(req.Pattern) == "" {
+		return Schedule{}, requiredField("pattern", "name, pattern, command are required")
+	}
+	if strings.TrimSpace(req.Command) == "" {
+		return Schedule{}, requiredField("command", "name, pattern, command are required")
 	}
 	if _, err := s.parser.Parse(req.Pattern); err != nil {
-		return Schedule{}, fmt.Errorf("invalid cron pattern: %w", err)
+		return Schedule{}, invalidFieldf("pattern", "invalid cron pattern: %v", err)
 	}
 	pgBotID, err := db.ParseUUID(botID)
 	if err != nil {
@@ -167,10 +186,12 @@ func (s *Service) Create(ctx context.Context, botID string, req CreateRequest) (
 		AcpModelID:      optionalText(exec.ACPModelID),
 		ReasoningEffort: optionalText(exec.ReasoningEffort),
 		WorkdirID:       db.ParseUUIDOrEmpty(exec.WorkdirID),
+		MaxRunSeconds:   int32(exec.MaxRunSeconds), //nolint:gosec // G115: normalized to 300..86400, or read from an int32 column.
 	})
 	if err != nil {
 		return Schedule{}, err
 	}
+	s.publishChanged(row.BotID.String(), row.ID.String())
 	if row.Enabled {
 		if err := s.scheduleJob(ctx, row); err != nil {
 			return Schedule{}, err
@@ -182,12 +203,12 @@ func (s *Service) Create(ctx context.Context, botID string, req CreateRequest) (
 func (s *Service) Get(ctx context.Context, id string) (Schedule, error) {
 	pgID, err := db.ParseUUID(id)
 	if err != nil {
-		return Schedule{}, err
+		return Schedule{}, invalidFieldf("id", "invalid schedule id: %v", err)
 	}
 	row, err := s.queries.GetScheduleByID(ctx, pgID)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
-			return Schedule{}, errors.New("schedule not found")
+			return Schedule{}, ErrScheduleNotFound
 		}
 		return Schedule{}, err
 	}
@@ -230,7 +251,7 @@ func (s *Service) Update(ctx context.Context, id string, req UpdateRequest) (Sch
 	pattern := existing.Pattern
 	if req.Pattern != nil {
 		if _, err := s.parser.Parse(*req.Pattern); err != nil {
-			return Schedule{}, fmt.Errorf("invalid cron pattern: %w", err)
+			return Schedule{}, invalidFieldf("pattern", "invalid cron pattern: %v", err)
 		}
 		pattern = *req.Pattern
 	}
@@ -284,10 +305,12 @@ func (s *Service) Update(ctx context.Context, id string, req UpdateRequest) (Sch
 		AcpModelID:      optionalText(exec.ACPModelID),
 		ReasoningEffort: optionalText(exec.ReasoningEffort),
 		WorkdirID:       db.ParseUUIDOrEmpty(exec.WorkdirID),
+		MaxRunSeconds:   int32(exec.MaxRunSeconds), //nolint:gosec // G115: normalized to 300..86400, or read from an int32 column.
 	})
 	if err != nil {
 		return Schedule{}, err
 	}
+	s.publishChanged(updated.BotID.String(), updated.ID.String())
 	if err := s.rescheduleJob(ctx, updated); err != nil {
 		return Schedule{}, fmt.Errorf("reschedule job: %w", err)
 	}
@@ -299,10 +322,15 @@ func (s *Service) Delete(ctx context.Context, id string) error {
 	if err != nil {
 		return err
 	}
+	existing, err := s.queries.GetScheduleByID(ctx, pgID)
+	if err != nil {
+		return err
+	}
 	if err := s.queries.DeleteSchedule(ctx, pgID); err != nil {
 		return err
 	}
 	s.removeJob(id)
+	s.publishChanged(existing.BotID.String(), id)
 	return nil
 }
 
@@ -322,22 +350,12 @@ func (s *Service) Trigger(ctx context.Context, scheduleID string) error {
 
 const scheduleTokenTTL = 10 * time.Minute
 
-// scheduleRunTimeout caps how long a single schedule execution may take.
-// This prevents unbounded Generate() calls from hanging forever.
-const scheduleRunTimeout = 5 * time.Minute
-
-// scheduleAgentRunTimeout is the cap for External Agent runs and existing
-// sessions whose runtime is resolved only when the fire starts.
-const scheduleAgentRunTimeout = 30 * time.Minute
-
-// runTimeoutFor picks the execution cap for one fire. Existing-session
-// schedules get the generous cap because the pinned session may run an
-// External Agent.
+// Execution budgets are independent of the runtime selected by a schedule.
 func runTimeoutFor(sched Schedule) time.Duration {
-	if runtimekind.IsExternal(sched.RuntimeType) || sched.RunTarget == RunTargetExistingSession {
-		return scheduleAgentRunTimeout
+	if sched.MaxRunSeconds > 0 {
+		return time.Duration(sched.MaxRunSeconds) * time.Second
 	}
-	return scheduleRunTimeout
+	return time.Hour
 }
 
 func (s *Service) runSchedule(ctx context.Context, sched Schedule) error {
@@ -348,6 +366,16 @@ func (s *Service) runSchedule(ctx context.Context, sched Schedule) error {
 	if err != nil {
 		return err
 	}
+	sched = toSchedule(updated)
+	deadline := time.Now().Add(runTimeoutFor(sched))
+	runCtx, cancelRun := context.WithDeadlineCause(ctx, deadline, ErrExecutionTimeout)
+	defer cancelRun()
+	if s.lifecycleCtx != nil {
+		stopShutdown := context.AfterFunc(s.lifecycleCtx, cancelRun) //nolint:contextcheck // Service shutdown must cancel fires independently of the triggering request.
+		defer stopShutdown()
+	}
+	ctx = runCtx
+	s.publishChanged(updated.BotID.String(), updated.ID.String())
 	if !updated.Enabled {
 		s.removeJob(sched.ID)
 	}
@@ -368,30 +396,32 @@ func (s *Service) runSchedule(ctx context.Context, sched Schedule) error {
 		SessionID:  db.ParseUUIDOrEmpty(sessionID),
 	})
 	if err != nil {
-		s.logger.Error("create schedule log failed", slog.String("schedule_id", sched.ID), slog.Any("error", err))
+		return fmt.Errorf("create schedule fire log: %w", err)
 	}
+	s.publishChanged(logRow.BotID.String(), logRow.ScheduleID.String())
 
 	if errors.Is(sessionErr, ErrTargetSessionGone) {
 		// The session this schedule was pinned to no longer exists. Every
 		// future fire would fail identically, so disable the schedule after
 		// recording one error log instead of failing every tick.
-		s.completeLog(ctx, logRow.ID, "error", "", sessionErr.Error(), nil, pgtype.UUID{})
+		s.completeLog(ctx, logRow.ID, "error", "", failureCode(sessionErr), nil, pgtype.UUID{})
 		s.disableGoneSchedule(ctx, sched.ID)
 		return sessionErr
 	}
 	if sessionErr != nil {
-		s.completeLog(ctx, logRow.ID, "error", "", sessionErr.Error(), nil, pgtype.UUID{})
+		s.completeLog(ctx, logRow.ID, "error", "", failureCode(sessionErr), nil, pgtype.UUID{})
 		return sessionErr
 	}
 
-	token, err := s.generateTriggerToken(ownerUserID)
+	token, err := s.generateTriggerToken(ownerUserID, time.Until(deadline)+5*time.Minute)
 	if err != nil {
-		s.completeLog(ctx, logRow.ID, "error", "", err.Error(), nil, pgtype.UUID{})
+		s.completeLog(ctx, logRow.ID, "error", "", failureCode(err), nil, pgtype.UUID{})
 		return fmt.Errorf("generate trigger token: %w", err)
 	}
 
 	result, triggerErr := s.triggerer.TriggerSchedule(ctx, sched.BotID, TriggerPayload{
 		ID:              sched.ID,
+		FireID:          logRow.ID.String(),
 		Name:            sched.Name,
 		Description:     sched.Description,
 		Pattern:         sched.Pattern,
@@ -400,18 +430,32 @@ func (s *Service) runSchedule(ctx context.Context, sched Schedule) error {
 		OwnerUserID:     ownerUserID,
 		SessionID:       sessionID,
 		ModelID:         sched.ModelID,
-		ACPModelID:      sched.ACPModelID,
+		RuntimeModelID:  sched.ACPModelID,
 		ReasoningEffort: sched.ReasoningEffort,
 	}, token)
+	triggerErr = withExecutionTimeout(ctx, triggerErr)
 	if triggerErr != nil {
-		s.completeLog(ctx, logRow.ID, "error", "", triggerErr.Error(), nil, pgtype.UUID{})
+		s.completeLog(ctx, logRow.ID, "error", "", failureCode(triggerErr), nil, pgtype.UUID{})
 		return triggerErr
 	}
 
 	modelID := db.ParseUUIDOrEmpty(result.ModelID)
 	s.completeLog(ctx, logRow.ID, result.Status, result.Text, "", result.UsageBytes, modelID)
-	s.logger.Info("schedule completed", slog.String("schedule_id", sched.ID), slog.String("status", result.Status))
+	job.Annotate(ctx, slog.String("status", result.Status))
 	return nil
+}
+
+// withExecutionTimeout names the budget as the cause when it expired. It wraps
+// the trigger's own failure instead of replacing it, so a Recorded marker the
+// trigger put on it still reaches the fire unit.
+func withExecutionTimeout(ctx context.Context, err error) error {
+	if !errors.Is(context.Cause(ctx), ErrExecutionTimeout) || errors.Is(err, ErrExecutionTimeout) {
+		return err
+	}
+	if err == nil {
+		return ErrExecutionTimeout
+	}
+	return fmt.Errorf("%w: %w", ErrExecutionTimeout, err)
 }
 
 // resolveRunSession decides which session this fire runs in. new_session
@@ -474,30 +518,64 @@ func (s *Service) resolveRunSession(ctx context.Context, sched Schedule, ownerUs
 // disableGoneSchedule turns off a schedule whose target session vanished and
 // unhooks its cron job.
 func (s *Service) disableGoneSchedule(ctx context.Context, scheduleID string) {
-	if _, err := s.queries.DisableSchedule(ctx, toUUID(scheduleID)); err != nil {
-		s.logger.Error("disable schedule with deleted target session failed",
+	updated, err := s.queries.DisableSchedule(ctx, toUUID(scheduleID))
+	if err != nil {
+		s.logger.ErrorContext(ctx, "disable schedule with deleted target session failed",
 			slog.String("schedule_id", scheduleID), slog.Any("error", err))
 		return
 	}
 	s.removeJob(scheduleID)
-	s.logger.Warn("schedule disabled: target session was deleted", slog.String("schedule_id", scheduleID))
+	s.publishChanged(updated.BotID.String(), scheduleID)
+	s.logger.WarnContext(ctx, "schedule disabled: target session was deleted", slog.String("schedule_id", scheduleID))
 }
 
-func (s *Service) completeLog(ctx context.Context, logID pgtype.UUID, status, resultText, errorMessage string, usageBytes []byte, modelID pgtype.UUID) {
+func (s *Service) publishChanged(botID, scheduleID string) {
+	messageevent.NotifyScheduleChanged(s.events, botID, scheduleID)
+}
+
+// failureCode is the catalog code a run log stores for a failed fire. The
+// error itself belongs to the fire's result record, not to the log row.
+func failureCode(err error) apperror.Code {
+	switch {
+	case errors.Is(err, ErrExecutionTimeout):
+		return apperror.CodeScheduleExecutionTimeout
+	case errors.Is(err, ErrTargetSessionGone):
+		return apperror.CodeSessionNotFound
+	case errors.Is(err, context.Canceled):
+		return apperror.CodeCanceled
+	}
+	if code := apperror.CodeOf(err); code != "" {
+		return code
+	}
+	return apperror.CodeInternal
+}
+
+// completeLog closes a run log. A failed fire passes the code of its cause;
+// a run whose budget expired is an execution timeout whatever else it reports.
+// A closed log announces a schedule change so run lists drop the running state.
+func (s *Service) completeLog(ctx context.Context, logID pgtype.UUID, status, resultText string, errorCode apperror.Code, usageBytes []byte, modelID pgtype.UUID) {
+	if errors.Is(context.Cause(ctx), ErrExecutionTimeout) {
+		status = "error"
+		errorCode = apperror.CodeScheduleExecutionTimeout
+	}
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+	defer cancel()
 	if !logID.Valid {
 		return
 	}
-	_, err := s.queries.CompleteScheduleLog(ctx, sqlc.CompleteScheduleLogParams{
-		ID:           logID,
-		Status:       status,
-		ResultText:   resultText,
-		ErrorMessage: errorMessage,
-		Usage:        usageBytes,
-		ModelID:      modelID,
+	row, err := s.queries.CompleteScheduleLog(ctx, sqlc.CompleteScheduleLogParams{
+		ID:         logID,
+		Status:     status,
+		ResultText: resultText,
+		ErrorCode:  string(errorCode),
+		Usage:      usageBytes,
+		ModelID:    modelID,
 	})
 	if err != nil {
-		s.logger.Error("complete schedule log failed", slog.Any("error", err))
+		s.logger.ErrorContext(ctx, "complete schedule log failed", slog.Any("error", err))
+		return
 	}
+	s.publishChanged(row.BotID.String(), row.ScheduleID.String())
 }
 
 func (s *Service) ListLogs(ctx context.Context, botID string, limit, offset int) ([]Log, int64, error) {
@@ -581,6 +659,7 @@ func toScheduleLog(row sqlc.ListScheduleLogsByBotRow) Log {
 		Status:       row.Status,
 		ResultText:   row.ResultText,
 		ErrorMessage: row.ErrorMessage,
+		ErrorCode:    row.ErrorCode,
 	}
 	if row.StartedAt.Valid {
 		l.StartedAt = row.StartedAt.Time
@@ -607,6 +686,7 @@ func toScheduleLogFromSchedule(row sqlc.ListScheduleLogsByScheduleRow) Log {
 		Status:       row.Status,
 		ResultText:   row.ResultText,
 		ErrorMessage: row.ErrorMessage,
+		ErrorCode:    row.ErrorCode,
 	}
 	if row.StartedAt.Valid {
 		l.StartedAt = row.StartedAt.Time
@@ -642,11 +722,15 @@ func (s *Service) resolveBotOwner(ctx context.Context, botID string) (string, er
 }
 
 // generateTriggerToken creates a short-lived JWT for schedule trigger callbacks.
-func (s *Service) generateTriggerToken(userID string) (string, error) {
+func (s *Service) generateTriggerToken(userID string, durations ...time.Duration) (string, error) {
 	if strings.TrimSpace(s.jwtSecret) == "" {
 		return "", errors.New("jwt secret not configured")
 	}
-	signed, _, err := auth.GenerateToken(userID, s.jwtSecret, scheduleTokenTTL)
+	ttl := scheduleTokenTTL
+	if len(durations) > 0 && durations[0] > ttl {
+		ttl = durations[0]
+	}
+	signed, _, err := auth.GenerateToken(userID, s.jwtSecret, ttl)
 	if err != nil {
 		return "", err
 	}
@@ -658,13 +742,16 @@ func (s *Service) scheduleJob(ctx context.Context, schedule sqlc.Schedule) error
 	if id == "" {
 		return errors.New("schedule id missing")
 	}
-	job := func() {
-		item := toSchedule(schedule)
-		runCtx, runCancel := context.WithTimeout(context.WithoutCancel(ctx), runTimeoutFor(item))
-		defer runCancel()
-		if err := s.runSchedule(runCtx, item); err != nil {
-			s.logger.Error("scheduled job failed", slog.String("schedule_id", schedule.ID.String()), slog.Any("error", err))
-		}
+	fire := func() {
+		// Every context reachable here descends from the one that registered
+		// the schedule, on the Create path an HTTP request that finished long
+		// ago. A firing belongs to no request, so the unit gets its own request
+		// id and its own unlinked trace.
+		_ = job.Run(ctx, s.logger, "schedule.fire", job.Options{OwnRequestID: true}, func(runCtx context.Context) error {
+			runCtx, runCancel := context.WithCancel(runCtx)
+			defer runCancel()
+			return fireResult(runCtx, s.runSchedule(runCtx, toSchedule(schedule)))
+		}, slog.String("schedule_id", id), slog.String("bot_id", schedule.BotID.String()))
 	}
 
 	// Resolve bot timezone so cron expressions are interpreted in the bot's
@@ -674,11 +761,22 @@ func (s *Service) scheduleJob(ctx context.Context, schedule sqlc.Schedule) error
 	if err != nil {
 		return err
 	}
-	entryID := s.cron.Schedule(newLocationSchedule(sched, loc), cron.FuncJob(job))
+	entryID := s.cron.Schedule(newLocationSchedule(sched, loc), cron.FuncJob(fire))
 	s.mu.Lock()
 	s.jobs[id] = entryID
 	s.mu.Unlock()
 	return nil
+}
+
+// fireResult is the outcome a firing's unit reports. A fire that found the
+// session busy is dropped by design, because the next one is due before a
+// retry would be useful, so it is a skip and not a failure.
+func fireResult(ctx context.Context, err error) error {
+	if errors.Is(err, ErrSessionBusy) {
+		job.Annotate(ctx, slog.String("skipped", "busy"))
+		return nil
+	}
+	return err
 }
 
 func (s *Service) rescheduleJob(ctx context.Context, schedule sqlc.Schedule) error {
@@ -730,6 +828,7 @@ func toSchedule(row sqlc.Schedule) Schedule {
 
 func executionFromRow(row sqlc.Schedule) ExecutionConfig {
 	exec := ExecutionConfig{
+		MaxRunSeconds:   int(row.MaxRunSeconds),
 		RunTarget:       row.RunTarget,
 		RuntimeType:     row.RuntimeType.String,
 		ACPAgentID:      row.AcpAgentID.String,
@@ -766,9 +865,8 @@ func toUUID(id string) pgtype.UUID {
 	return pgID
 }
 
-// resolveBotLocation returns the bot's configured timezone location, falling
-// back to the system default when the bot has no timezone set or the value is
-// invalid.
+// resolveBotLocation uses the same timezone priority as agent turns:
+// bot timezone, bot owner timezone, then the system default.
 func (s *Service) resolveBotLocation(ctx context.Context, botID pgtype.UUID) *time.Location {
 	if s.queries == nil || !botID.Valid {
 		return s.defaultLocation
@@ -777,23 +875,40 @@ func (s *Service) resolveBotLocation(ctx context.Context, botID pgtype.UUID) *ti
 	if err != nil {
 		return s.defaultLocation
 	}
-	if !row.Timezone.Valid {
-		return s.defaultLocation
+	if row.Timezone.Valid {
+		tz := strings.TrimSpace(row.Timezone.String)
+		if tz != "" {
+			loc, _, loadErr := memtimezone.Resolve(tz)
+			if loadErr == nil {
+				return loc
+			}
+			s.logger.WarnContext(ctx, "invalid bot timezone for schedule",
+				slog.String("bot_id", botID.String()),
+				slog.String("timezone", tz),
+				slog.Any("error", loadErr),
+			)
+		}
 	}
-	tz := strings.TrimSpace(row.Timezone.String)
-	if tz == "" {
-		return s.defaultLocation
+
+	if row.OwnerUserID.Valid {
+		owner, ownerErr := s.queries.GetUserByID(ctx, row.OwnerUserID)
+		if ownerErr == nil {
+			tz := strings.TrimSpace(owner.Timezone)
+			if tz != "" {
+				loc, _, loadErr := memtimezone.Resolve(tz)
+				if loadErr == nil {
+					return loc
+				}
+				s.logger.WarnContext(ctx, "invalid bot owner timezone for schedule",
+					slog.String("bot_id", botID.String()),
+					slog.String("user_id", row.OwnerUserID.String()),
+					slog.String("timezone", tz),
+					slog.Any("error", loadErr),
+				)
+			}
+		}
 	}
-	loc, err := time.LoadLocation(tz)
-	if err != nil {
-		s.logger.Warn("invalid bot timezone for schedule, using default",
-			slog.String("bot_id", botID.String()),
-			slog.String("timezone", tz),
-			slog.Any("error", err),
-		)
-		return s.defaultLocation
-	}
-	return loc
+	return s.defaultLocation
 }
 
 // locationSchedule wraps a cron.Schedule to evaluate Next() in a specific
@@ -812,4 +927,21 @@ func newLocationSchedule(inner cron.Schedule, loc *time.Location) cron.Schedule 
 
 func (s *locationSchedule) Next(t time.Time) time.Time {
 	return s.inner.Next(t.In(s.loc))
+}
+
+// Shutdown cancels owned fires before waiting for cron workers to unwind.
+func (s *Service) Shutdown(ctx context.Context) error {
+	if s.stop != nil {
+		s.stop()
+	}
+	if s.cron == nil {
+		return nil
+	}
+	stopped := s.cron.Stop()
+	select {
+	case <-stopped.Done():
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }

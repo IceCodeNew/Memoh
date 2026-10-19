@@ -21,7 +21,7 @@
     </a>
   </div>
   <h3>
-    <a href="https://memoh.ai/waitlist">Memoh Cloud</a> · <a href="#server-にデプロイ">Server にデプロイ</a> · <a href="https://docs.memoh.ai">Docs</a> · <a href="https://memoh.ai">Website</a> · <a href="https://x.com/memoh_ai">X</a>
+    <a href="https://app.memoh.net">Login</a> · <a href="#self-hosted">Self-hosted</a> · <a href="https://docs.memoh.ai">Docs</a> · <a href="https://memoh.ai">Website</a> · <a href="https://x.com/memoh_ai">X</a>
   </h3>
   <img src="./assets/hero.png" alt="Memoh" width="1000">
 </div>
@@ -38,10 +38,9 @@ Telegram、Discord、Lark、WeChat、Web UI などから Agent と会話でき�
 
 ### Memoh Cloud
 
-> [!TIP]
-> Memoh Cloud は近日公開予定です — セットアップ不要、Agent が cloud 上で 24 時間稼働します。[memoh.ai/waitlist](https://memoh.ai/waitlist) から waitlist に参加できます。
+[app.memoh.net](https://app.memoh.net) で、今すぐアカウントを登録・ログインできます。
 
-### Server にデプロイ
+### Self-hosted
 
 自分のインフラにフルスタックをセルフホストできます。
 
@@ -65,7 +64,9 @@ docker compose up -d
 
 Compose は Server と Channel を別々のサービスとして起動します。内部 RPC secret は安全に保管し、stack を再作成するときも同じ値を使用してください。
 
-Docker を使わない場合（既存のベアメタル環境からのアップグレードを含む）は、`config.toml` の `internal_rpc.shared_secret` を空のままにしてください。Server が Channel ランタイムを内蔵し、外部チャネル・Email・webhook エンドポイントを含めて単一プロセスの all-in-one として動作し続けます。`memoh-channel` プロセスは不要です。secret を設定すると 2 プロセスの分離デプロイに切り替わります。
+分離デプロイでは、Channel は認証付きの内部 Storage RPC を通じてメディアをストリーミングで読み書きします。Workspace とメディアストレージへのアクセスが必要なのは Server だけです。アップグレード時は Server、Channel の順に更新し、Storage サービスが利用できる状態にしてください。
+
+Docker を使わない場合（既存のベアメタル環境からのアップグレードを含む）は、`config.toml` の `internal_rpc.shared_secret` を空のままにしてください。Server が Channel ランタイムを内蔵し、外部チャネル・webhook エンドポイントを含めて単一プロセスの all-in-one として動作し続けます。`memoh-channel` プロセスは不要です。secret を設定すると 2 プロセスの分離デプロイに切り替わります。
 
 setup 済みの既存 checkout では、引き続き `git pull` を使用できます。post-merge hook
 が新しい submodule を初期化し、setup がそれ以降の pull で再帰更新を有効にします。
@@ -90,19 +91,6 @@ GitHub が自動生成する「Source code」
 - **すべての Agent に専用コンピューター**: 専用のファイルシステム、ネットワーク、Desktop、Browser を備えた隔離された Workspace。
 - **Multi-user, multi-bot**: 自分用に 1 つ、家族やチームメンバーごとに 1 つ、または 1 台のマシンで複数の Bot をまとめて運用できます。
 - **軽量**: 自分のインフラにセルフホストすることも、Memoh Cloud に接続することもできます。
-
-## Features
-
-- **Multi-bot & multi-user**: 複数の Bot が、個別チャット、グループチャット、Bot 同士の会話に対応します。Cross-platform identity binding も利用できます。
-- **隔離された Workspace**: 各 Bot は専用のファイルシステム、ネットワーク、Tool、Desktop を持ちます。
-- **Built-in memory**: セッションやプラットフォームをまたいだ長期記憶を標準搭載。[Mem0](https://mem0.ai) や OpenViking も利用できます。
-- **10+ channels**: Telegram、Discord、Lark、WeChat、QQ、Email などに対応しています。
-- **MCP**: 外部 Tool server に接続できます。各 Bot が自分の接続を管理します。
-- **Agent Hosting**: ACP 経由で外部 Agent を Memoh Workspace にホストできます。現在は Codex と Claude Code に対応し、Bot ごとに設定できます。
-- **Browser Use**: Workspace 内の Browser を操作できます。
-- **Computer Use**: GUI が必要な作業のために Workspace の Desktop を操作できます。
-- **Skills & Supermarket**: モジュール化された Skill、Supermarket からの curated template インストール、sub-agent への委譲に対応します。
-- **Automation**: スケジュールタスクで定期的なワークフローを実行できます。
 
 ## Sub-projects
 

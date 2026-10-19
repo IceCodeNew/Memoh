@@ -11,7 +11,6 @@ import (
 	contextfrag "github.com/felinics/memoh/internal/agent/context/fragment"
 	"github.com/felinics/memoh/internal/agent/sessionmode"
 	tools "github.com/felinics/memoh/internal/agent/tool"
-	"github.com/felinics/memoh/internal/apperror"
 )
 
 func TestSpawnRunConfigClassifiesRawQueryAsCurrentUser(t *testing.T) {
@@ -42,20 +41,15 @@ func TestSpawnRunConfigClassifiesRawQueryAsCurrentUser(t *testing.T) {
 	}
 }
 
-func TestSpawnRunConfigCarriesContextBudgetAndToolExchangePolicy(t *testing.T) {
+func TestSpawnRunConfigCarriesContextBudget(t *testing.T) {
 	t.Parallel()
 
-	policy := &contextfrag.ToolExchangePolicy{MinMessages: 10}
 	rc := runConfigFromSpawnRunConfig(tools.SpawnRunConfig{
-		ContextBudgetMaxTokens:    128000,
-		ContextToolExchangePolicy: policy,
+		ContextBudgetMaxTokens: 128000,
 	})
 
 	if rc.ContextBudgetMaxTokens != 128000 {
 		t.Fatalf("ContextBudgetMaxTokens = %d, want 128000", rc.ContextBudgetMaxTokens)
-	}
-	if rc.ContextToolExchangePolicy != policy {
-		t.Fatalf("ContextToolExchangePolicy = %p, want same pointer %p", rc.ContextToolExchangePolicy, policy)
 	}
 }
 
@@ -88,12 +82,8 @@ func TestSpawnAdapterGenerateWithWatchdogFailsOnStreamError(t *testing.T) {
 	if got := result.ContextLifecycle.BudgetPlan; got == nil || !reflect.DeepEqual(*got, plan) {
 		t.Fatalf("failure lifecycle budget plan = %#v, want %#v", got, plan)
 	}
-	definition, ok := apperror.Lookup(apperror.CodeContextBudgetUnsatisfied)
-	if !ok {
-		t.Fatal("budget error missing from public catalog")
-	}
-	if err == nil || err.Error() != definition.Detail {
-		t.Fatalf("GenerateWithWatchdog error = %v, want public context-budget failure", err)
+	if !errors.Is(err, contextfrag.ErrBudgetUnsatisfied) {
+		t.Fatalf("GenerateWithWatchdog error = %v, want the context-budget failure", err)
 	}
 	if generateCalls, streamCalls := provider.calls(); generateCalls != 0 || streamCalls != 0 {
 		t.Fatalf("provider calls = generate:%d stream:%d, want zero after preflight failure", generateCalls, streamCalls)

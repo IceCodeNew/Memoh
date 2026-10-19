@@ -4,12 +4,10 @@ import {
   type RouteLocationNormalized,
   type RouteRecordRaw,
 } from 'vue-router'
-import { mapSettingsSpecToRoute, SETTINGS_DEFAULT_PATH, SETTINGS_ROUTE_SPECS } from '../shared/settings-routes'
-import { ensureOnboarding } from '@memohai/web/router-guards/onboarding'
+import { createAppRoutes } from '@memohai/web/routes'
+import { ensureOnboarding, hasOnboardingInProgress } from '@memohai/web/router-guards/onboarding'
 import { useUserStore } from '@memohai/web/store/user'
 import { installBackHistory } from '@memohai/web/composables/useBackOr'
-
-const realSettingsRoutes: RouteRecordRaw[] = SETTINGS_ROUTE_SPECS.map(mapSettingsSpecToRoute)
 
 const routes: RouteRecordRaw[] = [
   {
@@ -17,69 +15,7 @@ const routes: RouteRecordRaw[] = [
     name: 'ConnectServer',
     component: () => import('../connect/ConnectServer.vue'),
   },
-  {
-    path: '/onboarding',
-    name: 'onboarding',
-    component: () => import('@memohai/web/pages/onboarding/index.vue'),
-  },
-  {
-    // Chat area: UI is mounted persistently in chat/App.vue (MainSection), not
-    // here. These routes exist only for URL matching / active-bot sync; their
-    // components render nothing. Mirrors apps/web router.ts. This lets chat
-    // survive a trip into settings (fixed overlay) without unmount/relayout.
-    path: '/',
-    component: { render: () => null },
-    children: [
-      {
-        name: 'home',
-        path: '',
-        component: { render: () => null },
-      },
-      {
-        name: 'bot',
-        path: '/bot/:botName?/:sessionId?',
-        component: { render: () => null },
-      },
-      {
-        // Backwards-compatible redirect for legacy UUID-based chat links.
-        path: '/chat/:botName?/:sessionId?',
-        redirect: (to) => {
-          const botName = (to.params.botName as string) ?? ''
-          return botName
-            ? { name: 'bot', params: { botName, sessionId: to.params.sessionId } }
-            : { name: 'home' }
-        },
-      },
-    ],
-  },
-  {
-    name: 'Login',
-    path: '/login',
-    component: () => import('@memohai/web/pages/login/index.vue'),
-  },
-  {
-    name: 'oauth-mcp-callback',
-    path: '/oauth/mcp/callback',
-    component: () => import('@memohai/web/pages/oauth/mcp-callback.vue'),
-  },
-  // Dev-only component wall / design-token reference. Registered only in dev
-  // builds. Open with Cmd/Ctrl+Shift+D (see chat/App.vue) or, from devtools,
-  // `window.__memohRouter.push('/dev/components')`.
-  ...(import.meta.env.DEV
-    ? [
-        {
-          name: 'dev-components',
-          path: '/dev/components',
-          component: () => import('@memohai/web/pages/dev/components/index.vue'),
-        } satisfies RouteRecordRaw,
-      ]
-    : []),
-  {
-    path: '/settings',
-    component: () => import('@memohai/web/pages/settings-section/index.vue'),
-    redirect: SETTINGS_DEFAULT_PATH,
-    children: realSettingsRoutes,
-  },
+  ...createAppRoutes('desktop'),
 ]
 
 const router = createRouter({
@@ -131,6 +67,7 @@ router.beforeEach(async (to: RouteLocationNormalized) => {
 
   // Onboarding: redirect completed users away, let incomplete users through
   if (to.path === '/onboarding') {
+    if (hasOnboardingInProgress()) return true
     const completed = await ensureOnboarding()
     return completed ? { path: '/' } : true
   }

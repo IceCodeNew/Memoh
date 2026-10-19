@@ -13,12 +13,15 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
+	"unicode/utf8"
 
 	"gopkg.in/yaml.v3"
 
 	"github.com/felinics/memoh/internal/config"
 	memslug "github.com/felinics/memoh/internal/memory/slug"
+	"github.com/felinics/memoh/internal/textutil"
 	"github.com/felinics/memoh/internal/workspace/bridge"
 	pb "github.com/felinics/memoh/internal/workspace/bridgepb"
 )
@@ -41,6 +44,11 @@ type scanEntry struct {
 type Service struct {
 	provider bridge.Provider
 	logger   *slog.Logger
+
+	// overview tracks, per bot, whether MEMORY.md has caught up with the
+	// conversation writes it deferred (see RefreshOverview).
+	overviewMu sync.Mutex
+	overview   map[string]overviewState
 }
 
 type MemoryItem struct {
@@ -167,13 +175,13 @@ func (s *Service) buildScanIndex(ctx context.Context, botID string) (map[string]
 		entryPath := memoryEntryPath(entry.GetPath())
 		content, readErr := s.readFile(ctx, botID, entryPath)
 		if readErr != nil {
-			s.logger.Warn("buildScanIndex: failed to read memory file",
+			s.logger.WarnContext(ctx, "buildScanIndex: failed to read memory file",
 				slog.String("bot_id", botID), slog.String("path", entryPath), slog.Any("error", readErr))
 			continue
 		}
 		parsed, parseErr := parseMemoryFile(content)
 		if parseErr != nil {
-			s.logger.Warn("buildScanIndex: failed to parse memory file",
+			s.logger.WarnContext(ctx, "buildScanIndex: failed to parse memory file",
 				slog.String("bot_id", botID), slog.String("path", entryPath), slog.Any("error", parseErr))
 			continue
 		}
@@ -232,9 +240,20 @@ func (s *Service) PersistMemories(ctx context.Context, botID string, items []Mem
 			return err
 		}
 	}
-	return s.writeFile(ctx, botID, memoryOverviewPath(), formatMemoryOverviewMDWithPaths(overviewItems, overviewPaths))
+	if s.deferOverview(ctx, botID) {
+		return nil
+	}
+	generation := s.overviewGeneration(botID)
+	if err := s.writeFile(ctx, botID, memoryOverviewPath(), formatMemoryOverviewMDWithPaths(overviewItems, overviewPaths)); err != nil {
+		return err
+	}
+	s.markOverviewClean(botID, generation)
+	return nil
 }
 
+// RebuildFiles rewrites the memory projection from items and finishes with
+// SyncOverview, so callers need not sync the overview again. A conversation
+// write defers the MEMORY.md rewrite as SyncOverview does.
 func (s *Service) RebuildFiles(ctx context.Context, botID string, items []MemoryItem, _ map[string]any) error {
 	if s.provider == nil {
 		return ErrNotConfigured
@@ -273,7 +292,7 @@ func (s *Service) removeProjectionFiles(ctx context.Context, botID string) error
 		entryPath := memoryEntryPath(entry.GetPath())
 		content, readErr := s.readFile(ctx, botID, entryPath)
 		if readErr != nil {
-			s.logger.Warn("rebuild: failed to read memory file; preserving it",
+			s.logger.WarnContext(ctx, "rebuild: failed to read memory file; preserving it",
 				slog.String("bot_id", botID), slog.String("path", entryPath), slog.Any("error", readErr))
 			continue
 		}
@@ -510,15 +529,16 @@ func (s *Service) CountMemoryFiles(ctx context.Context, botID string) (int, erro
 	return count, nil
 }
 
+// SyncOverview rewrites MEMORY.md from the memory files, unless ctx carries a
+// conversation write, whose rewrite waits for RefreshOverview.
 func (s *Service) SyncOverview(ctx context.Context, botID string) error {
 	if s.provider == nil {
 		return ErrNotConfigured
 	}
-	items, err := s.ReadAllMemoryFiles(ctx, botID)
-	if err != nil {
-		return err
+	if s.deferOverview(ctx, botID) {
+		return nil
 	}
-	return s.writeFile(ctx, botID, memoryOverviewPath(), formatMemoryOverviewMD(items))
+	return s.writeOverview(ctx, botID)
 }
 
 func (s *Service) readMemoryDay(ctx context.Context, botID, filePath string) ([]MemoryItem, error) {
@@ -1003,8 +1023,8 @@ func formatMemoryOverviewMDWithPaths(items []MemoryItem, relPaths map[string]str
 			continue
 		}
 		body = strings.Join(strings.Fields(body), " ")
-		if len(body) > 400 {
-			body = strings.TrimSpace(body[:400]) + "..."
+		if utf8.RuneCountInString(body) > 400 {
+			body = strings.TrimSpace(textutil.TruncateRunes(body, 400)) + "..."
 		}
 		b.WriteString(strconv.Itoa(i + 1))
 		title := firstNonEmpty(plan.Title, created, id)
@@ -1254,8 +1274,8 @@ func conceptTitle(item MemoryItem) string {
 		body = strings.TrimSpace(body[:idx])
 	}
 	body = strings.Join(strings.Fields(body), " ")
-	if len(body) > 80 {
-		body = strings.TrimSpace(body[:80]) + "..."
+	if utf8.RuneCountInString(body) > 80 {
+		body = strings.TrimSpace(textutil.TruncateRunes(body, 80)) + "..."
 	}
 	return body
 }

@@ -49,23 +49,11 @@ func (s *postgresStore) Get(ctx context.Context, key InstallationKey) (Installat
 		return Installation{}, err
 	}
 	row, err := s.q.GetBotDependencyInstallation(ctx, dbsqlc.GetBotDependencyInstallationParams{
-		BotID:             botID,
-		WorkspaceTargetID: key.WorkspaceTargetID,
-		DependencyID:      key.DependencyID,
+		BotID: botID,
+
+		DependencyID: key.DependencyID,
 	})
 	return installationResult(row, err)
-}
-
-func (s *postgresStore) ListForTarget(ctx context.Context, botID, workspaceTargetID string) ([]Installation, error) {
-	botUUID, err := parseBotID(botID)
-	if err != nil {
-		return nil, err
-	}
-	rows, err := s.q.ListBotDependencyInstallationsForTarget(ctx, dbsqlc.ListBotDependencyInstallationsForTargetParams{
-		BotID:             botUUID,
-		WorkspaceTargetID: workspaceTargetID,
-	})
-	return installationsResult(rows, err)
 }
 
 func (s *postgresStore) ListForBot(ctx context.Context, botID string) ([]Installation, error) {
@@ -93,14 +81,14 @@ func (s *postgresStore) Upsert(ctx context.Context, in UpsertInstallation) (Inst
 		return Installation{}, err
 	}
 	row, err := s.q.UpsertBotDependencyInstallationIntent(ctx, dbsqlc.UpsertBotDependencyInstallationIntentParams{
-		BotID:             botID,
-		WorkspaceTargetID: in.WorkspaceTargetID,
-		DependencyID:      in.DependencyID,
-		Source:            in.Source,
-		Status:            string(in.Status),
-		InstalledVersion:  in.InstalledVersion,
-		ManifestDigest:    in.ManifestDigest,
-		SourceUrl:         in.SourceURL, RegistryID: in.RegistryID, DefinitionRevision: in.DefinitionRevision,
+		BotID: botID,
+
+		DependencyID:     in.DependencyID,
+		Source:           in.Source,
+		Status:           string(in.Status),
+		InstalledVersion: in.InstalledVersion,
+		ManifestDigest:   in.ManifestDigest,
+		SourceUrl:        in.SourceURL, RegistryID: in.RegistryID, DefinitionRevision: in.DefinitionRevision,
 	})
 	return operationResult(row, err)
 }
@@ -116,7 +104,7 @@ func (s *postgresStore) ClaimOperation(ctx context.Context, in UpsertInstallatio
 		return Installation{}, err
 	}
 	row, err := s.q.ClaimBotDependencyOperation(ctx, dbsqlc.ClaimBotDependencyOperationParams{
-		BotID: botID, WorkspaceTargetID: in.WorkspaceTargetID, DependencyID: in.DependencyID,
+		BotID: botID, DependencyID: in.DependencyID,
 		Source: in.Source, Status: string(in.Status), InstalledVersion: in.InstalledVersion,
 		ManifestDigest: in.ManifestDigest, SourceUrl: in.SourceURL, RegistryID: in.RegistryID,
 		DefinitionRevision: in.DefinitionRevision, OperationID: operationID,
@@ -136,14 +124,14 @@ func (s *postgresStore) FinishOperation(ctx context.Context, key InstallationKey
 	}
 	if terminal == nil {
 		row, err := s.q.DeleteBotDependencyOperation(ctx, dbsqlc.DeleteBotDependencyOperationParams{
-			BotID: botID, WorkspaceTargetID: key.WorkspaceTargetID, DependencyID: key.DependencyID, OperationID: operationID,
+			BotID: botID, DependencyID: key.DependencyID, OperationID: operationID,
 		})
 		return operationResult(row, err)
 	}
 	row, err := s.q.FinishBotDependencyOperation(ctx, dbsqlc.FinishBotDependencyOperationParams{
-		BotID: botID, WorkspaceTargetID: key.WorkspaceTargetID, DependencyID: key.DependencyID, OperationID: operationID,
+		BotID: botID, DependencyID: key.DependencyID, OperationID: operationID,
 		Source: terminal.Source, Status: string(terminal.Status), InstalledVersion: terminal.InstalledVersion,
-		LatestVersion: terminal.LatestVersion, LastCheckedAt: nullableTimestamptz(terminal.LastCheckedAt), LastError: terminal.LastError,
+		LatestVersion: terminal.LatestVersion, LastCheckedAt: nullableTimestamptz(terminal.LastCheckedAt), LastErrorCode: terminal.LastErrorCode,
 		ManifestDigest: terminal.ManifestDigest, SourceUrl: terminal.SourceURL, RegistryID: terminal.RegistryID,
 		DefinitionRevision: terminal.DefinitionRevision,
 	})
@@ -157,17 +145,17 @@ func operationResult(row dbsqlc.BotDependencyInstallation, err error) (Installat
 	return installationResult(row, err)
 }
 
-func (s *postgresStore) SetStatus(ctx context.Context, key InstallationKey, status Status, lastError string) (Installation, error) {
+func (s *postgresStore) SetStatus(ctx context.Context, key InstallationKey, status Status, lastErrorCode string) (Installation, error) {
 	botID, err := parseBotID(key.BotID)
 	if err != nil {
 		return Installation{}, err
 	}
 	row, err := s.q.UpdateBotDependencyInstallationStatus(ctx, dbsqlc.UpdateBotDependencyInstallationStatusParams{
-		Status:            string(status),
-		LastError:         lastError,
-		BotID:             botID,
-		WorkspaceTargetID: key.WorkspaceTargetID,
-		DependencyID:      key.DependencyID,
+		Status:        string(status),
+		LastErrorCode: lastErrorCode,
+		BotID:         botID,
+
+		DependencyID: key.DependencyID,
 	})
 	return operationResult(row, err)
 }
@@ -187,9 +175,9 @@ func (s *postgresStore) Delete(ctx context.Context, key InstallationKey) error {
 		return err
 	}
 	affected, err := s.q.DeleteBotDependencyInstallation(ctx, dbsqlc.DeleteBotDependencyInstallationParams{
-		BotID:             botID,
-		WorkspaceTargetID: key.WorkspaceTargetID,
-		DependencyID:      key.DependencyID,
+		BotID: botID,
+
+		DependencyID: key.DependencyID,
 	})
 	if err != nil {
 		return fmt.Errorf("workspace dependency store: %w", err)
@@ -210,11 +198,12 @@ func observedParams(botID pgtype.UUID, key InstallationKey, upd ObservedUpdate) 
 		LatestVersion:    nullableText(upd.LatestVersion),
 		LastCheckedAt:    nullableTimestamptz(upd.LastCheckedAt),
 		LastError:        nullableText(upd.LastError),
+		LastErrorCode:    nullableText(upd.LastErrorCode),
 		ManifestDigest:   nullableText(upd.ManifestDigest),
 		SourceUrl:        nullableText(upd.SourceURL), RegistryID: nullableText(upd.RegistryID), DefinitionRevision: nullableText(upd.DefinitionRevision),
-		BotID:             botID,
-		WorkspaceTargetID: key.WorkspaceTargetID,
-		DependencyID:      key.DependencyID,
+		BotID: botID,
+
+		DependencyID: key.DependencyID,
 	}
 }
 
@@ -258,18 +247,19 @@ func installationsResult(rows []dbsqlc.BotDependencyInstallation, err error) ([]
 
 func installationFromRow(row dbsqlc.BotDependencyInstallation) Installation {
 	inst := Installation{
-		ID:                uuidString(row.ID),
-		OperationID:       row.OperationID,
-		BotID:             uuidString(row.BotID),
-		WorkspaceTargetID: row.WorkspaceTargetID,
-		DependencyID:      row.DependencyID,
-		Source:            row.Source,
-		Status:            Status(row.Status),
-		InstalledVersion:  row.InstalledVersion,
-		LatestVersion:     row.LatestVersion,
-		LastError:         row.LastError,
-		ManifestDigest:    row.ManifestDigest,
-		SourceURL:         row.SourceUrl, RegistryID: row.RegistryID, DefinitionRevision: row.DefinitionRevision,
+		ID:          uuidString(row.ID),
+		OperationID: row.OperationID,
+		BotID:       uuidString(row.BotID),
+
+		DependencyID:     row.DependencyID,
+		Source:           row.Source,
+		Status:           Status(row.Status),
+		InstalledVersion: row.InstalledVersion,
+		LatestVersion:    row.LatestVersion,
+		LastError:        row.LastError,
+		LastErrorCode:    row.LastErrorCode,
+		ManifestDigest:   row.ManifestDigest,
+		SourceURL:        row.SourceUrl, RegistryID: row.RegistryID, DefinitionRevision: row.DefinitionRevision,
 		CreatedAt: db.TimeFromPg(row.CreatedAt),
 		UpdatedAt: db.TimeFromPg(row.UpdatedAt),
 	}

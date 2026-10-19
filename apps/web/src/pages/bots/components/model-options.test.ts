@@ -28,7 +28,14 @@ vi.mock('@felinic/ui', () => ({
   menuSearchHeaderClass: 'menu-search-header',
   menuSearchInputClass: 'menu-search-input',
   menuSeparatorClass: 'menu-separator',
-  virtualListboxClass: 'virtual-listbox',
+  MenuScrollArea: defineComponent({
+    props: ['viewportAttrs', 'layout'],
+    setup(props, { slots, expose }) {
+      const viewport = ref<HTMLElement | null>(null)
+      expose({ viewportElement: viewport })
+      return () => h('div', { ...props.viewportAttrs, ref: viewport }, slots.default?.())
+    },
+  }),
 }))
 
 vi.mock('lucide-vue-next', () => ({
@@ -61,6 +68,7 @@ vi.mock('@/components/model-description-tooltip/index.vue', () => ({
     setup(props, { emit, slots }) {
       return () => h('div', {
         'data-model-tooltip': '',
+        'data-description': props.description ?? '',
         'data-open': String(props.open),
         onPointerenter: () => emit('update:open', true),
       }, slots.default?.())
@@ -107,6 +115,31 @@ describe('ModelOptions', () => {
     return root
   }
 
+  it('hides the reasoning footer for supported but uncontrollable models', async () => {
+    const el = await mountPicker({
+      models: [{ id: 'model-1', type: 'chat', reasoning: { supported: true } }],
+    })
+    expect(el.querySelector('[aria-label="chat.reasoningEffort"]')).toBeNull()
+    expect(el.textContent).not.toContain('chat.reasoningOff')
+  })
+
+  it('offers the catalog maximum and shows the default for an unset preference', async () => {
+    const updateReasoning = vi.fn()
+    const el = await mountPicker({
+      reasoningEffort: '',
+      models: [{ id: 'model-1', type: 'chat', reasoning: {
+        supported: true, can_disable: true, efforts: ['low', 'medium', 'high', 'xhigh', 'max'], default_effort: 'medium',
+      } }],
+      'onUpdate:reasoningEffort': updateReasoning,
+    })
+    expect(el.querySelector('[aria-label="chat.reasoningEffort"]')?.textContent).toContain('chat.reasoningMedium')
+    const max = Array.from(el.querySelectorAll('button')).find(button => button.textContent?.includes('chat.reasoningMax'))
+    expect(max).toBeDefined()
+    max!.click()
+    await nextTick()
+    expect(updateReasoning).toHaveBeenCalledWith('max')
+  })
+
   it('dismisses an open model description when the list scrolls', async () => {
     const el = await mountPicker()
     const tooltip = el.querySelector<HTMLElement>('[data-model-tooltip]')
@@ -122,6 +155,20 @@ describe('ModelOptions', () => {
     listbox!.dispatchEvent(new Event('scroll'))
     await nextTick()
     expect(tooltip!.dataset.open).toBe('false')
+  })
+
+  it('passes the configured description to the tooltip', async () => {
+    const el = await mountPicker()
+    expect(el.querySelector<HTMLElement>('[data-model-tooltip]')?.dataset.description).toBe('Model description')
+  })
+
+  it('does not fall back to the label when a model has no description', async () => {
+    // No tooltip at all for undescribed models — repeating the visible label in
+    // a tooltip is noise, the tooltip component renders nothing for empty text.
+    const el = await mountPicker({
+      models: [{ id: 'model-1', model_id: 'model-1', name: 'Model 1', provider_id: '', type: 'chat', config: {} }],
+    })
+    expect(el.querySelector<HTMLElement>('[data-model-tooltip]')?.dataset.description).toBe('')
   })
 
   it('renders and emits agent-provided reasoning options without guessing fixed levels', async () => {
@@ -154,10 +201,11 @@ describe('ModelOptions', () => {
     // The merged picker replaced a Chat-only implementation that had no keyboard
     // support; losing the listbox roving focus here would be a silent regression.
     const el = await mountPicker()
-    const input = el.querySelector<HTMLInputElement>('input[role="combobox"]')
-    expect(input).not.toBeNull()
+    const listbox = el.querySelector<HTMLElement>('[role="listbox"]')
+    expect(el.querySelector('input[role="combobox"]')).toBeNull()
+    expect(listbox?.getAttribute('tabindex')).toBe('0')
 
-    input!.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true }))
+    listbox!.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true }))
     await nextTick()
     expect(el.querySelector('[data-highlighted]')).not.toBeNull()
   })
@@ -170,5 +218,62 @@ describe('ModelOptions', () => {
     option!.click()
     await nextTick()
     expect(updateModel).toHaveBeenCalledWith('model-1')
+  })
+
+  it.each(['click', 'keyboard'])('notifies the host when reselecting the current model by %s', async (method) => {
+    const select = vi.fn()
+    const updateModel = vi.fn()
+    const el = await mountPicker({ onSelect: select, 'onUpdate:modelValue': updateModel })
+    if (method === 'click') {
+      el.querySelector<HTMLButtonElement>('[role="option"]')!.click()
+    } else {
+      const listbox = el.querySelector<HTMLElement>('[role="listbox"]')!
+      listbox.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true }))
+      await nextTick()
+      listbox.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))
+    }
+    await nextTick()
+    expect(select).toHaveBeenCalledExactlyOnceWith('model-1')
+    expect(updateModel).not.toHaveBeenCalled()
+  })
+
+  it.each([19, 20])('shows search starting at 20 available models (%i)', async (count) => {
+    const el = await mountPicker({
+      models: Array.from({ length: count }, (_, i) => ({ id: `model-${i}`, name: `Model ${i}`, type: 'chat' })),
+    })
+    expect(!!el.querySelector('input[role="combobox"]')).toBe(count >= 20)
+  })
+
+  it('does not count other model types or the default row toward the search threshold', async () => {
+    const el = await mountPicker({
+      noneLabel: 'Default model',
+      models: [
+        ...Array.from({ length: 19 }, (_, i) => ({ id: `model-${i}`, name: `Model ${i}`, type: 'chat' })),
+        { id: 'embedding', name: 'Embedding', type: 'embedding' },
+      ],
+    })
+    expect(el.querySelector('input[role="combobox"]')).toBeNull()
+  })
+
+  it('keeps search mounted when filtering a large catalog down to one model', async () => {
+    const el = await mountPicker({
+      models: Array.from({ length: 20 }, (_, i) => ({ id: `model-${i}`, name: `Model ${i}`, type: 'chat' })),
+    })
+    const input = el.querySelector<HTMLInputElement>('input[role="combobox"]')!
+    input.value = 'Model 19'
+    input.dispatchEvent(new Event('input', { bubbles: true }))
+    await nextTick()
+    expect(el.querySelector('input[role="combobox"]')).toBe(input)
+    expect(el.textContent).toContain('Model 19')
+  })
+
+  it('can select the default row with the keyboard when search is hidden', async () => {
+    const updateModel = vi.fn()
+    const el = await mountPicker({ noneLabel: 'Default model', 'onUpdate:modelValue': updateModel })
+    const listbox = el.querySelector<HTMLElement>('[role="listbox"]')!
+    listbox.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true }))
+    await nextTick()
+    listbox.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))
+    expect(updateModel).toHaveBeenCalledWith('')
   })
 })

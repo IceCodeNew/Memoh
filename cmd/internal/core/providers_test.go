@@ -14,6 +14,7 @@ import (
 	claudecoderuntime "github.com/felinics/memoh/internal/agent/runtime/claudecode"
 	codexruntime "github.com/felinics/memoh/internal/agent/runtime/codex"
 	"github.com/felinics/memoh/internal/agent/runtime/external"
+	grokruntime "github.com/felinics/memoh/internal/agent/runtime/grok"
 	"github.com/felinics/memoh/internal/agent/runtime/native"
 	agenttools "github.com/felinics/memoh/internal/agent/tool"
 	"github.com/felinics/memoh/internal/config"
@@ -87,9 +88,9 @@ func TestProvideAgentWiresLoopReselectMode(t *testing.T) {
 func TestLazyLLMCompactResolvesModelWithRequestBotID(t *testing.T) {
 	botID := "11111111-1111-1111-1111-111111111111"
 	queries := &lazyLLMTestQueries{
-		botID:           botID,
-		compactionModel: mustTestUUID("22222222-2222-2222-2222-222222222222"),
-		providerID:      mustTestUUID("33333333-3333-3333-3333-333333333333"),
+		botID:      botID,
+		chatModel:  mustTestUUID("22222222-2222-2222-2222-222222222222"),
+		providerID: mustTestUUID("33333333-3333-3333-3333-333333333333"),
 	}
 	client := &lazyLLMClient{
 		modelsService:   modelspkg.NewService(slog.Default(), queries),
@@ -139,7 +140,7 @@ func (*memoryProviderLazyLoadQueries) GetMemoryProviderByID(context.Context, pgt
 type lazyLLMTestQueries struct {
 	dbstore.Queries
 	botID             string
-	compactionModel   pgtype.UUID
+	chatModel         pgtype.UUID
 	providerID        pgtype.UUID
 	settingsLookups   int
 	fallbackLookups   int
@@ -152,19 +153,19 @@ func (q *lazyLLMTestQueries) GetSettingsByBotID(_ context.Context, id pgtype.UUI
 		return sqlc.GetSettingsByBotIDRow{}, errors.New("unexpected bot id")
 	}
 	return sqlc.GetSettingsByBotIDRow{
-		BotID:             id,
-		CompactionModelID: q.compactionModel,
+		BotID:       id,
+		ChatModelID: q.chatModel,
 	}, nil
 }
 
 func (q *lazyLLMTestQueries) GetModelByID(_ context.Context, id pgtype.UUID) (sqlc.Model, error) {
 	q.configuredLookups++
-	if id.String() != q.compactionModel.String() {
+	if id.String() != q.chatModel.String() {
 		return sqlc.Model{}, errors.New("unexpected model id")
 	}
 	return sqlc.Model{
 		ID:         id,
-		ModelID:    "compact-model",
+		ModelID:    "chat-model",
 		ProviderID: q.providerID,
 		Type:       string(modelspkg.ModelTypeChat),
 		Enable:     true,
@@ -292,12 +293,12 @@ func TestValidateDriverDependencies(t *testing.T) {
 		}
 		// The assembly path with the real drivers' declarations (methods on a
 		// nil receiver, no constructor needed) is what FX runs at start-up.
-		assembled, err := provideDirectAgentDrivers((*codexruntime.Driver)(nil), (*claudecoderuntime.Driver)(nil))
+		assembled, err := provideDirectAgentDrivers((*codexruntime.Driver)(nil), (*claudecoderuntime.Driver)(nil), (*grokruntime.Driver)(nil))
 		if err != nil {
 			t.Fatalf("provideDirectAgentDrivers() error = %v", err)
 		}
-		if len(assembled) != 2 {
-			t.Fatalf("provideDirectAgentDrivers() = %d drivers, want 2", len(assembled))
+		if len(assembled) != 3 {
+			t.Fatalf("provideDirectAgentDrivers() = %d drivers, want 3", len(assembled))
 		}
 	})
 

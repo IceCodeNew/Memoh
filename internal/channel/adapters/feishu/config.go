@@ -201,7 +201,8 @@ func (c Config) registerIMErrorSecrets() {
 	redact.SetSecrets("feishu:"+c.AppID, c.AppSecret, c.EncryptKey, c.VerificationToken)
 }
 
-func (c Config) newClient() *lark.Client {
+func (c Config) newClient(options ...lark.ClientOptionFunc) *lark.Client {
 	c.registerIMErrorSecrets()
-	return lark.NewClient(c.AppID, c.AppSecret, lark.WithOpenBaseUrl(c.openBaseURL()))
+	options = append([]lark.ClientOptionFunc{lark.WithOpenBaseUrl(c.openBaseURL())}, options...)
+	return lark.NewClient(c.AppID, c.AppSecret, options...)
 }

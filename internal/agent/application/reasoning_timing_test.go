@@ -9,6 +9,7 @@ import (
 	sdk "github.com/felinics/twilight/sdk"
 
 	"github.com/felinics/memoh/internal/agent/runtime/native"
+	"github.com/felinics/memoh/internal/agent/step"
 	messagepkg "github.com/felinics/memoh/internal/chat/message"
 )
 
@@ -36,6 +37,9 @@ func TestReasoningTimingTrackerMeasuresExplicitBlock(t *testing.T) {
 	tracker.observe(native.StreamEvent{Type: native.EventReasoningStart})
 	clock.advance(400 * time.Millisecond)
 	tracker.observe(native.StreamEvent{Type: native.EventReasoningDelta, Delta: "inspect"})
+	tracker.observe(native.StreamEvent{Type: native.EventToolCallMetadata, Metadata: map[string]any{
+		"execution_progress": map[string]any{"elapsed_time_seconds": float64(1)},
+	}})
 	clock.advance(1600 * time.Millisecond)
 	tracker.observe(native.StreamEvent{Type: native.EventReasoningEnd})
 
@@ -103,14 +107,14 @@ func TestConfigureNativeReasoningTimingKeepsCompletedStepsAcrossProviderCalls(t 
 	cfg.OnProviderStreamEventObserved(native.StreamEvent{Type: native.EventRetry})
 	cfg.OnProviderStreamEventObserved(native.StreamEvent{Type: native.EventReasoningDelta, Delta: "first step"})
 	clock.advance(2 * time.Second)
-	if err := cfg.OnStepCommitted(context.Background(), 0, &sdk.StepResult{}); err != nil {
+	if _, err := cfg.OnStepCommitted(context.Background(), 0, &step.Record{}); err != nil {
 		t.Fatalf("commit first timing checkpoint: %v", err)
 	}
 
 	cfg.OnProviderStreamEventObserved(native.StreamEvent{Type: native.EventRetry})
 	cfg.OnProviderStreamEventObserved(native.StreamEvent{Type: native.EventReasoningDelta, Delta: "second step"})
 	clock.advance(3 * time.Second)
-	if err := cfg.OnStepCommitted(context.Background(), 1, &sdk.StepResult{}); err != nil {
+	if _, err := cfg.OnStepCommitted(context.Background(), 1, &step.Record{}); err != nil {
 		t.Fatalf("commit second timing checkpoint: %v", err)
 	}
 

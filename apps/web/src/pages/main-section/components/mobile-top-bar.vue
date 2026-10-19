@@ -39,6 +39,13 @@
         </DropdownMenuTrigger>
         <DropdownMenuContent align="end">
           <DropdownMenuItem
+            v-if="currentBotId"
+            @select="workspaceTabs.openDraftChat({ title: t('chat.newSession'), explicitSelection: false })"
+          >
+            <MessageCircle class="mr-2 size-3.5" />
+            {{ t('sidebar.chat') }}
+          </DropdownMenuItem>
+          <DropdownMenuItem
             v-if="canWorkspaceExec"
             @select="workspaceTabs.openTerminal()"
           >
@@ -82,7 +89,7 @@
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { storeToRefs } from 'pinia'
 import { useI18n } from 'vue-i18n'
-import { ChevronLeft, Globe, Menu, Monitor, Plus, Terminal, X } from 'lucide-vue-next'
+import { ChevronLeft, Globe, Menu, MessageCircle, Monitor, Plus, Terminal, X } from 'lucide-vue-next'
 import {
   Button,
   DropdownMenu,
@@ -116,7 +123,7 @@ const currentPermissions = computed(() => currentBot.value?.current_user_permiss
 const canWorkspaceExec = computed(() => hasBotPermission(currentPermissions.value, 'workspace_exec'))
 const canManage = computed(() => hasBotPermission(currentPermissions.value, 'manage'))
 const hasAnyAction = computed(() =>
-  canWorkspaceExec.value || canManage.value || !activePanelIsChat.value,
+  !!currentBotId.value || canWorkspaceExec.value || canManage.value || !activePanelIsChat.value,
 )
 
 const leftLabel = computed(() =>
@@ -152,7 +159,9 @@ onBeforeUnmount(() => titleSub?.dispose())
 
 const title = computed(() => {
   if (!activePanelIsChat.value) return activePanelTitle.value || botLabel.value
-  if (selectionStore.sessionId) {
+  // A first send's session reads as the draft until the server confirms the
+  // send (see isSessionTentative).
+  if (selectionStore.sessionId && !chatStore.isSessionTentative(selectionStore.sessionId)) {
     return chatStore.activeSession?.title?.trim() || routeConversationLabel(chatStore.activeSession) || t('chat.untitledSession')
   }
   return botLabel.value

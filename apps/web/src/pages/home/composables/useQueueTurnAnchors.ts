@@ -1,6 +1,6 @@
 import { watch, type Ref } from 'vue'
 import type { ChatMessage } from '@/store/chat-list'
-import { isRuntimeContinuationUserTurn, isRuntimeSteerTurnId } from '@/store/chat/types'
+import { isRuntimeContinuationUserTurn, isRuntimeSteerUserTurn } from '@/store/chat/types'
 
 function runtimeSignature(message: ChatMessage): string {
   if (message.role !== 'user' && message.role !== 'assistant') {
@@ -44,8 +44,8 @@ export function useQueueTurnAnchors(
 ) {
   watchQueueTurn(
     messages,
-    message => message.role === 'user' && isRuntimeSteerTurnId(message.turnId),
-    message => `${message.id}\u0000${message.role}\u0000${message.turnId ?? ''}`,
+    isRuntimeSteerUserTurn,
+    message => `${message.id}\u0000${message.role}\u0000${message.turnId ?? ''}\u0000${message.runtimeSteer ? 'steer' : ''}`,
     pinAfterSteer,
   )
   watchQueueTurn(

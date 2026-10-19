@@ -128,7 +128,7 @@ func TestPostgresInstallationDefinitionProvenance(t *testing.T) {
 	pool := openDependencyPostgres(t, ctx)
 	botID := createDependencyBot(t, ctx, pool)
 	store := newIntegrationStore(pool)
-	key := InstallationKey{BotID: botID, WorkspaceTargetID: "native", DependencyID: "codex"}
+	key := InstallationKey{BotID: botID, DependencyID: "codex"}
 	revision := "4111dba29084f12372fb90545b0e85f8fd5c6a87e74e9203068526bc69095ac2"
 	created, err := store.Upsert(ctx, UpsertInstallation{InstallationKey: key, Source: InstallationSourceManaged, Status: StatusInstalled, InstalledVersion: "1.0.0", SourceURL: "https://catalog.example", RegistryID: "memoh", DefinitionRevision: revision})
 	if err != nil {
@@ -164,7 +164,7 @@ func TestPostgresCatalogPrunesOnlyUnreferencedHistory(t *testing.T) {
 	// Current intent may use another registry while rollback state still
 	// references this source. Preserve every source for an installed identity.
 	codex := first.Catalog.MustGet("codex")
-	_, err = newIntegrationStore(pool).Upsert(ctx, UpsertInstallation{InstallationKey: InstallationKey{BotID: botID, WorkspaceTargetID: "native", DependencyID: "codex"}, Source: InstallationSourceManaged, Status: StatusInstalled, SourceURL: p.sourceURL + "/new-registry", RegistryID: "memoh", DefinitionRevision: codex.Revision})
+	_, err = newIntegrationStore(pool).Upsert(ctx, UpsertInstallation{InstallationKey: InstallationKey{BotID: botID, DependencyID: "codex"}, Source: InstallationSourceManaged, Status: StatusInstalled, SourceURL: p.sourceURL + "/new-registry", RegistryID: "memoh", DefinitionRevision: codex.Revision})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -280,7 +280,7 @@ func TestPostgresUpsertClearsPriorOperationFailure(t *testing.T) {
 	ctx := t.Context()
 	pool := openDependencyPostgres(t, ctx)
 	store := newIntegrationStore(pool)
-	key := InstallationKey{BotID: createDependencyBot(t, ctx, pool), WorkspaceTargetID: "native", DependencyID: "codex"}
+	key := InstallationKey{BotID: createDependencyBot(t, ctx, pool), DependencyID: "codex"}
 	intent := UpsertInstallation{InstallationKey: key, Source: InstallationSourceManaged, Status: StatusInstalling}
 	if _, err := store.Upsert(ctx, intent); err != nil {
 		t.Fatal(err)

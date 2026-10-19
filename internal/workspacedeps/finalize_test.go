@@ -46,7 +46,7 @@ func TestFinalizationEOFWithoutExitRetainsRecoverableOperation(t *testing.T) {
 		}
 		return result, err
 	}
-	if _, err := f.svc.Install(f.ctx(), testBot, testTarget, "foo", "1.0.0", nil); !errors.Is(err, ErrOperationUncertain) {
+	if _, err := f.svc.Install(f.ctx(), testBot, "foo", "1.0.0", nil); !errors.Is(err, ErrOperationUncertain) {
 		t.Fatalf("finalization without EXIT = %v, want uncertain", err)
 	}
 	rec, exists := f.store.get(f.key("foo"))
@@ -61,7 +61,7 @@ func TestFinalizationEOFWithoutExitRetainsRecoverableOperation(t *testing.T) {
 		t.Fatalf("finalization did not actually execute before stream EOF: %+v", state)
 	}
 	dropExit.Store(false)
-	if _, err := f.svc.Refresh(f.ctx(), testBot, testTarget); err != nil {
+	if _, err := f.svc.Refresh(f.ctx(), testBot); err != nil {
 		t.Fatal(err)
 	}
 	if rec, _ := f.store.get(f.key("foo")); rec.Status != StatusInstalled || rec.OperationID != "" {

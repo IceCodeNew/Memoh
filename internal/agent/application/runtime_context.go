@@ -54,6 +54,9 @@ func (s *Service) buildRuntimeContextSections(ctx context.Context, req ChatReque
 			nowFn = func() time.Time { return time.Now().In(timezoneLocation) }
 		}
 		fs := native.NewFSClient(s.agent.BridgeProvider(), req.BotID, nowFn)
+		// External runtimes keep their own prompt cache; the default TTL is
+		// the conservative estimate of when it has expired.
+		s.refreshMemoryOverview(ctx, req.BotID, req.ThreadID, req.SessionType, "")
 		files = fs.LoadSystemFiles(ctx)
 	}
 
@@ -62,7 +65,7 @@ func (s *Service) buildRuntimeContextSections(ctx context.Context, req ChatReque
 		identities, err := s.platformIdentities.ListPlatformIdentities(ctx, req.BotID)
 		if err != nil {
 			if s.logger != nil {
-				s.logger.Warn("load bot platform identities for Runtime context failed",
+				s.logger.WarnContext(ctx, "load bot platform identities for Runtime context failed",
 					slog.String("bot_id", req.BotID),
 					slog.Any("error", err),
 				)

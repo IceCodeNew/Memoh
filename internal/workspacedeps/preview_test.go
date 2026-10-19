@@ -25,7 +25,7 @@ func TestScriptPreviewDetailsMirrorsRunnerEnvironment(t *testing.T) {
 	f := newServiceFixture(t)
 	f.env = []string{"NPM_MIRROR=https://registry.example", "NPM_TOKEN=hunter2"}
 	// Nothing probed yet: platform entries are placeholders.
-	preview, err := f.svc.ScriptPreviewDetails(f.ctx(), testBot, testTarget, "agent-x", catalog.ActionInstall)
+	preview, err := f.svc.ScriptPreviewDetails(f.ctx(), testBot, "agent-x", catalog.ActionInstall)
 	if err != nil {
 		t.Fatalf("ScriptPreviewDetails: %v", err)
 	}
@@ -56,7 +56,7 @@ func TestScriptPreviewDetailsMirrorsRunnerEnvironment(t *testing.T) {
 	}
 	// An unpinned dependency installs the requested version or latest, which
 	// only the request knows.
-	toolPreview, err := f.svc.ScriptPreviewDetails(f.ctx(), testBot, testTarget, "tool-y", catalog.ActionUpdate)
+	toolPreview, err := f.svc.ScriptPreviewDetails(f.ctx(), testBot, "tool-y", catalog.ActionUpdate)
 	if err != nil {
 		t.Fatalf("tool preview: %v", err)
 	}
@@ -81,7 +81,7 @@ func TestScriptPreviewDetailsMirrorsRunnerEnvironment(t *testing.T) {
 	if got := previewEnv(t, preview, "MEMOH_DEP_OPERATION_DIR"); got.Value != path.Join(operationRoot(Home(f.dataRoot, "agent-x"), "agent-x"), previewResultNonce) {
 		t.Errorf("operation receipt directory = %q", got.Value)
 	}
-	checkPreview, err := f.svc.ScriptPreviewDetails(f.ctx(), testBot, testTarget, "tool-y", catalog.ActionCheckUpdate)
+	checkPreview, err := f.svc.ScriptPreviewDetails(f.ctx(), testBot, "tool-y", catalog.ActionCheckUpdate)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -95,10 +95,10 @@ func TestScriptPreviewDetailsMirrorsRunnerEnvironment(t *testing.T) {
 	}
 
 	// Once the target has been probed the real platform is reported.
-	if _, err := f.svc.List(f.ctx(), testBot, testTarget); err != nil {
+	if _, err := f.svc.List(f.ctx(), testBot); err != nil {
 		t.Fatalf("List: %v", err)
 	}
-	preview, err = f.svc.ScriptPreviewDetails(f.ctx(), testBot, testTarget, "agent-x", ActionRollback)
+	preview, err = f.svc.ScriptPreviewDetails(f.ctx(), testBot, "agent-x", ActionRollback)
 	if err != nil {
 		t.Fatalf("rollback preview: %v", err)
 	}
@@ -115,13 +115,13 @@ func TestScriptPreviewDetailsMirrorsRunnerEnvironment(t *testing.T) {
 
 func TestScriptPreviewDetailsErrors(t *testing.T) {
 	f := newServiceFixture(t)
-	if _, err := f.svc.ScriptPreviewDetails(context.Background(), testBot, testTarget, "nope", catalog.ActionInstall); !errors.Is(err, ErrDependencyNotFound) {
+	if _, err := f.svc.ScriptPreviewDetails(context.Background(), testBot, "nope", catalog.ActionInstall); !errors.Is(err, ErrDependencyNotFound) {
 		t.Errorf("unknown dependency error = %v", err)
 	}
-	if _, err := f.svc.ScriptPreviewDetails(context.Background(), testBot, testTarget, "img-z", catalog.ActionInstall); !errors.Is(err, ErrActionUnsupported) {
+	if _, err := f.svc.ScriptPreviewDetails(context.Background(), testBot, "img-z", catalog.ActionInstall); !errors.Is(err, ErrActionUnsupported) {
 		t.Errorf("image dependency error = %v", err)
 	}
-	if _, err := f.svc.ScriptPreviewDetails(context.Background(), testBot, testTarget, "agent-x", catalog.ActionCheckUpdate); !errors.Is(err, ErrActionUnsupported) {
+	if _, err := f.svc.ScriptPreviewDetails(context.Background(), testBot, "agent-x", catalog.ActionCheckUpdate); !errors.Is(err, ErrActionUnsupported) {
 		t.Errorf("unscripted action error = %v", err)
 	}
 }
@@ -129,7 +129,7 @@ func TestScriptPreviewDetailsErrors(t *testing.T) {
 func TestScriptPreviewRedactsPrivateMirrorCredentials(t *testing.T) {
 	f := newServiceFixture(t)
 	f.env = []string{"NPM_MIRROR=https://user:password@registry.example/download?token=private"}
-	preview, err := f.svc.ScriptPreviewDetails(f.ctx(), testBot, testTarget, "agent-x", catalog.ActionInstall)
+	preview, err := f.svc.ScriptPreviewDetails(f.ctx(), testBot, "agent-x", catalog.ActionInstall)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -1,12 +1,7 @@
-// Package workspacedeps manages catalog dependencies inside a bot's
-// workspace: it runs catalog scripts over the bridge, discovers what is
-// installed, probes the target platform, and caches the result per bot and
-// workspace target.
-//
-// Every path helper takes the workspace data root as an argument. Native
-// containers pass config.DefaultDataMount ("/data"); remote targets pass the
-// target's default working directory. Resolving which root applies to a bot
-// is the service layer's job, not this package's.
+// Package workspacedeps manages catalog dependencies inside each bot's isolated
+// workspace. Catalog scripts, discovery and cached state are scoped to the bot.
+// Path helpers take the data root explicitly so tests can use temporary roots;
+// production always uses the container's /data mount.
 package workspacedeps
 
 import "path"

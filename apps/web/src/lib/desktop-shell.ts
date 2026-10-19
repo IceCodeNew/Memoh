@@ -25,16 +25,28 @@ export interface DesktopRuntimeState {
 export interface DesktopRuntimeBridge {
   runtimeState(): Promise<DesktopRuntimeState>
   configureRuntime(config: { runtimeId: string, name: string, key: string, teamId?: string } | null): Promise<DesktopRuntimeState>
+  setRuntimePaused(paused: boolean): Promise<DesktopRuntimeState>
   onRuntimeStateChanged(listener: (state: DesktopRuntimeState) => void): () => void
 }
 
 export const DesktopRuntimeKey: InjectionKey<DesktopRuntimeBridge | undefined> = Symbol('memohai:desktop-runtime')
 
+// Window chrome state the renderer cannot observe on its own. Fullscreen
+// matters on macOS: the traffic lights hide in fullscreen, so layouts that
+// reserve the traffic-light strip must drop the reserve while fullscreen.
+export interface DesktopWindowBridge {
+  isFullScreen(): Promise<boolean>
+  onFullScreenChanged(listener: (fullScreen: boolean) => void): () => void
+  setIgnoreMenuShortcuts?(ignore: boolean): Promise<void>
+}
+
+export const DesktopWindowKey: InjectionKey<DesktopWindowBridge | undefined> = Symbol('memohai:desktop-window')
+
 export type DesktopUpdateStatus =
   | 'idle'
   | 'checking'
   | 'up-to-date'
-  | 'available'
+  | 'installing'
   | 'downloading'
   | 'downloaded'
   | 'error'
@@ -48,17 +60,21 @@ export interface DesktopUpdateInfo {
 
 export interface DesktopUpdateState {
   status: DesktopUpdateStatus
+  autoUpdate: boolean
   currentVersion: string
   latestVersion: string | null
   progress: number | null
   error: string | null
+  // Mirrors apps/desktop/src/shared/updates.ts — notes from the update feed,
+  // null when none; hide the notes affordance on null.
+  releaseNotes: string | null
 }
 
 export interface DesktopUpdateBridge {
   getInfo(): Promise<DesktopUpdateInfo>
   getState(): Promise<DesktopUpdateState>
   check(): Promise<DesktopUpdateState>
-  download(): Promise<DesktopUpdateState>
+  setAutoUpdate(enabled: boolean): Promise<DesktopUpdateState>
   install(): Promise<DesktopUpdateState>
   onStateChanged(listener: (state: DesktopUpdateState) => void): () => void
 }

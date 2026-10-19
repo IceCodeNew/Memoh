@@ -256,6 +256,22 @@ func TestDirectExternalRuntimesDoNotDependOnACP(t *testing.T) {
 	}
 }
 
+// TestACPNativeDirectRuntimesUseOnlyTheACPClient covers built-in agents whose
+// own wire protocol is ACP. They share the protocol client, but the pool and
+// the profile registry serve user-supplied agents only: a built-in agent that
+// reached them would be configured by agent id inside the generic runtime.
+func TestACPNativeDirectRuntimesUseOnlyTheACPClient(t *testing.T) {
+	root := repoRoot(t)
+	client := modulePrefix + "internal/agent/runtime/acp/client"
+	for _, file := range allGoFiles(t, root, "internal/agent/runtime/grok") {
+		for _, imp := range imports(t, root, file) {
+			if isPackageOrChild(imp, modulePrefix+"internal/agent/runtime/acp") && imp != client {
+				t.Errorf("%s imports %s: an ACP-native direct runtime may use only the ACP client", file, imp)
+			}
+		}
+	}
+}
+
 // TestThreadStorageDoesNotReachRouteDB pins the ownership split: Thread may
 // carry an opaque route_id, while Channel owns active-thread selection and
 // route metadata projection.
@@ -376,6 +392,7 @@ func TestRetiredDomainPackagesStayRemoved(t *testing.T) {
 		"internal/acpclient",
 		"internal/acpfeedback",
 		"internal/agentfeedback",
+		"internal/agent/decision/feedback",
 		"internal/acpprofile",
 		"internal/agentpayload",
 		"internal/conversation",
@@ -466,6 +483,23 @@ func TestDefaultTeamIDReferences(t *testing.T) {
 			}
 			if !allowed {
 				t.Errorf("%s references team.DefaultTeamID outside the allowed layers (internal/db, cmd/**, tests) without a documented exemption", file)
+			}
+		}
+	}
+}
+
+// TestStandaloneChannelDoesNotOwnStorageBackends keeps the split Channel
+// process independent from Server's workspace and media filesystem. Channel
+// may use the storage port through internal RPC, but it must not assemble a
+// concrete local/container storage provider of its own.
+func TestStandaloneChannelDoesNotOwnStorageBackends(t *testing.T) {
+	root := repoRoot(t)
+	for _, dir := range []string{"cmd/channel", "cmd/internal/channel"} {
+		for _, file := range goFiles(t, root, dir) {
+			for _, imp := range imports(t, root, file) {
+				if isPackageOrChild(imp, modulePrefix+"internal/storage/providers") {
+					t.Errorf("%s imports %s: standalone Channel storage must go through the Server RPC", file, imp)
+				}
 			}
 		}
 	}

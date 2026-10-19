@@ -122,6 +122,8 @@ function prepareSigningEnvironment() {
   materializeAppleApiKey()
   if (hasMacNotarizationEnv(process.env)) {
     builderArgs.push('-c.mac.notarize=true')
+    builderArgs.push('-c.dmg.sign=true')
+    builderArgs.push(`-c.artifactBuildCompleted=${resolve(desktopRoot, 'scripts/notarize-dmg.mjs')}`)
   }
 }
 

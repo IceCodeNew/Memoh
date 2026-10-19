@@ -22,7 +22,6 @@ import (
 
 	attachmentpkg "github.com/felinics/memoh/internal/attachment"
 	"github.com/felinics/memoh/internal/channel"
-	"github.com/felinics/memoh/internal/channel/common"
 	"github.com/felinics/memoh/internal/media"
 	"github.com/felinics/memoh/internal/textutil"
 )
@@ -265,6 +264,30 @@ func (*MatrixAdapter) Descriptor() channel.Descriptor {
 	}
 }
 
+func (*MatrixAdapter) SelfIdentityPolicy() channel.SelfIdentityPolicy {
+	return channel.SelfIdentityPolicy{
+		RefreshOnCredentialsChange: true,
+		RequireDiscoveryOnEnable:   true,
+		RequiredSelfIdentityKey:    "user_id",
+		DiscoveryErrorMessage:      "matrix identity discovery failed",
+		MissingIdentityMessage:     "matrix identity discovery returned no user id",
+	}
+}
+
+func (a *MatrixAdapter) DiscoverSelf(ctx context.Context, credentials map[string]any) (map[string]any, string, error) {
+	cfg, err := parseConfig(credentials)
+	if err != nil {
+		return nil, "", err
+	}
+	callCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
+	userID, err := a.discoverSelf(callCtx, cfg)
+	if err != nil {
+		return nil, "", err
+	}
+	return map[string]any{"user_id": userID}, userID, nil
+}
+
 func (*MatrixAdapter) NormalizeConfig(raw map[string]any) (map[string]any, error) {
 	return normalizeConfig(raw)
 }
@@ -306,21 +329,26 @@ func (a *MatrixAdapter) Connect(ctx context.Context, cfg channel.ChannelConfig, 
 }
 
 func (a *MatrixAdapter) validateConnection(ctx context.Context, cfg Config) error {
+	_, err := a.discoverSelf(ctx, cfg)
+	return err
+}
+
+func (a *MatrixAdapter) discoverSelf(ctx context.Context, cfg Config) (string, error) {
 	if err := a.validateHomeserver(ctx, cfg); err != nil {
-		return err
+		return "", err
 	}
 	whoami, err := a.validateAccessToken(ctx, cfg)
 	if err != nil {
-		return err
+		return "", err
 	}
 	resolvedUserID := strings.TrimSpace(whoami.UserID)
 	if resolvedUserID == "" {
-		return errors.New("matrix access token check failed: homeserver returned empty user_id")
+		return "", errors.New("matrix access token check failed: homeserver returned empty user_id")
 	}
 	if !strings.EqualFold(resolvedUserID, strings.TrimSpace(cfg.UserID)) {
-		return fmt.Errorf("matrix access token check failed: token belongs to %s, expected %s", resolvedUserID, strings.TrimSpace(cfg.UserID))
+		return "", fmt.Errorf("matrix access token check failed: token belongs to %s, expected %s", resolvedUserID, strings.TrimSpace(cfg.UserID))
 	}
-	return nil
+	return resolvedUserID, nil
 }
 
 func (a *MatrixAdapter) validateHomeserver(ctx context.Context, cfg Config) error {
@@ -455,7 +483,7 @@ func (a *MatrixAdapter) runSyncLoop(ctx context.Context, cfg channel.ChannelConf
 		bootstrapSince, err := a.bootstrapSinceToken(ctx, cfg, parsed)
 		if err != nil {
 			if a.logger != nil {
-				a.logger.Warn("matrix sync bootstrap failed", slog.String("config_id", cfg.ID), slog.Any("error", err))
+				a.logger.WarnContext(ctx, "matrix sync bootstrap failed", slog.String("config_id", cfg.ID), slog.Any("error", err))
 			}
 		} else if bootstrapSince != "" {
 			since = bootstrapSince
@@ -470,7 +498,7 @@ func (a *MatrixAdapter) runSyncLoop(ctx context.Context, cfg channel.ChannelConf
 		if err == nil && strings.TrimSpace(since) != "" && since != persistedSince {
 			if saveErr := a.persistSinceToken(ctx, cfg.ID, since); saveErr != nil {
 				if a.logger != nil {
-					a.logger.Warn("matrix sync cursor persist failed", slog.String("config_id", cfg.ID), slog.Bool("healthy", healthy), slog.Any("error", saveErr))
+					a.logger.WarnContext(ctx, "matrix sync cursor persist failed", slog.String("config_id", cfg.ID), slog.Bool("healthy", healthy), slog.Any("error", saveErr))
 				}
 			} else {
 				persistedSince = since
@@ -481,7 +509,7 @@ func (a *MatrixAdapter) runSyncLoop(ctx context.Context, cfg channel.ChannelConf
 			continue
 		}
 		if a.logger != nil {
-			a.logger.Warn("matrix sync reconnect", slog.String("config_id", cfg.ID), slog.Any("error", err))
+			a.logger.WarnContext(ctx, "matrix sync reconnect", slog.String("config_id", cfg.ID), slog.Any("error", err))
 		}
 		delay, nextAttempt := nextReconnectDelay(backoffs, attempt, healthy)
 		attempt = nextAttempt
@@ -509,7 +537,7 @@ func (a *MatrixAdapter) bootstrapSinceToken(ctx context.Context, cfg channel.Cha
 		return "", err
 	}
 	if a.logger != nil {
-		a.logger.Info("matrix sync cursor bootstrapped", slog.String("config_id", cfg.ID))
+		a.logger.InfoContext(ctx, "matrix sync cursor bootstrapped", slog.String("config_id", cfg.ID))
 	}
 	return since, nil
 }
@@ -577,7 +605,7 @@ func (a *MatrixAdapter) handleInvites(ctx context.Context, cfg channel.ChannelCo
 		}
 		if !parsed.AutoJoinInvites {
 			if a.logger != nil {
-				a.logger.Info("matrix invite skipped",
+				a.logger.InfoContext(ctx, "matrix invite skipped",
 					slog.String("config_id", cfg.ID),
 					slog.String("room_id", roomID),
 					slog.String("reason", "auto_join_disabled"),
@@ -590,7 +618,7 @@ func (a *MatrixAdapter) handleInvites(ctx context.Context, cfg channel.ChannelCo
 		}
 		joinedAny = true
 		if a.logger != nil {
-			a.logger.Info("matrix room auto-joined",
+			a.logger.InfoContext(ctx, "matrix room auto-joined",
 				slog.String("config_id", cfg.ID),
 				slog.String("room_id", roomID),
 			)
@@ -630,7 +658,7 @@ func (a *MatrixAdapter) handleEvent(ctx context.Context, cfg channel.ChannelConf
 		repliedEvent, err := a.fetchRoomEvent(ctx, parsed, evt.RoomID, replyTo)
 		if err != nil {
 			if a.logger != nil {
-				a.logger.Warn("failed to fetch matrix replied event",
+				a.logger.WarnContext(ctx, "failed to fetch matrix replied event",
 					slog.String("config_id", cfg.ID),
 					slog.String("room_id", evt.RoomID),
 					slog.String("reply_to", replyTo),
@@ -705,12 +733,11 @@ func (a *MatrixAdapter) handleEvent(ctx context.Context, cfg channel.ChannelConf
 		}
 	}
 	if a.logger != nil {
-		a.logger.Info("inbound received",
+		a.logger.InfoContext(ctx, "inbound received",
 			slog.String("config_id", cfg.ID),
 			slog.String("room_id", evt.RoomID),
 			slog.String("sender", evt.Sender),
 			slog.Bool("is_mentioned", isMentioned),
-			slog.String("text", common.SummarizeText(body)),
 		)
 	}
 	return true, handler(ctx, cfg, msg)
@@ -733,7 +760,7 @@ func (a *MatrixAdapter) resolveConversationType(ctx context.Context, configID st
 	isDirect, err := a.isDirectRoom(ctx, cfg, roomID)
 	if err != nil {
 		if a.logger != nil {
-			a.logger.Warn("failed to resolve matrix room type",
+			a.logger.WarnContext(ctx, "failed to resolve matrix room type",
 				slog.String("config_id", configID),
 				slog.String("room_id", strings.TrimSpace(roomID)),
 				slog.Any("error", err),
@@ -1461,7 +1488,7 @@ func (a *MatrixAdapter) ensureDirectRoom(ctx context.Context, cfg Config, userID
 			return roomID, nil
 		}
 	} else if a.logger != nil {
-		a.logger.Warn("matrix direct room lookup failed",
+		a.logger.WarnContext(ctx, "matrix direct room lookup failed",
 			slog.String("user_id", userID),
 			slog.Any("error", err),
 		)
@@ -1492,7 +1519,7 @@ func (a *MatrixAdapter) findExistingDirectRoom(ctx context.Context, cfg Config, 
 		matched, err := a.isDirectRoomForUser(ctx, cfg, roomID, userID)
 		if err != nil {
 			if a.logger != nil {
-				a.logger.Warn("matrix direct room candidate lookup failed",
+				a.logger.WarnContext(ctx, "matrix direct room candidate lookup failed",
 					slog.String("room_id", strings.TrimSpace(roomID)),
 					slog.String("user_id", strings.TrimSpace(userID)),
 					slog.Any("error", err),

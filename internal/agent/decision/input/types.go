@@ -15,6 +15,7 @@ const (
 	// runtime (runtimekind.UsesDecisionWaiter), the same as tool approvals.
 	ProviderSourceACPMCP           = "acp_mcp"
 	ProviderSourceACPElicitation   = "acp_elicitation"
+	ProviderSourceACPAgentQuestion = "acp_agent_question"
 	ProviderSourceCodexUserInput   = "codex_request_user_input"
 	ProviderSourceCodexElicitation = "codex_mcp_elicitation"
 
@@ -140,6 +141,7 @@ func (s TextInteractionState) Answer(questionID string) (QuestionAnswer, bool) {
 }
 
 type AdvanceTextInput struct {
+	UILanguage             string
 	BotID                  string
 	SessionID              string
 	ExplicitID             string
@@ -178,6 +180,7 @@ type UIQuestion struct {
 
 // UIOption describes one selectable option in an ask_user question.
 type UIOption struct {
+	LabelKey    string `json:"label_key,omitempty"`
 	ID          string `json:"id"`
 	Label       string `json:"label"`
 	Description string `json:"description,omitempty"`

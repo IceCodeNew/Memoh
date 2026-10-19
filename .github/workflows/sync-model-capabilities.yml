@@ -19,6 +19,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
 
       - uses: actions/setup-go@v5
         with:
@@ -35,12 +37,27 @@ jobs:
           base: main
           title: "chore: sync model reasoning capabilities from LiteLLM"
           body: |
-            Automated refresh of `thinking_mode` / `reasoning_efforts` in the
-            first-party `conf/providers/*.yaml` templates, derived from the
-            LiteLLM registry by `cmd/synccaps`.
+            ## Author
+            - [x] Agent
+            - [ ] Human
 
-            Third-party reseller entries are pruned and only canonical first-party
-            model ids are matched, so review the YAML diff as the source of truth.
+            ## Type
+            - [ ] bug
+            - [x] feat
+            - [ ] test
+
+            ## Summary
+            Refresh thinking_mode and reasoning_efforts in provider templates and remove third-party reseller entries.
+
+            ## Validation
+            Ran go run ./cmd/synccaps to generate the changes. Live provider calls have not been verified.
+
+            ## Screenshots / Recordings
+            This only updates provider capability configuration and has no visible UI change. Use the generated diff and CI results for verification.
+
+            ## Human QA
+            - [ ] Human QA passed
+
           commit-message: "chore: sync model reasoning capabilities from LiteLLM"
           add-paths: conf/providers/*.yaml
           delete-branch: true

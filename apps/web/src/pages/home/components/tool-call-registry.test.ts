@@ -146,6 +146,29 @@ describe('tool call registry', () => {
     // An unknown modifier keeps the plain action rather than inventing a key.
     expect(getToolDisplay(toolBlock('browser_action', { action: 'scroll', direction: 'sideways' })).actionKey)
       .toBe('browserAction.scroll')
+    const capabilityCases: Array<[string, Record<string, unknown>, string, string]> = [
+      ['mcp_manage', { action: 'list' }, 'mcp_manage_list', ''],
+      ['mcp_manage', { action: 'get', connection_id: 'mcp-1' }, 'mcp_manage_get', 'mcp-1'],
+      ['mcp_manage', { action: 'create', name: 'Docs' }, 'mcp_manage_create', 'Docs'],
+      ['mcp_manage', { action: 'update', connection_id: 'mcp-1' }, 'mcp_manage_update', 'mcp-1'],
+      ['mcp_manage', { action: 'delete', connection_id: 'mcp-1' }, 'mcp_manage_delete', 'mcp-1'],
+      ['mcp_manage', { action: 'probe', connection_id: 'mcp-1' }, 'mcp_manage_probe', 'mcp-1'],
+      ['mcp_manage', { action: 'authorize', connection_id: 'mcp-1' }, 'mcp_manage_authorize', 'mcp-1'],
+      ['app_search', { action: 'categories', registry: 'official' }, 'app_search_categories', 'official'],
+      ['app_search', { action: 'search', q: 'calendar' }, 'app_search', '"calendar"'],
+      ['app_search', { action: 'get', app_id: 'calendar' }, 'app_search_get', 'calendar'],
+      ['app_manage', { action: 'list' }, 'app_manage_list', ''],
+      ['app_manage', { action: 'list', refresh: true }, 'app_manage_refresh', ''],
+      ['app_manage', { action: 'list', check_updates: true }, 'app_manage_check_updates', ''],
+      ['app_manage', { action: 'install', app_id: 'calendar' }, 'app_manage_install', 'calendar'],
+      ['app_manage', { action: 'update', installation_id: 'app-1' }, 'app_manage_update', 'app-1'],
+      ['app_manage', { action: 'resume', installation_id: 'app-1' }, 'app_manage_resume', 'app-1'],
+      ['app_manage', { action: 'uninstall', installation_id: 'app-1' }, 'app_manage_uninstall', 'app-1'],
+      ['app_manage', { action: 'authorize', installation_id: 'app-1', connector_type: 'google' }, 'app_manage_authorize', 'google'],
+    ]
+    for (const [tool, input, actionKey, target] of capabilityCases) {
+      expect(getToolDisplay(toolBlock(tool, input))).toMatchObject({ actionKey, target })
+    }
   })
 
   it.each([
@@ -165,5 +188,46 @@ describe('tool call registry', () => {
     const block = toolBlock('web_search', { query: 'x' })
     expect(getToolDisplay({ ...block, result: { isError: true } } as ToolCallBlock))
       .toEqual(getToolDisplay(block))
+  })
+
+  it('counts edit badges from the real diff, not the old_text/new_text line counts', () => {
+    // The model wrapped the replaced line in extra unchanged context to keep
+    // old_text unique: the input line counts would report 3 removals and 3
+    // additions while only one line actually changed each way.
+    const block = {
+      ...toolBlock('edit', {
+        path: 'a.md',
+        old_text: 'keep\nold\ntail',
+        new_text: 'keep\nnew\ntail',
+      }),
+      diff: '--- a/a.md\n+++ b/a.md\n@@ -1,3 +1,3 @@\n keep\n-old\n+new\n tail\n',
+    } as unknown as ToolCallBlock
+    expect(getToolDisplay(block)).toMatchObject({ diffAdd: 1, diffRemove: 1 })
+  })
+
+  it('counts write badges from the real diff, all-add for a new file', () => {
+    const block = {
+      ...toolBlock('write', { path: 'new.md', content: '# Title\n\n- a\n- b\n' }),
+      diff: '--- /dev/null\n+++ b/new.md\n@@ -0,0 +1,4 @@\n+# Title\n+\n+- a\n+- b\n',
+    } as unknown as ToolCallBlock
+    expect(getToolDisplay(block)).toMatchObject({ diffAdd: 4, diffRemove: 0 })
+  })
+
+  it('shows a remove count for a write overwrite diff', () => {
+    const block = {
+      ...toolBlock('write', { path: 'a.md', content: 'keep\nnew\ntail\n' }),
+      diff: '--- a/a.md\n+++ b/a.md\n@@ -1,3 +1,3 @@\n keep\n-old\n+new\n tail\n',
+    } as unknown as ToolCallBlock
+    expect(getToolDisplay(block)).toMatchObject({ diffAdd: 1, diffRemove: 1 })
+  })
+
+  it('falls back to input line counts when no server diff exists', () => {
+    expect(getToolDisplay(toolBlock('edit', {
+      path: 'a.md',
+      old_text: 'old\n',
+      new_text: 'new\nmore\n',
+    }))).toMatchObject({ diffAdd: 2, diffRemove: 1 })
+    expect(getToolDisplay(toolBlock('write', { path: 'a.md', content: 'one\ntwo\n' })))
+      .toMatchObject({ diffAdd: 2, diffRemove: undefined })
   })
 })

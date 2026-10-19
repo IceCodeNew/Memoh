@@ -112,7 +112,7 @@ func (s *DBService) persistAgentStepTx(ctx context.Context, queries dbstore.Quer
 		if err != nil {
 			return nil, err
 		}
-		if strings.EqualFold(strings.TrimSpace(input.Role), "user") {
+		if strings.EqualFold(strings.TrimSpace(input.Role), "user") && !IsInternalFeedback(input.Metadata) {
 			turnRequestMessageID = message.ID
 		}
 		persisted = append(persisted, message)

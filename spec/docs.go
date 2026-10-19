@@ -32,6 +32,258 @@ const docTemplate = `{
                 }
             }
         },
+        "/agent-authorizations": {
+            "post": {
+                "description": "Starts Codex device authorization or Claude browser authorization, or encrypts a supplied API key or Claude OAuth token. A Grok account cannot be staged: it signs in on the Agent itself. No Bot or workspace is created. Ready means the credential has been staged; API keys and manually supplied tokens are not probed against the provider.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "agent-authorizations"
+                ],
+                "summary": "Authorize an Agent account independently of a Bot",
+                "parameters": [
+                    {
+                        "description": "Authorization request",
+                        "name": "payload",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/agentcredential.AuthorizationRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "201": {
+                        "description": "Created",
+                        "schema": {
+                            "$ref": "#/definitions/agentcredential.Authorization"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/server.Problem"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "$ref": "#/definitions/server.Problem"
+                        }
+                    },
+                    "409": {
+                        "description": "Conflict",
+                        "schema": {
+                            "$ref": "#/definitions/server.Problem"
+                        }
+                    },
+                    "429": {
+                        "description": "Too Many Requests",
+                        "schema": {
+                            "$ref": "#/definitions/server.Problem"
+                        }
+                    },
+                    "503": {
+                        "description": "Service Unavailable",
+                        "schema": {
+                            "$ref": "#/definitions/server.Problem"
+                        }
+                    }
+                }
+            }
+        },
+        "/agent-authorizations/{id}": {
+            "get": {
+                "tags": [
+                    "agent-authorizations"
+                ],
+                "summary": "Read an authorization session owned by the current user",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Authorization ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/agentcredential.Authorization"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "$ref": "#/definitions/server.Problem"
+                        }
+                    },
+                    "410": {
+                        "description": "Gone",
+                        "schema": {
+                            "$ref": "#/definitions/server.Problem"
+                        }
+                    },
+                    "503": {
+                        "description": "Service Unavailable",
+                        "schema": {
+                            "$ref": "#/definitions/server.Problem"
+                        }
+                    }
+                }
+            },
+            "delete": {
+                "tags": [
+                    "agent-authorizations"
+                ],
+                "summary": "Discard a temporary authorization without disconnecting an already-created Agent",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Authorization ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "204": {
+                        "description": "No Content"
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/server.Problem"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "$ref": "#/definitions/server.Problem"
+                        }
+                    },
+                    "503": {
+                        "description": "Service Unavailable",
+                        "schema": {
+                            "$ref": "#/definitions/server.Problem"
+                        }
+                    }
+                }
+            }
+        },
+        "/agent-authorizations/{id}/exchange": {
+            "post": {
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "agent-authorizations"
+                ],
+                "summary": "Complete Claude browser authorization with the returned authorization code",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Authorization ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "Authorization code",
+                        "name": "payload",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/handlers.AgentAuthorizationExchangeRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/agentcredential.Authorization"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/server.Problem"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "$ref": "#/definitions/server.Problem"
+                        }
+                    },
+                    "410": {
+                        "description": "Gone",
+                        "schema": {
+                            "$ref": "#/definitions/server.Problem"
+                        }
+                    },
+                    "503": {
+                        "description": "Service Unavailable",
+                        "schema": {
+                            "$ref": "#/definitions/server.Problem"
+                        }
+                    }
+                }
+            }
+        },
+        "/agent-authorizations/{id}/poll": {
+            "post": {
+                "tags": [
+                    "agent-authorizations"
+                ],
+                "summary": "Poll a pending Agent device authorization",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Authorization ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/agentcredential.Authorization"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "$ref": "#/definitions/server.Problem"
+                        }
+                    },
+                    "410": {
+                        "description": "Gone",
+                        "schema": {
+                            "$ref": "#/definitions/server.Problem"
+                        }
+                    },
+                    "503": {
+                        "description": "Service Unavailable",
+                        "schema": {
+                            "$ref": "#/definitions/server.Problem"
+                        }
+                    }
+                }
+            }
+        },
         "/auth/login": {
             "post": {
                 "description": "Validate user credentials and issue a JWT",
@@ -60,19 +312,19 @@ const docTemplate = `{
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "401": {
                         "description": "Unauthorized",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "500": {
                         "description": "Internal Server Error",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     }
                 }
@@ -95,13 +347,13 @@ const docTemplate = `{
                     "401": {
                         "description": "Unauthorized",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "500": {
                         "description": "Internal Server Error",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     }
                 },
@@ -137,19 +389,19 @@ const docTemplate = `{
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "403": {
                         "description": "Forbidden",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "500": {
                         "description": "Internal Server Error",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     }
                 }
@@ -161,6 +413,12 @@ const docTemplate = `{
                 ],
                 "summary": "Create bot user",
                 "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Client-generated key for one logical create. A resend with the same key is answered with the bot the first attempt created instead of a second one.",
+                        "name": "Idempotency-Key",
+                        "in": "header"
+                    },
                     {
                         "description": "Bot payload",
                         "name": "payload",
@@ -181,25 +439,25 @@ const docTemplate = `{
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "403": {
                         "description": "Forbidden",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "409": {
                         "description": "Conflict",
                         "schema": {
-                            "$ref": "#/definitions/apperror.Problem"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "500": {
                         "description": "Internal Server Error",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     }
                 }
@@ -260,19 +518,19 @@ const docTemplate = `{
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "403": {
                         "description": "Forbidden",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "500": {
                         "description": "Internal Server Error",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     }
                 }
@@ -333,13 +591,13 @@ const docTemplate = `{
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "500": {
                         "description": "Internal Server Error",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     }
                 }
@@ -377,13 +635,13 @@ const docTemplate = `{
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "500": {
                         "description": "Internal Server Error",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     }
                 }
@@ -420,13 +678,13 @@ const docTemplate = `{
                     "401": {
                         "description": "Unauthorized",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "500": {
                         "description": "Internal Server Error",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     }
                 }
@@ -470,19 +728,19 @@ const docTemplate = `{
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "403": {
                         "description": "Forbidden",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "500": {
                         "description": "Internal Server Error",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     }
                 }
@@ -521,19 +779,19 @@ const docTemplate = `{
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "403": {
                         "description": "Forbidden",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "500": {
                         "description": "Internal Server Error",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     }
                 }
@@ -572,19 +830,19 @@ const docTemplate = `{
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "403": {
                         "description": "Forbidden",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "500": {
                         "description": "Internal Server Error",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     }
                 }
@@ -616,19 +874,19 @@ const docTemplate = `{
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "403": {
                         "description": "Forbidden",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "500": {
                         "description": "Internal Server Error",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     }
                 }
@@ -664,19 +922,19 @@ const docTemplate = `{
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "403": {
                         "description": "Forbidden",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "500": {
                         "description": "Internal Server Error",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     }
                 }
@@ -708,19 +966,19 @@ const docTemplate = `{
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "403": {
                         "description": "Forbidden",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "500": {
                         "description": "Internal Server Error",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     }
                 }
@@ -759,19 +1017,19 @@ const docTemplate = `{
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "403": {
                         "description": "Forbidden",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "500": {
                         "description": "Internal Server Error",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     }
                 }
@@ -819,19 +1077,19 @@ const docTemplate = `{
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "403": {
                         "description": "Forbidden",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "500": {
                         "description": "Internal Server Error",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     }
                 }
@@ -865,19 +1123,19 @@ const docTemplate = `{
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "403": {
                         "description": "Forbidden",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "500": {
                         "description": "Internal Server Error",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     }
                 }
@@ -918,31 +1176,37 @@ const docTemplate = `{
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "$ref": "#/definitions/apperror.Problem"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "403": {
                         "description": "Forbidden",
                         "schema": {
-                            "$ref": "#/definitions/apperror.Problem"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "404": {
                         "description": "Not Found",
                         "schema": {
-                            "$ref": "#/definitions/apperror.Problem"
+                            "$ref": "#/definitions/server.Problem"
+                        }
+                    },
+                    "409": {
+                        "description": "Conflict",
+                        "schema": {
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "429": {
                         "description": "Too Many Requests",
                         "schema": {
-                            "$ref": "#/definitions/apperror.Problem"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "500": {
                         "description": "Internal Server Error",
                         "schema": {
-                            "$ref": "#/definitions/apperror.Problem"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     }
                 }
@@ -980,31 +1244,31 @@ const docTemplate = `{
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "$ref": "#/definitions/apperror.Problem"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "403": {
                         "description": "Forbidden",
                         "schema": {
-                            "$ref": "#/definitions/apperror.Problem"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "404": {
                         "description": "Not Found",
                         "schema": {
-                            "$ref": "#/definitions/apperror.Problem"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "409": {
                         "description": "Conflict",
                         "schema": {
-                            "$ref": "#/definitions/apperror.Problem"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "500": {
                         "description": "Internal Server Error",
                         "schema": {
-                            "$ref": "#/definitions/apperror.Problem"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     }
                 }
@@ -1037,31 +1301,31 @@ const docTemplate = `{
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "$ref": "#/definitions/apperror.Problem"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "403": {
                         "description": "Forbidden",
                         "schema": {
-                            "$ref": "#/definitions/apperror.Problem"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "404": {
                         "description": "Not Found",
                         "schema": {
-                            "$ref": "#/definitions/apperror.Problem"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "409": {
                         "description": "Conflict",
                         "schema": {
-                            "$ref": "#/definitions/apperror.Problem"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "500": {
                         "description": "Internal Server Error",
                         "schema": {
-                            "$ref": "#/definitions/apperror.Problem"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     }
                 }
@@ -1109,37 +1373,37 @@ const docTemplate = `{
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "$ref": "#/definitions/apperror.Problem"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "403": {
                         "description": "Forbidden",
                         "schema": {
-                            "$ref": "#/definitions/apperror.Problem"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "404": {
                         "description": "Not Found",
                         "schema": {
-                            "$ref": "#/definitions/apperror.Problem"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "409": {
                         "description": "Conflict",
                         "schema": {
-                            "$ref": "#/definitions/apperror.Problem"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "500": {
                         "description": "Internal Server Error",
                         "schema": {
-                            "$ref": "#/definitions/apperror.Problem"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "502": {
                         "description": "Bad Gateway",
                         "schema": {
-                            "$ref": "#/definitions/apperror.Problem"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     }
                 }
@@ -1187,37 +1451,37 @@ const docTemplate = `{
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "$ref": "#/definitions/apperror.Problem"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "403": {
                         "description": "Forbidden",
                         "schema": {
-                            "$ref": "#/definitions/apperror.Problem"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "404": {
                         "description": "Not Found",
                         "schema": {
-                            "$ref": "#/definitions/apperror.Problem"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "409": {
                         "description": "Conflict",
                         "schema": {
-                            "$ref": "#/definitions/apperror.Problem"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "500": {
                         "description": "Internal Server Error",
                         "schema": {
-                            "$ref": "#/definitions/apperror.Problem"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "502": {
                         "description": "Bad Gateway",
                         "schema": {
-                            "$ref": "#/definitions/apperror.Problem"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     }
                 }
@@ -1264,37 +1528,37 @@ const docTemplate = `{
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "$ref": "#/definitions/apperror.Problem"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "403": {
                         "description": "Forbidden",
                         "schema": {
-                            "$ref": "#/definitions/apperror.Problem"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "404": {
                         "description": "Not Found",
                         "schema": {
-                            "$ref": "#/definitions/apperror.Problem"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "409": {
                         "description": "Conflict",
                         "schema": {
-                            "$ref": "#/definitions/apperror.Problem"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "500": {
                         "description": "Internal Server Error",
                         "schema": {
-                            "$ref": "#/definitions/apperror.Problem"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "502": {
                         "description": "Bad Gateway",
                         "schema": {
-                            "$ref": "#/definitions/apperror.Problem"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     }
                 }
@@ -1329,7 +1593,7 @@ const docTemplate = `{
                     "403": {
                         "description": "Forbidden",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     }
                 }
@@ -1374,19 +1638,19 @@ const docTemplate = `{
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "$ref": "#/definitions/apperror.Problem"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "403": {
                         "description": "Forbidden",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "409": {
                         "description": "Conflict",
                         "schema": {
-                            "$ref": "#/definitions/apperror.Problem"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     }
                 }
@@ -1428,13 +1692,13 @@ const docTemplate = `{
                     "403": {
                         "description": "Forbidden",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "404": {
                         "description": "Not Found",
                         "schema": {
-                            "$ref": "#/definitions/apperror.Problem"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     }
                 }
@@ -1468,19 +1732,19 @@ const docTemplate = `{
                     "403": {
                         "description": "Forbidden",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "404": {
                         "description": "Not Found",
                         "schema": {
-                            "$ref": "#/definitions/apperror.Problem"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "409": {
                         "description": "Conflict",
                         "schema": {
-                            "$ref": "#/definitions/apperror.Problem"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     }
                 }
@@ -1532,36 +1796,37 @@ const docTemplate = `{
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "$ref": "#/definitions/apperror.Problem"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "403": {
                         "description": "Forbidden",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "404": {
                         "description": "Not Found",
                         "schema": {
-                            "$ref": "#/definitions/apperror.Problem"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "409": {
                         "description": "Conflict",
                         "schema": {
-                            "$ref": "#/definitions/apperror.Problem"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     }
                 }
             }
         },
-        "/bots/{bot_id}/agents/{id}/codex/login/device/authorize": {
-            "post": {
+        "/bots/{bot_id}/agents/{id}/codex/usage": {
+            "get": {
+                "description": "Available to anyone who can chat with the Bot, so the composer",
                 "tags": [
                     "external-agents"
                 ],
-                "summary": "Start a ChatGPT device-code login for the direct codex runtime",
+                "summary": "Get the Codex usage limits of the Agent's ChatGPT account",
                 "parameters": [
                     {
                         "type": "string",
@@ -1582,128 +1847,37 @@ const docTemplate = `{
                     "200": {
                         "description": "OK",
                         "schema": {
-                            "$ref": "#/definitions/externalagent.CodexDeviceLoginAuthorizeResponse"
-                        }
-                    },
-                    "400": {
-                        "description": "Bad Request",
-                        "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/externalagent.CodexUsageResponse"
                         }
                     },
                     "403": {
                         "description": "Forbidden",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
-                    "503": {
-                        "description": "Service Unavailable",
+                    "404": {
+                        "description": "Not Found",
                         "schema": {
-                            "$ref": "#/definitions/apperror.Problem"
-                        }
-                    }
-                }
-            }
-        },
-        "/bots/{bot_id}/agents/{id}/codex/login/device/cancel": {
-            "post": {
-                "tags": [
-                    "external-agents"
-                ],
-                "summary": "Cancel a pending codex device-code login",
-                "parameters": [
-                    {
-                        "type": "string",
-                        "description": "Bot ID",
-                        "name": "bot_id",
-                        "in": "path",
-                        "required": true
-                    },
-                    {
-                        "description": "Login reference",
-                        "name": "body",
-                        "in": "body",
-                        "required": true,
-                        "schema": {
-                            "$ref": "#/definitions/externalagent.CodexDeviceLoginPollRequest"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
-                    {
-                        "type": "string",
-                        "description": "Bot Agent ID",
-                        "name": "id",
-                        "in": "path",
-                        "required": true
-                    }
-                ],
-                "responses": {
-                    "204": {
-                        "description": "No Content"
-                    },
-                    "400": {
-                        "description": "Bad Request",
+                    "409": {
+                        "description": "Conflict",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
-                    "403": {
-                        "description": "Forbidden",
+                    "422": {
+                        "description": "Unprocessable Entity",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
-                        }
-                    }
-                }
-            }
-        },
-        "/bots/{bot_id}/agents/{id}/codex/login/device/poll": {
-            "post": {
-                "tags": [
-                    "external-agents"
-                ],
-                "summary": "Poll a pending codex device-code login",
-                "parameters": [
-                    {
-                        "type": "string",
-                        "description": "Bot ID",
-                        "name": "bot_id",
-                        "in": "path",
-                        "required": true
-                    },
-                    {
-                        "description": "Login reference",
-                        "name": "body",
-                        "in": "body",
-                        "required": true,
-                        "schema": {
-                            "$ref": "#/definitions/externalagent.CodexDeviceLoginPollRequest"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
-                    {
-                        "type": "string",
-                        "description": "Bot Agent ID",
-                        "name": "id",
-                        "in": "path",
-                        "required": true
-                    }
-                ],
-                "responses": {
-                    "200": {
-                        "description": "OK",
+                    "502": {
+                        "description": "Bad Gateway",
                         "schema": {
-                            "$ref": "#/definitions/externalagent.CodexDeviceLoginPollResponse"
-                        }
-                    },
-                    "400": {
-                        "description": "Bad Request",
-                        "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
-                        }
-                    },
-                    "403": {
-                        "description": "Forbidden",
-                        "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     }
                 }
@@ -1741,7 +1915,7 @@ const docTemplate = `{
                     "404": {
                         "description": "Not Found",
                         "schema": {
-                            "$ref": "#/definitions/apperror.Problem"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     }
                 }
@@ -1787,25 +1961,25 @@ const docTemplate = `{
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "$ref": "#/definitions/apperror.Problem"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "404": {
                         "description": "Not Found",
                         "schema": {
-                            "$ref": "#/definitions/apperror.Problem"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "422": {
                         "description": "Unprocessable Entity",
                         "schema": {
-                            "$ref": "#/definitions/apperror.Problem"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "503": {
                         "description": "Service Unavailable",
                         "schema": {
-                            "$ref": "#/definitions/apperror.Problem"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     }
                 }
@@ -1838,7 +2012,264 @@ const docTemplate = `{
                     "404": {
                         "description": "Not Found",
                         "schema": {
-                            "$ref": "#/definitions/apperror.Problem"
+                            "$ref": "#/definitions/server.Problem"
+                        }
+                    }
+                }
+            }
+        },
+        "/bots/{bot_id}/agents/{id}/credential/claim": {
+            "post": {
+                "description": "Requires Bot management access and ownership of the authorization. Retrying for the same Agent is safe; an authorization cannot be bound to another Agent. Credentials are attached atomically and removed from the temporary session.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "agent-authorizations"
+                ],
+                "summary": "Bind a completed temporary authorization to a Bot Agent",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Bot ID",
+                        "name": "bot_id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Agent ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "Authorization reference",
+                        "name": "payload",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/handlers.AgentAuthorizationClaimRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/agentcredential.PublicCredential"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/server.Problem"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "$ref": "#/definitions/server.Problem"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/server.Problem"
+                        }
+                    },
+                    "409": {
+                        "description": "Conflict",
+                        "schema": {
+                            "$ref": "#/definitions/server.Problem"
+                        }
+                    },
+                    "410": {
+                        "description": "Gone",
+                        "schema": {
+                            "$ref": "#/definitions/server.Problem"
+                        }
+                    },
+                    "503": {
+                        "description": "Service Unavailable",
+                        "schema": {
+                            "$ref": "#/definitions/server.Problem"
+                        }
+                    }
+                }
+            }
+        },
+        "/bots/{bot_id}/agents/{id}/login/device/authorize": {
+            "post": {
+                "description": "The Agent's own process obtains the device code; the user opens the URL and confirms the code there. Only runtimes that sign in this way (Codex, Grok Build) accept it.",
+                "tags": [
+                    "external-agents"
+                ],
+                "summary": "Start a device-code account sign-in on a direct runtime Agent",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Bot ID",
+                        "name": "bot_id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Bot Agent ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/externalagent.DeviceLoginAuthorizeResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/server.Problem"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "$ref": "#/definitions/server.Problem"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/server.Problem"
+                        }
+                    },
+                    "503": {
+                        "description": "Service Unavailable",
+                        "schema": {
+                            "$ref": "#/definitions/server.Problem"
+                        }
+                    }
+                }
+            }
+        },
+        "/bots/{bot_id}/agents/{id}/login/device/cancel": {
+            "post": {
+                "tags": [
+                    "external-agents"
+                ],
+                "summary": "Cancel a pending device-code sign-in",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Bot ID",
+                        "name": "bot_id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Bot Agent ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "Sign-in reference",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/externalagent.DeviceLoginPollRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "204": {
+                        "description": "No Content"
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/server.Problem"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "$ref": "#/definitions/server.Problem"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/server.Problem"
+                        }
+                    }
+                }
+            }
+        },
+        "/bots/{bot_id}/agents/{id}/login/device/poll": {
+            "post": {
+                "description": "A successful sign-in has already been stored as the Agent's credential when this answers success.",
+                "tags": [
+                    "external-agents"
+                ],
+                "summary": "Poll a pending device-code sign-in",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Bot ID",
+                        "name": "bot_id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Bot Agent ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "Sign-in reference",
+                        "name": "body",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/externalagent.DeviceLoginPollRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/externalagent.DeviceLoginPollResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/server.Problem"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "$ref": "#/definitions/server.Problem"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/server.Problem"
                         }
                     }
                 }
@@ -1864,6 +2295,18 @@ const docTemplate = `{
                         "name": "id",
                         "in": "path",
                         "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Model whose effective defaults should be displayed",
+                        "name": "model_id",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Workspace project path for runtime model settings",
+                        "name": "project_path",
+                        "in": "query"
                     }
                 ],
                 "responses": {
@@ -1876,19 +2319,685 @@ const docTemplate = `{
                     "403": {
                         "description": "Forbidden",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "404": {
                         "description": "Not Found",
                         "schema": {
-                            "$ref": "#/definitions/apperror.Problem"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "503": {
                         "description": "Service Unavailable",
                         "schema": {
-                            "$ref": "#/definitions/apperror.Problem"
+                            "$ref": "#/definitions/server.Problem"
+                        }
+                    }
+                }
+            }
+        },
+        "/bots/{bot_id}/agents/{id}/runtime-controls": {
+            "get": {
+                "tags": [
+                    "bot-agents"
+                ],
+                "summary": "Get bot Agent default runtime controls",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Bot ID",
+                        "name": "bot_id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Agent ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/external.Controls"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "$ref": "#/definitions/server.Problem"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/server.Problem"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/server.Problem"
+                        }
+                    }
+                }
+            }
+        },
+        "/bots/{bot_id}/apps": {
+            "get": {
+                "description": "Every App installed on the bot workspace with its Skills, dependency references and connector references, plus the canonical Apps of dependencies the workspace carries that no App references.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "apps"
+                ],
+                "summary": "List the Apps installed for a bot",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Bot ID",
+                        "name": "bot_id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "boolean",
+                        "description": "Refresh workspace discovery",
+                        "name": "refresh",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.AppListResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/server.Problem"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "$ref": "#/definitions/server.Problem"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/server.Problem"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/server.Problem"
+                        }
+                    },
+                    "503": {
+                        "description": "Service Unavailable",
+                        "schema": {
+                            "$ref": "#/definitions/server.Problem"
+                        }
+                    }
+                }
+            },
+            "post": {
+                "description": "Installs missing dependencies, publishes the Skills and links connectors, streaming progress. A dependency failure or an unauthorized required connector leaves the installation partial. Events: started, step, log, step_done, done, error.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "text/event-stream"
+                ],
+                "tags": [
+                    "apps"
+                ],
+                "summary": "Install an App release into a bot workspace",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Bot ID",
+                        "name": "bot_id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "App release to install",
+                        "name": "payload",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/handlers.AppInstallRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "SSE stream of operation events",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.AppStreamEvent"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/server.Problem"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "$ref": "#/definitions/server.Problem"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/server.Problem"
+                        }
+                    },
+                    "502": {
+                        "description": "Bad Gateway",
+                        "schema": {
+                            "$ref": "#/definitions/server.Problem"
+                        }
+                    }
+                }
+            }
+        },
+        "/bots/{bot_id}/apps/check-updates": {
+            "post": {
+                "description": "Compares every installed App with the registry's current release, runs the dependency update checks, and returns the refreshed list. The checks are bounded in time; update_checks_incomplete marks a list where some did not finish and keep their last result.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "apps"
+                ],
+                "summary": "Check installed Apps for newer releases",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Bot ID",
+                        "name": "bot_id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.AppListResponse"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "$ref": "#/definitions/server.Problem"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/server.Problem"
+                        }
+                    },
+                    "502": {
+                        "description": "Bad Gateway",
+                        "schema": {
+                            "$ref": "#/definitions/server.Problem"
+                        }
+                    }
+                }
+            }
+        },
+        "/bots/{bot_id}/apps/update": {
+            "post": {
+                "description": "Updates the selected dependencies to their latest version and, when release is set, moves the installation to the registry's current release, streaming progress. A discovered App may update its own dependency. Events: started, step, log, step_done, done, error.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "text/event-stream"
+                ],
+                "tags": [
+                    "apps"
+                ],
+                "summary": "Update parts of an App on a bot workspace",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Bot ID",
+                        "name": "bot_id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "What to update",
+                        "name": "payload",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/handlers.AppUpdateRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "SSE stream of operation events",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.AppStreamEvent"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/server.Problem"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "$ref": "#/definitions/server.Problem"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/server.Problem"
+                        }
+                    },
+                    "502": {
+                        "description": "Bad Gateway",
+                        "schema": {
+                            "$ref": "#/definitions/server.Problem"
+                        }
+                    }
+                }
+            }
+        },
+        "/bots/{bot_id}/apps/{installation_id}": {
+            "get": {
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "apps"
+                ],
+                "summary": "Get one installed App",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Bot ID",
+                        "name": "bot_id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "App installation ID",
+                        "name": "installation_id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.AppItem"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "$ref": "#/definitions/server.Problem"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/server.Problem"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/server.Problem"
+                        }
+                    }
+                }
+            },
+            "delete": {
+                "description": "Removes the Skills, the dependencies no other App references and the connections no other App references, streaming progress. Events: started, step, log, step_done, done, error.",
+                "produces": [
+                    "text/event-stream"
+                ],
+                "tags": [
+                    "apps"
+                ],
+                "summary": "Remove an App from a bot workspace",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Bot ID",
+                        "name": "bot_id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "App installation ID",
+                        "name": "installation_id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "boolean",
+                        "description": "Also remove auto-installed Apps that lose their last reference",
+                        "name": "remove_unreferenced_required",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "SSE stream of operation events",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.AppStreamEvent"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "$ref": "#/definitions/server.Problem"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/server.Problem"
+                        }
+                    }
+                }
+            }
+        },
+        "/bots/{bot_id}/apps/{installation_id}/connectors/{connector_type}/api-key": {
+            "post": {
+                "description": "Sends the credential fields to Connect-It and links the resulting connection to the App installation.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "apps"
+                ],
+                "summary": "Connect an API-key connector an App references",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Bot ID",
+                        "name": "bot_id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "App installation ID",
+                        "name": "installation_id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Connector type",
+                        "name": "connector_type",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "Credential request",
+                        "name": "payload",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/handlers.AppConnectorCredentialRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "201": {
+                        "description": "Created",
+                        "schema": {
+                            "$ref": "#/definitions/connectors.Connector"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/server.Problem"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "$ref": "#/definitions/server.Problem"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/server.Problem"
+                        }
+                    },
+                    "502": {
+                        "description": "Bad Gateway",
+                        "schema": {
+                            "$ref": "#/definitions/server.Problem"
+                        }
+                    },
+                    "503": {
+                        "description": "Service Unavailable",
+                        "schema": {
+                            "$ref": "#/definitions/server.Problem"
+                        }
+                    }
+                }
+            }
+        },
+        "/bots/{bot_id}/apps/{installation_id}/connectors/{connector_type}/oauth": {
+            "post": {
+                "description": "Starts OAuth for the connector type and links the resulting Connect-It connection to the App installation.",
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "apps"
+                ],
+                "summary": "Authorize a connector an App references",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Bot ID",
+                        "name": "bot_id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "App installation ID",
+                        "name": "installation_id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Connector type",
+                        "name": "connector_type",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "OAuth request",
+                        "name": "payload",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/handlers.AppConnectorOAuthRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "201": {
+                        "description": "Created",
+                        "schema": {
+                            "$ref": "#/definitions/connectit.OAuthAuthorization"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/server.Problem"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "$ref": "#/definitions/server.Problem"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/server.Problem"
+                        }
+                    },
+                    "502": {
+                        "description": "Bad Gateway",
+                        "schema": {
+                            "$ref": "#/definitions/server.Problem"
+                        }
+                    },
+                    "503": {
+                        "description": "Service Unavailable",
+                        "schema": {
+                            "$ref": "#/definitions/server.Problem"
+                        }
+                    }
+                }
+            }
+        },
+        "/bots/{bot_id}/apps/{installation_id}/removal-preview": {
+            "get": {
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "apps"
+                ],
+                "summary": "Preview what removing an App would do",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Bot ID",
+                        "name": "bot_id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "App installation ID",
+                        "name": "installation_id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.AppRemovalPreviewResponse"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "$ref": "#/definitions/server.Problem"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/server.Problem"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/server.Problem"
+                        }
+                    }
+                }
+            }
+        },
+        "/bots/{bot_id}/apps/{installation_id}/resume": {
+            "post": {
+                "description": "Installs dependencies that are still missing, reconciles the Skills and links connectors that were authorized since. Events: started, step, log, step_done, done, error.",
+                "produces": [
+                    "text/event-stream"
+                ],
+                "tags": [
+                    "apps"
+                ],
+                "summary": "Continue a partial App installation",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Bot ID",
+                        "name": "bot_id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "App installation ID",
+                        "name": "installation_id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "SSE stream of operation events",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.AppStreamEvent"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "$ref": "#/definitions/server.Problem"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/server.Problem"
                         }
                     }
                 }
@@ -1934,19 +3043,19 @@ const docTemplate = `{
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "403": {
                         "description": "Forbidden",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "500": {
                         "description": "Internal Server Error",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     }
                 }
@@ -1980,13 +3089,13 @@ const docTemplate = `{
                     "403": {
                         "description": "Forbidden",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "500": {
                         "description": "Internal Server Error",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     }
                 }
@@ -2018,19 +3127,19 @@ const docTemplate = `{
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "403": {
                         "description": "Forbidden",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "500": {
                         "description": "Internal Server Error",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     }
                 }
@@ -2066,19 +3175,19 @@ const docTemplate = `{
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "403": {
                         "description": "Forbidden",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "500": {
                         "description": "Internal Server Error",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     }
                 }
@@ -2114,19 +3223,19 @@ const docTemplate = `{
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "403": {
                         "description": "Forbidden",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "500": {
                         "description": "Internal Server Error",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     }
                 }
@@ -2172,13 +3281,13 @@ const docTemplate = `{
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "500": {
                         "description": "Internal Server Error",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     }
                 }
@@ -2205,13 +3314,13 @@ const docTemplate = `{
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "500": {
                         "description": "Internal Server Error",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     }
                 }
@@ -2243,185 +3352,31 @@ const docTemplate = `{
                     "403": {
                         "description": "Forbidden",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "404": {
                         "description": "Not Found",
                         "schema": {
-                            "$ref": "#/definitions/apperror.Problem"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "500": {
                         "description": "Internal Server Error",
                         "schema": {
-                            "$ref": "#/definitions/apperror.Problem"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "502": {
                         "description": "Bad Gateway",
                         "schema": {
-                            "$ref": "#/definitions/apperror.Problem"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "503": {
                         "description": "Service Unavailable",
                         "schema": {
-                            "$ref": "#/definitions/apperror.Problem"
-                        }
-                    }
-                }
-            }
-        },
-        "/bots/{bot_id}/connectors/api-key": {
-            "post": {
-                "description": "Send credential fields to Connect-It and store only its connection ID in Memoh.",
-                "tags": [
-                    "connectors"
-                ],
-                "summary": "Connect an API credential provider",
-                "parameters": [
-                    {
-                        "type": "string",
-                        "description": "Bot ID",
-                        "name": "bot_id",
-                        "in": "path",
-                        "required": true
-                    },
-                    {
-                        "description": "Credential request",
-                        "name": "payload",
-                        "in": "body",
-                        "required": true,
-                        "schema": {
-                            "$ref": "#/definitions/handlers.ConnectorCredentialRequest"
-                        }
-                    }
-                ],
-                "responses": {
-                    "201": {
-                        "description": "Created",
-                        "schema": {
-                            "$ref": "#/definitions/connectors.Connector"
-                        }
-                    },
-                    "400": {
-                        "description": "Bad Request",
-                        "schema": {
-                            "$ref": "#/definitions/apperror.Problem"
-                        }
-                    },
-                    "403": {
-                        "description": "Forbidden",
-                        "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
-                        }
-                    },
-                    "404": {
-                        "description": "Not Found",
-                        "schema": {
-                            "$ref": "#/definitions/apperror.Problem"
-                        }
-                    },
-                    "409": {
-                        "description": "Conflict",
-                        "schema": {
-                            "$ref": "#/definitions/apperror.Problem"
-                        }
-                    },
-                    "500": {
-                        "description": "Internal Server Error",
-                        "schema": {
-                            "$ref": "#/definitions/apperror.Problem"
-                        }
-                    },
-                    "502": {
-                        "description": "Bad Gateway",
-                        "schema": {
-                            "$ref": "#/definitions/apperror.Problem"
-                        }
-                    },
-                    "503": {
-                        "description": "Service Unavailable",
-                        "schema": {
-                            "$ref": "#/definitions/apperror.Problem"
-                        }
-                    }
-                }
-            }
-        },
-        "/bots/{bot_id}/connectors/oauth": {
-            "post": {
-                "description": "Create a bot connector and return the end-user authorization URL.",
-                "tags": [
-                    "connectors"
-                ],
-                "summary": "Connect an OAuth provider",
-                "parameters": [
-                    {
-                        "type": "string",
-                        "description": "Bot ID",
-                        "name": "bot_id",
-                        "in": "path",
-                        "required": true
-                    },
-                    {
-                        "description": "OAuth request",
-                        "name": "payload",
-                        "in": "body",
-                        "required": true,
-                        "schema": {
-                            "$ref": "#/definitions/handlers.ConnectorOAuthRequest"
-                        }
-                    }
-                ],
-                "responses": {
-                    "201": {
-                        "description": "Created",
-                        "schema": {
-                            "$ref": "#/definitions/connectit.OAuthAuthorization"
-                        }
-                    },
-                    "400": {
-                        "description": "Bad Request",
-                        "schema": {
-                            "$ref": "#/definitions/apperror.Problem"
-                        }
-                    },
-                    "403": {
-                        "description": "Forbidden",
-                        "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
-                        }
-                    },
-                    "404": {
-                        "description": "Not Found",
-                        "schema": {
-                            "$ref": "#/definitions/apperror.Problem"
-                        }
-                    },
-                    "409": {
-                        "description": "Conflict",
-                        "schema": {
-                            "$ref": "#/definitions/apperror.Problem"
-                        }
-                    },
-                    "500": {
-                        "description": "Internal Server Error",
-                        "schema": {
-                            "$ref": "#/definitions/apperror.Problem"
-                        }
-                    },
-                    "502": {
-                        "description": "Bad Gateway",
-                        "schema": {
-                            "$ref": "#/definitions/apperror.Problem"
-                        }
-                    },
-                    "503": {
-                        "description": "Service Unavailable",
-                        "schema": {
-                            "$ref": "#/definitions/apperror.Problem"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     }
                 }
@@ -2460,43 +3415,43 @@ const docTemplate = `{
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "$ref": "#/definitions/apperror.Problem"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "403": {
                         "description": "Forbidden",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "404": {
                         "description": "Not Found",
                         "schema": {
-                            "$ref": "#/definitions/apperror.Problem"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "500": {
                         "description": "Internal Server Error",
                         "schema": {
-                            "$ref": "#/definitions/apperror.Problem"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "502": {
                         "description": "Bad Gateway",
                         "schema": {
-                            "$ref": "#/definitions/apperror.Problem"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "503": {
                         "description": "Service Unavailable",
                         "schema": {
-                            "$ref": "#/definitions/apperror.Problem"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     }
                 }
             },
             "delete": {
-                "description": "Delete the Connect-It credential and remove its bot binding.",
+                "description": "Delete the Connect-It credential, remove its bot binding and unlink it from every App that referenced it; those Apps ask for authorization again.",
                 "tags": [
                     "connectors"
                 ],
@@ -2524,43 +3479,43 @@ const docTemplate = `{
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "$ref": "#/definitions/apperror.Problem"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "403": {
                         "description": "Forbidden",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "404": {
                         "description": "Not Found",
                         "schema": {
-                            "$ref": "#/definitions/apperror.Problem"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "409": {
                         "description": "Conflict",
                         "schema": {
-                            "$ref": "#/definitions/apperror.Problem"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "500": {
                         "description": "Internal Server Error",
                         "schema": {
-                            "$ref": "#/definitions/apperror.Problem"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "502": {
                         "description": "Bad Gateway",
                         "schema": {
-                            "$ref": "#/definitions/apperror.Problem"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "503": {
                         "description": "Service Unavailable",
                         "schema": {
-                            "$ref": "#/definitions/apperror.Problem"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     }
                 }
@@ -2603,37 +3558,37 @@ const docTemplate = `{
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "$ref": "#/definitions/apperror.Problem"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "403": {
                         "description": "Forbidden",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "404": {
                         "description": "Not Found",
                         "schema": {
-                            "$ref": "#/definitions/apperror.Problem"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "500": {
                         "description": "Internal Server Error",
                         "schema": {
-                            "$ref": "#/definitions/apperror.Problem"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "502": {
                         "description": "Bad Gateway",
                         "schema": {
-                            "$ref": "#/definitions/apperror.Problem"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "503": {
                         "description": "Service Unavailable",
                         "schema": {
-                            "$ref": "#/definitions/apperror.Problem"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     }
                 }
@@ -2672,43 +3627,43 @@ const docTemplate = `{
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "$ref": "#/definitions/apperror.Problem"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "403": {
                         "description": "Forbidden",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "404": {
                         "description": "Not Found",
                         "schema": {
-                            "$ref": "#/definitions/apperror.Problem"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "409": {
                         "description": "Conflict",
                         "schema": {
-                            "$ref": "#/definitions/apperror.Problem"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "500": {
                         "description": "Internal Server Error",
                         "schema": {
-                            "$ref": "#/definitions/apperror.Problem"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "502": {
                         "description": "Bad Gateway",
                         "schema": {
-                            "$ref": "#/definitions/apperror.Problem"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "503": {
                         "description": "Service Unavailable",
                         "schema": {
-                            "$ref": "#/definitions/apperror.Problem"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     }
                 }
@@ -2739,22 +3694,23 @@ const docTemplate = `{
                     "404": {
                         "description": "Not Found",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "500": {
                         "description": "Internal Server Error",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     }
                 }
             },
             "post": {
+                "description": "Records the intent for a running workspace and streams the",
                 "tags": [
                     "containerd"
                 ],
-                "summary": "Create and start workspace for bot",
+                "summary": "Create workspace for bot",
                 "parameters": [
                     {
                         "type": "string",
@@ -2783,18 +3739,19 @@ const docTemplate = `{
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "500": {
                         "description": "Internal Server Error",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     }
                 }
             },
             "delete": {
+                "description": "Records the removal and answers at once. The workspace is gone when GET answers 404; until then GET reports the removal's state.",
                 "tags": [
                     "containerd"
                 ],
@@ -2815,19 +3772,19 @@ const docTemplate = `{
                     }
                 ],
                 "responses": {
-                    "204": {
-                        "description": "No Content"
+                    "202": {
+                        "description": "Accepted"
                     },
                     "404": {
                         "description": "Not Found",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "500": {
                         "description": "Internal Server Error",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     }
                 }
@@ -2867,25 +3824,25 @@ const docTemplate = `{
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "401": {
                         "description": "Unauthorized",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "403": {
                         "description": "Forbidden",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "500": {
                         "description": "Internal Server Error",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     }
                 }
@@ -2920,13 +3877,13 @@ const docTemplate = `{
                     "401": {
                         "description": "Unauthorized",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "403": {
                         "description": "Forbidden",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     }
                 }
@@ -2964,19 +3921,19 @@ const docTemplate = `{
                     "401": {
                         "description": "Unauthorized",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "403": {
                         "description": "Forbidden",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "404": {
                         "description": "Not Found",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     }
                 }
@@ -3007,13 +3964,13 @@ const docTemplate = `{
                     "404": {
                         "description": "Not Found",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "500": {
                         "description": "Internal Server Error",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     }
                 }
@@ -3044,7 +4001,7 @@ const docTemplate = `{
                     "404": {
                         "description": "Not Found",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     }
                 }
@@ -3079,7 +4036,7 @@ const docTemplate = `{
                     "404": {
                         "description": "Not Found",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     }
                 }
@@ -3110,7 +4067,7 @@ const docTemplate = `{
                     "404": {
                         "description": "Not Found",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     }
                 }
@@ -3145,7 +4102,7 @@ const docTemplate = `{
                     "404": {
                         "description": "Not Found",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     }
                 }
@@ -3185,13 +4142,13 @@ const docTemplate = `{
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "503": {
                         "description": "Service Unavailable",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     }
                 }
@@ -3230,31 +4187,31 @@ const docTemplate = `{
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "403": {
                         "description": "Forbidden",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "404": {
                         "description": "Not Found",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "500": {
                         "description": "Internal Server Error",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "503": {
                         "description": "Service Unavailable",
                         "schema": {
-                            "$ref": "#/definitions/apperror.Problem"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     }
                 }
@@ -3298,31 +4255,31 @@ const docTemplate = `{
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "403": {
                         "description": "Forbidden",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "404": {
                         "description": "Not Found",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "500": {
                         "description": "Internal Server Error",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "503": {
                         "description": "Service Unavailable",
                         "schema": {
-                            "$ref": "#/definitions/apperror.Problem"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     }
                 }
@@ -3363,31 +4320,31 @@ const docTemplate = `{
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "403": {
                         "description": "Forbidden",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "404": {
                         "description": "Not Found",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "500": {
                         "description": "Internal Server Error",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "503": {
                         "description": "Service Unavailable",
                         "schema": {
-                            "$ref": "#/definitions/apperror.Problem"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     }
                 }
@@ -3429,25 +4386,25 @@ const docTemplate = `{
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "404": {
                         "description": "Not Found",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "500": {
                         "description": "Internal Server Error",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "503": {
                         "description": "Service Unavailable",
                         "schema": {
-                            "$ref": "#/definitions/apperror.Problem"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     }
                 }
@@ -3488,37 +4445,37 @@ const docTemplate = `{
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "403": {
                         "description": "Forbidden",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "404": {
                         "description": "Not Found",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "409": {
                         "description": "Conflict",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "500": {
                         "description": "Internal Server Error",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "503": {
                         "description": "Service Unavailable",
                         "schema": {
-                            "$ref": "#/definitions/apperror.Problem"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     }
                 }
@@ -3557,25 +4514,25 @@ const docTemplate = `{
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "404": {
                         "description": "Not Found",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "500": {
                         "description": "Internal Server Error",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "503": {
                         "description": "Service Unavailable",
                         "schema": {
-                            "$ref": "#/definitions/apperror.Problem"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     }
                 }
@@ -3583,7 +4540,7 @@ const docTemplate = `{
         },
         "/bots/{bot_id}/container/fs/mkdir": {
             "post": {
-                "description": "Creates a directory (and parents) at the given workspace path",
+                "description": "Creates a directory (and parents) at the given workspace path. workspace_target_id selects an explicit target; when omitted, the Bot's Primary target is used.",
                 "tags": [
                     "containerd"
                 ],
@@ -3616,25 +4573,31 @@ const docTemplate = `{
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "403": {
                         "description": "Forbidden",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "500": {
                         "description": "Internal Server Error",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "503": {
                         "description": "Service Unavailable",
                         "schema": {
-                            "$ref": "#/definitions/apperror.Problem"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     }
                 }
@@ -3673,25 +4636,25 @@ const docTemplate = `{
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "404": {
                         "description": "Not Found",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "500": {
                         "description": "Internal Server Error",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "503": {
                         "description": "Service Unavailable",
                         "schema": {
-                            "$ref": "#/definitions/apperror.Problem"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     }
                 }
@@ -3732,31 +4695,31 @@ const docTemplate = `{
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "403": {
                         "description": "Forbidden",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "404": {
                         "description": "Not Found",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "500": {
                         "description": "Internal Server Error",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "503": {
                         "description": "Service Unavailable",
                         "schema": {
-                            "$ref": "#/definitions/apperror.Problem"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     }
                 }
@@ -3805,25 +4768,25 @@ const docTemplate = `{
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "403": {
                         "description": "Forbidden",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "500": {
                         "description": "Internal Server Error",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "503": {
                         "description": "Service Unavailable",
                         "schema": {
-                            "$ref": "#/definitions/apperror.Problem"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     }
                 }
@@ -3864,25 +4827,25 @@ const docTemplate = `{
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "403": {
                         "description": "Forbidden",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "500": {
                         "description": "Internal Server Error",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "503": {
                         "description": "Service Unavailable",
                         "schema": {
-                            "$ref": "#/definitions/apperror.Problem"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     }
                 }
@@ -3913,7 +4876,7 @@ const docTemplate = `{
                     "500": {
                         "description": "Internal Server Error",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     }
                 }
@@ -3951,13 +4914,42 @@ const docTemplate = `{
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "500": {
                         "description": "Internal Server Error",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
+                        }
+                    }
+                }
+            }
+        },
+        "/bots/{bot_id}/container/removal/cancel": {
+            "post": {
+                "description": "Keeps the workspace after its removal failed. Does nothing when no removal has failed; one still in progress cannot be withdrawn.",
+                "tags": [
+                    "containerd"
+                ],
+                "summary": "Withdraw a failed workspace removal",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Bot ID",
+                        "name": "bot_id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "204": {
+                        "description": "No Content"
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/server.Problem"
                         }
                     }
                 }
@@ -3994,25 +4986,25 @@ const docTemplate = `{
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "403": {
                         "description": "Forbidden",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "404": {
                         "description": "Not Found",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "500": {
                         "description": "Internal Server Error",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     }
                 }
@@ -4050,31 +5042,31 @@ const docTemplate = `{
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "404": {
                         "description": "Not Found",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "409": {
                         "description": "Conflict",
                         "schema": {
-                            "$ref": "#/definitions/apperror.Problem"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "500": {
                         "description": "Internal Server Error",
                         "schema": {
-                            "$ref": "#/definitions/apperror.Problem"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "503": {
                         "description": "Service Unavailable",
                         "schema": {
-                            "$ref": "#/definitions/apperror.Problem"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     }
                 }
@@ -4112,31 +5104,31 @@ const docTemplate = `{
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "404": {
                         "description": "Not Found",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "409": {
                         "description": "Conflict",
                         "schema": {
-                            "$ref": "#/definitions/apperror.Problem"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "500": {
                         "description": "Internal Server Error",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "503": {
                         "description": "Service Unavailable",
                         "schema": {
-                            "$ref": "#/definitions/apperror.Problem"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     }
                 }
@@ -4176,31 +5168,31 @@ const docTemplate = `{
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "404": {
                         "description": "Not Found",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "409": {
                         "description": "Conflict",
                         "schema": {
-                            "$ref": "#/definitions/apperror.Problem"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "500": {
                         "description": "Internal Server Error",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "503": {
                         "description": "Service Unavailable",
                         "schema": {
-                            "$ref": "#/definitions/apperror.Problem"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     }
                 }
@@ -4237,7 +5229,7 @@ const docTemplate = `{
                     "501": {
                         "description": "Snapshots currently not supported on this backend",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     }
                 }
@@ -4275,19 +5267,19 @@ const docTemplate = `{
                     "404": {
                         "description": "Not Found",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "500": {
                         "description": "Internal Server Error",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "501": {
                         "description": "Snapshots currently not supported on this backend",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     }
                 }
@@ -4327,13 +5319,13 @@ const docTemplate = `{
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "500": {
                         "description": "Internal Server Error",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     }
                 }
@@ -4364,13 +5356,13 @@ const docTemplate = `{
                     "404": {
                         "description": "Not Found",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "500": {
                         "description": "Internal Server Error",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     }
                 }
@@ -4401,13 +5393,13 @@ const docTemplate = `{
                     "404": {
                         "description": "Not Found",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "500": {
                         "description": "Internal Server Error",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     }
                 }
@@ -4438,7 +5430,7 @@ const docTemplate = `{
                     "404": {
                         "description": "Not Found",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     }
                 }
@@ -4486,13 +5478,13 @@ const docTemplate = `{
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "500": {
                         "description": "Internal Server Error",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     }
                 }
@@ -4517,12 +5509,6 @@ const docTemplate = `{
                         "required": true
                     },
                     {
-                        "type": "string",
-                        "description": "Workspace target ID (defaults to the bot's current target)",
-                        "name": "workspace_target_id",
-                        "in": "query"
-                    },
-                    {
                         "type": "boolean",
                         "description": "Refresh definitions and workspace discovery",
                         "name": "refresh",
@@ -4539,31 +5525,31 @@ const docTemplate = `{
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "403": {
                         "description": "Forbidden",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "404": {
                         "description": "Not Found",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "500": {
                         "description": "Internal Server Error",
                         "schema": {
-                            "$ref": "#/definitions/apperror.Problem"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "503": {
                         "description": "Service Unavailable",
                         "schema": {
-                            "$ref": "#/definitions/apperror.Problem"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     }
                 }
@@ -4571,7 +5557,7 @@ const docTemplate = `{
         },
         "/bots/{bot_id}/dependencies/check-updates": {
             "post": {
-                "description": "Re-discovers the workspace and runs the upstream update check of every installed tool dependency, then returns the refreshed list.",
+                "description": "Re-discovers the workspace and runs the upstream update check of every installed tool dependency, then returns the refreshed list. The checks are bounded in time; update_checks_incomplete marks a list where some did not finish and keep their last result.",
                 "produces": [
                     "application/json"
                 ],
@@ -4586,12 +5572,6 @@ const docTemplate = `{
                         "name": "bot_id",
                         "in": "path",
                         "required": true
-                    },
-                    {
-                        "type": "string",
-                        "description": "Workspace target ID (defaults to the bot's current target)",
-                        "name": "workspace_target_id",
-                        "in": "query"
                     }
                 ],
                 "responses": {
@@ -4604,31 +5584,31 @@ const docTemplate = `{
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "403": {
                         "description": "Forbidden",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "404": {
                         "description": "Not Found",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "500": {
                         "description": "Internal Server Error",
                         "schema": {
-                            "$ref": "#/definitions/apperror.Problem"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "503": {
                         "description": "Service Unavailable",
                         "schema": {
-                            "$ref": "#/definitions/apperror.Problem"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     }
                 }
@@ -4656,12 +5636,6 @@ const docTemplate = `{
                         "required": true
                     },
                     {
-                        "type": "string",
-                        "description": "Workspace target ID (defaults to the bot's current target)",
-                        "name": "workspace_target_id",
-                        "in": "query"
-                    },
-                    {
                         "description": "Dependencies to check",
                         "name": "payload",
                         "in": "body",
@@ -4681,111 +5655,31 @@ const docTemplate = `{
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "$ref": "#/definitions/apperror.Problem"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "403": {
                         "description": "Forbidden",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "404": {
                         "description": "Not Found",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "500": {
                         "description": "Internal Server Error",
                         "schema": {
-                            "$ref": "#/definitions/apperror.Problem"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "503": {
                         "description": "Service Unavailable",
                         "schema": {
-                            "$ref": "#/definitions/apperror.Problem"
-                        }
-                    }
-                }
-            }
-        },
-        "/bots/{bot_id}/dependencies/{dep_id}": {
-            "delete": {
-                "description": "Runs the catalog remove script, deletes the generated shims, drops the installation record, and streams the output. For a dependency the image ships this removes the managed overlay only; the image copy becomes the one in effect again.",
-                "produces": [
-                    "text/event-stream"
-                ],
-                "tags": [
-                    "containerd"
-                ],
-                "summary": "Remove a workspace dependency",
-                "parameters": [
-                    {
-                        "type": "string",
-                        "description": "Bot ID",
-                        "name": "bot_id",
-                        "in": "path",
-                        "required": true
-                    },
-                    {
-                        "type": "string",
-                        "description": "Dependency ID",
-                        "name": "dep_id",
-                        "in": "path",
-                        "required": true
-                    },
-                    {
-                        "type": "string",
-                        "description": "Workspace target ID (defaults to the bot's current target)",
-                        "name": "workspace_target_id",
-                        "in": "query"
-                    },
-                    {
-                        "description": "Prepared definition revision (optional)",
-                        "name": "payload",
-                        "in": "body",
-                        "schema": {
-                            "$ref": "#/definitions/handlers.WorkspaceDependencyInstallRequest"
-                        }
-                    }
-                ],
-                "responses": {
-                    "200": {
-                        "description": "SSE stream of operation events",
-                        "schema": {
-                            "$ref": "#/definitions/handlers.WorkspaceDependencyStreamEvent"
-                        }
-                    },
-                    "400": {
-                        "description": "Bad Request",
-                        "schema": {
-                            "$ref": "#/definitions/apperror.Problem"
-                        }
-                    },
-                    "403": {
-                        "description": "Forbidden",
-                        "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
-                        }
-                    },
-                    "404": {
-                        "description": "Not Found",
-                        "schema": {
-                            "$ref": "#/definitions/apperror.Problem"
-                        }
-                    },
-                    "422": {
-                        "description": "Unprocessable Entity",
-                        "schema": {
-                            "$ref": "#/definitions/apperror.Problem"
-                        }
-                    },
-                    "503": {
-                        "description": "Service Unavailable",
-                        "schema": {
-                            "$ref": "#/definitions/apperror.Problem"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     }
                 }
@@ -4793,7 +5687,7 @@ const docTemplate = `{
         },
         "/bots/{bot_id}/dependencies/{dep_id}/install": {
             "post": {
-                "description": "Runs the catalog install script and streams its output. The optional body names the version to install; without one the script installs the latest version (or the manifest pin). For a dependency the image already ships this installs a managed overlay that takes precedence over the image copy. A stopped native workspace is started first. Events: started, log, done, error.",
+                "description": "Runs the catalog install script for a dependency an App references and streams its output: a retry after a failed App step, or a managed overlay laid over the copy the workspace image ships. New dependencies reach a bot by installing the App that references them. Events: started, log, done, error.",
                 "consumes": [
                     "application/json"
                 ],
@@ -4803,7 +5697,7 @@ const docTemplate = `{
                 "tags": [
                     "containerd"
                 ],
-                "summary": "Install a workspace dependency",
+                "summary": "Install or reinstall a referenced workspace dependency",
                 "parameters": [
                     {
                         "type": "string",
@@ -4818,12 +5712,6 @@ const docTemplate = `{
                         "name": "dep_id",
                         "in": "path",
                         "required": true
-                    },
-                    {
-                        "type": "string",
-                        "description": "Workspace target ID (defaults to the bot's current target)",
-                        "name": "workspace_target_id",
-                        "in": "query"
                     },
                     {
                         "description": "Version to install (optional)",
@@ -4844,31 +5732,31 @@ const docTemplate = `{
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "$ref": "#/definitions/apperror.Problem"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "403": {
                         "description": "Forbidden",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "404": {
                         "description": "Not Found",
                         "schema": {
-                            "$ref": "#/definitions/apperror.Problem"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "422": {
                         "description": "Unprocessable Entity",
                         "schema": {
-                            "$ref": "#/definitions/apperror.Problem"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "503": {
                         "description": "Service Unavailable",
                         "schema": {
-                            "$ref": "#/definitions/apperror.Problem"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     }
                 }
@@ -4903,12 +5791,6 @@ const docTemplate = `{
                         "required": true
                     },
                     {
-                        "type": "string",
-                        "description": "Workspace target ID (defaults to the bot's current target)",
-                        "name": "workspace_target_id",
-                        "in": "query"
-                    },
-                    {
                         "description": "Version to install (optional)",
                         "name": "payload",
                         "in": "body",
@@ -4927,31 +5809,31 @@ const docTemplate = `{
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "$ref": "#/definitions/apperror.Problem"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "403": {
                         "description": "Forbidden",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "404": {
                         "description": "Not Found",
                         "schema": {
-                            "$ref": "#/definitions/apperror.Problem"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "422": {
                         "description": "Unprocessable Entity",
                         "schema": {
-                            "$ref": "#/definitions/apperror.Problem"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "503": {
                         "description": "Service Unavailable",
                         "schema": {
-                            "$ref": "#/definitions/apperror.Problem"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     }
                 }
@@ -4981,12 +5863,6 @@ const docTemplate = `{
                         "name": "dep_id",
                         "in": "path",
                         "required": true
-                    },
-                    {
-                        "type": "string",
-                        "description": "Workspace target ID (defaults to the bot's current target)",
-                        "name": "workspace_target_id",
-                        "in": "query"
                     }
                 ],
                 "responses": {
@@ -4999,43 +5875,43 @@ const docTemplate = `{
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "$ref": "#/definitions/apperror.Problem"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "403": {
                         "description": "Forbidden",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "404": {
                         "description": "Not Found",
                         "schema": {
-                            "$ref": "#/definitions/apperror.Problem"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "409": {
                         "description": "Conflict",
                         "schema": {
-                            "$ref": "#/definitions/apperror.Problem"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "422": {
                         "description": "Unprocessable Entity",
                         "schema": {
-                            "$ref": "#/definitions/apperror.Problem"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "500": {
                         "description": "Internal Server Error",
                         "schema": {
-                            "$ref": "#/definitions/apperror.Problem"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "503": {
                         "description": "Service Unavailable",
                         "schema": {
-                            "$ref": "#/definitions/apperror.Problem"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     }
                 }
@@ -5082,12 +5958,6 @@ const docTemplate = `{
                     },
                     {
                         "type": "string",
-                        "description": "Workspace target ID (defaults to the bot's current target)",
-                        "name": "workspace_target_id",
-                        "in": "query"
-                    },
-                    {
-                        "type": "string",
                         "description": "Keep a previously prepared definition revision",
                         "name": "definition_revision",
                         "in": "query"
@@ -5103,31 +5973,31 @@ const docTemplate = `{
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "$ref": "#/definitions/apperror.Problem"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "403": {
                         "description": "Forbidden",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "404": {
                         "description": "Not Found",
                         "schema": {
-                            "$ref": "#/definitions/apperror.Problem"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "422": {
                         "description": "Unprocessable Entity",
                         "schema": {
-                            "$ref": "#/definitions/apperror.Problem"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "503": {
                         "description": "Service Unavailable",
                         "schema": {
-                            "$ref": "#/definitions/apperror.Problem"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     }
                 }
@@ -5162,12 +6032,6 @@ const docTemplate = `{
                         "required": true
                     },
                     {
-                        "type": "string",
-                        "description": "Workspace target ID (defaults to the bot's current target)",
-                        "name": "workspace_target_id",
-                        "in": "query"
-                    },
-                    {
                         "description": "Version to update to (optional)",
                         "name": "payload",
                         "in": "body",
@@ -5186,300 +6050,31 @@ const docTemplate = `{
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "$ref": "#/definitions/apperror.Problem"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "403": {
                         "description": "Forbidden",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "404": {
                         "description": "Not Found",
                         "schema": {
-                            "$ref": "#/definitions/apperror.Problem"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "422": {
                         "description": "Unprocessable Entity",
                         "schema": {
-                            "$ref": "#/definitions/apperror.Problem"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "503": {
                         "description": "Service Unavailable",
                         "schema": {
-                            "$ref": "#/definitions/apperror.Problem"
-                        }
-                    }
-                }
-            }
-        },
-        "/bots/{bot_id}/email-bindings": {
-            "get": {
-                "produces": [
-                    "application/json"
-                ],
-                "tags": [
-                    "email-bindings"
-                ],
-                "summary": "List email bindings for a bot",
-                "parameters": [
-                    {
-                        "type": "string",
-                        "description": "Bot ID",
-                        "name": "bot_id",
-                        "in": "path",
-                        "required": true
-                    }
-                ],
-                "responses": {
-                    "200": {
-                        "description": "OK",
-                        "schema": {
-                            "type": "array",
-                            "items": {
-                                "$ref": "#/definitions/email.BindingResponse"
-                            }
-                        }
-                    },
-                    "500": {
-                        "description": "Internal Server Error",
-                        "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
-                        }
-                    }
-                }
-            },
-            "post": {
-                "consumes": [
-                    "application/json"
-                ],
-                "produces": [
-                    "application/json"
-                ],
-                "tags": [
-                    "email-bindings"
-                ],
-                "summary": "Bind an email provider to a bot",
-                "parameters": [
-                    {
-                        "type": "string",
-                        "description": "Bot ID",
-                        "name": "bot_id",
-                        "in": "path",
-                        "required": true
-                    },
-                    {
-                        "description": "Binding configuration",
-                        "name": "request",
-                        "in": "body",
-                        "required": true,
-                        "schema": {
-                            "$ref": "#/definitions/email.CreateBindingRequest"
-                        }
-                    }
-                ],
-                "responses": {
-                    "201": {
-                        "description": "Created",
-                        "schema": {
-                            "$ref": "#/definitions/email.BindingResponse"
-                        }
-                    },
-                    "400": {
-                        "description": "Bad Request",
-                        "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
-                        }
-                    },
-                    "500": {
-                        "description": "Internal Server Error",
-                        "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
-                        }
-                    }
-                }
-            }
-        },
-        "/bots/{bot_id}/email-bindings/{id}": {
-            "put": {
-                "consumes": [
-                    "application/json"
-                ],
-                "produces": [
-                    "application/json"
-                ],
-                "tags": [
-                    "email-bindings"
-                ],
-                "summary": "Update an email binding",
-                "parameters": [
-                    {
-                        "type": "string",
-                        "description": "Bot ID",
-                        "name": "bot_id",
-                        "in": "path",
-                        "required": true
-                    },
-                    {
-                        "type": "string",
-                        "description": "Binding ID",
-                        "name": "id",
-                        "in": "path",
-                        "required": true
-                    },
-                    {
-                        "description": "Updated binding",
-                        "name": "request",
-                        "in": "body",
-                        "required": true,
-                        "schema": {
-                            "$ref": "#/definitions/email.UpdateBindingRequest"
-                        }
-                    }
-                ],
-                "responses": {
-                    "200": {
-                        "description": "OK",
-                        "schema": {
-                            "$ref": "#/definitions/email.BindingResponse"
-                        }
-                    },
-                    "400": {
-                        "description": "Bad Request",
-                        "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
-                        }
-                    },
-                    "500": {
-                        "description": "Internal Server Error",
-                        "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
-                        }
-                    }
-                }
-            },
-            "delete": {
-                "tags": [
-                    "email-bindings"
-                ],
-                "summary": "Remove an email binding",
-                "parameters": [
-                    {
-                        "type": "string",
-                        "description": "Bot ID",
-                        "name": "bot_id",
-                        "in": "path",
-                        "required": true
-                    },
-                    {
-                        "type": "string",
-                        "description": "Binding ID",
-                        "name": "id",
-                        "in": "path",
-                        "required": true
-                    }
-                ],
-                "responses": {
-                    "204": {
-                        "description": "No Content"
-                    },
-                    "500": {
-                        "description": "Internal Server Error",
-                        "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
-                        }
-                    }
-                }
-            }
-        },
-        "/bots/{bot_id}/email-outbox": {
-            "get": {
-                "produces": [
-                    "application/json"
-                ],
-                "tags": [
-                    "email-outbox"
-                ],
-                "summary": "List outbox emails for a bot (audit)",
-                "parameters": [
-                    {
-                        "type": "string",
-                        "description": "Bot ID",
-                        "name": "bot_id",
-                        "in": "path",
-                        "required": true
-                    },
-                    {
-                        "type": "integer",
-                        "default": 20,
-                        "description": "Limit",
-                        "name": "limit",
-                        "in": "query"
-                    },
-                    {
-                        "type": "integer",
-                        "default": 0,
-                        "description": "Offset",
-                        "name": "offset",
-                        "in": "query"
-                    }
-                ],
-                "responses": {
-                    "200": {
-                        "description": "OK",
-                        "schema": {
-                            "type": "object",
-                            "additionalProperties": true
-                        }
-                    },
-                    "500": {
-                        "description": "Internal Server Error",
-                        "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
-                        }
-                    }
-                }
-            }
-        },
-        "/bots/{bot_id}/email-outbox/{id}": {
-            "get": {
-                "produces": [
-                    "application/json"
-                ],
-                "tags": [
-                    "email-outbox"
-                ],
-                "summary": "Get outbox email detail",
-                "parameters": [
-                    {
-                        "type": "string",
-                        "description": "Bot ID",
-                        "name": "bot_id",
-                        "in": "path",
-                        "required": true
-                    },
-                    {
-                        "type": "string",
-                        "description": "Email ID",
-                        "name": "id",
-                        "in": "path",
-                        "required": true
-                    }
-                ],
-                "responses": {
-                    "200": {
-                        "description": "OK",
-                        "schema": {
-                            "$ref": "#/definitions/email.OutboxItemResponse"
-                        }
-                    },
-                    "404": {
-                        "description": "Not Found",
-                        "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     }
                 }
@@ -5510,19 +6105,19 @@ const docTemplate = `{
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "403": {
                         "description": "Forbidden",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "500": {
                         "description": "Internal Server Error",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     }
                 }
@@ -5562,19 +6157,19 @@ const docTemplate = `{
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "403": {
                         "description": "Forbidden",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "500": {
                         "description": "Internal Server Error",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     }
                 }
@@ -5597,25 +6192,25 @@ const docTemplate = `{
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "403": {
                         "description": "Forbidden",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "404": {
                         "description": "Not Found",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "500": {
                         "description": "Internal Server Error",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     }
                 }
@@ -5647,25 +6242,25 @@ const docTemplate = `{
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "403": {
                         "description": "Forbidden",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "404": {
                         "description": "Not Found",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "500": {
                         "description": "Internal Server Error",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     }
                 }
@@ -5696,19 +6291,19 @@ const docTemplate = `{
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "403": {
                         "description": "Forbidden",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "500": {
                         "description": "Internal Server Error",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     }
                 }
@@ -5731,19 +6326,19 @@ const docTemplate = `{
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "403": {
                         "description": "Forbidden",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "500": {
                         "description": "Internal Server Error",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     }
                 }
@@ -5777,19 +6372,19 @@ const docTemplate = `{
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "403": {
                         "description": "Forbidden",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "500": {
                         "description": "Internal Server Error",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     }
                 }
@@ -5830,19 +6425,19 @@ const docTemplate = `{
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "404": {
                         "description": "Not Found",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "500": {
                         "description": "Internal Server Error",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     }
                 }
@@ -5890,19 +6485,19 @@ const docTemplate = `{
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "404": {
                         "description": "Not Found",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "500": {
                         "description": "Internal Server Error",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     }
                 }
@@ -5934,25 +6529,25 @@ const docTemplate = `{
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "403": {
                         "description": "Forbidden",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "404": {
                         "description": "Not Found",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "500": {
                         "description": "Internal Server Error",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     }
                 }
@@ -5991,25 +6586,25 @@ const docTemplate = `{
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "403": {
                         "description": "Forbidden",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "404": {
                         "description": "Not Found",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "500": {
                         "description": "Internal Server Error",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     }
                 }
@@ -6036,25 +6631,25 @@ const docTemplate = `{
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "403": {
                         "description": "Forbidden",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "404": {
                         "description": "Not Found",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "500": {
                         "description": "Internal Server Error",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     }
                 }
@@ -6094,13 +6689,13 @@ const docTemplate = `{
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "404": {
                         "description": "Not Found",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     }
                 }
@@ -6140,13 +6735,13 @@ const docTemplate = `{
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "404": {
                         "description": "Not Found",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     }
                 }
@@ -6183,7 +6778,7 @@ const docTemplate = `{
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     }
                 }
@@ -6215,13 +6810,13 @@ const docTemplate = `{
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "404": {
                         "description": "Not Found",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     }
                 }
@@ -6250,7 +6845,7 @@ const docTemplate = `{
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     }
                 }
@@ -6282,25 +6877,25 @@ const docTemplate = `{
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "403": {
                         "description": "Forbidden",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "404": {
                         "description": "Not Found",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "500": {
                         "description": "Internal Server Error",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     }
                 }
@@ -6341,25 +6936,25 @@ const docTemplate = `{
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "403": {
                         "description": "Forbidden",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "500": {
                         "description": "Internal Server Error",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "503": {
                         "description": "Service Unavailable",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     }
                 }
@@ -6404,25 +6999,25 @@ const docTemplate = `{
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "403": {
                         "description": "Forbidden",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "500": {
                         "description": "Internal Server Error",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "503": {
                         "description": "Service Unavailable",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     }
                 }
@@ -6466,25 +7061,25 @@ const docTemplate = `{
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "403": {
                         "description": "Forbidden",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "500": {
                         "description": "Internal Server Error",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "503": {
                         "description": "Service Unavailable",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     }
                 }
@@ -6531,31 +7126,31 @@ const docTemplate = `{
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "403": {
                         "description": "Forbidden",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "500": {
                         "description": "Internal Server Error",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "501": {
                         "description": "Not Implemented",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "503": {
                         "description": "Service Unavailable",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     }
                 }
@@ -6590,19 +7185,19 @@ const docTemplate = `{
                     "403": {
                         "description": "Forbidden",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "500": {
                         "description": "Internal Server Error",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "503": {
                         "description": "Service Unavailable",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     }
                 }
@@ -6637,31 +7232,31 @@ const docTemplate = `{
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "403": {
                         "description": "Forbidden",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "409": {
                         "description": "Conflict",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "500": {
                         "description": "Internal Server Error",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "503": {
                         "description": "Service Unavailable",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     }
                 }
@@ -6696,31 +7291,31 @@ const docTemplate = `{
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "403": {
                         "description": "Forbidden",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "409": {
                         "description": "Conflict",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "500": {
                         "description": "Internal Server Error",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "503": {
                         "description": "Service Unavailable",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     }
                 }
@@ -6767,31 +7362,31 @@ const docTemplate = `{
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "403": {
                         "description": "Forbidden",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "404": {
                         "description": "Not Found",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "500": {
                         "description": "Internal Server Error",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "503": {
                         "description": "Service Unavailable",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     }
                 }
@@ -6826,31 +7421,31 @@ const docTemplate = `{
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "403": {
                         "description": "Forbidden",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "409": {
                         "description": "Conflict",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "500": {
                         "description": "Internal Server Error",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "503": {
                         "description": "Service Unavailable",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     }
                 }
@@ -6885,25 +7480,25 @@ const docTemplate = `{
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "403": {
                         "description": "Forbidden",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "500": {
                         "description": "Internal Server Error",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "503": {
                         "description": "Service Unavailable",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     }
                 }
@@ -6945,25 +7540,25 @@ const docTemplate = `{
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "403": {
                         "description": "Forbidden",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "500": {
                         "description": "Internal Server Error",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "503": {
                         "description": "Service Unavailable",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     }
                 }
@@ -7017,25 +7612,25 @@ const docTemplate = `{
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "403": {
                         "description": "Forbidden",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "500": {
                         "description": "Internal Server Error",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "503": {
                         "description": "Service Unavailable",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     }
                 }
@@ -7101,25 +7696,25 @@ const docTemplate = `{
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "403": {
                         "description": "Forbidden",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "404": {
                         "description": "Not Found",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "500": {
                         "description": "Internal Server Error",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     }
                 }
@@ -7149,19 +7744,19 @@ const docTemplate = `{
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "403": {
                         "description": "Forbidden",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "500": {
                         "description": "Internal Server Error",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     }
                 }
@@ -7230,25 +7825,25 @@ const docTemplate = `{
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "403": {
                         "description": "Forbidden",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "404": {
                         "description": "Not Found",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "500": {
                         "description": "Internal Server Error",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     }
                 }
@@ -7295,19 +7890,19 @@ const docTemplate = `{
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "403": {
                         "description": "Forbidden",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "500": {
                         "description": "Internal Server Error",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     }
                 }
@@ -7339,13 +7934,13 @@ const docTemplate = `{
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "500": {
                         "description": "Internal Server Error",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     }
                 }
@@ -7384,13 +7979,13 @@ const docTemplate = `{
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "500": {
                         "description": "Internal Server Error",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     }
                 }
@@ -7436,13 +8031,13 @@ const docTemplate = `{
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "500": {
                         "description": "Internal Server Error",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     }
                 }
@@ -7469,13 +8064,13 @@ const docTemplate = `{
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "500": {
                         "description": "Internal Server Error",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     }
                 }
@@ -7514,19 +8109,19 @@ const docTemplate = `{
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "404": {
                         "description": "Not Found",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "500": {
                         "description": "Internal Server Error",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     }
                 }
@@ -7572,13 +8167,13 @@ const docTemplate = `{
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "500": {
                         "description": "Internal Server Error",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     }
                 }
@@ -7612,13 +8207,13 @@ const docTemplate = `{
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "500": {
                         "description": "Internal Server Error",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     }
                 }
@@ -7671,13 +8266,83 @@ const docTemplate = `{
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "500": {
                         "description": "Internal Server Error",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
+                        }
+                    }
+                }
+            }
+        },
+        "/bots/{bot_id}/schedule/{id}/sessions": {
+            "get": {
+                "description": "List a schedule's runs newest first, each with the session it ran in. Runs whose session was deleted are omitted; a run that failed before it had a session is included with an empty session_id. status is running until the run completes.",
+                "tags": [
+                    "schedule"
+                ],
+                "summary": "List the sessions a schedule's runs created",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Bot ID",
+                        "name": "bot_id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Schedule ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "integer",
+                        "default": 20,
+                        "description": "Page size (1..100)",
+                        "name": "limit",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Opaque cursor returned as next_cursor on a previous page",
+                        "name": "cursor",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/schedule.ListRunSessionsResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/server.Problem"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "$ref": "#/definitions/server.Problem"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/server.Problem"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/server.Problem"
                         }
                     }
                 }
@@ -7716,6 +8381,12 @@ const docTemplate = `{
                         "in": "query"
                     },
                     {
+                        "type": "boolean",
+                        "description": "Leave out sessions schedule runs created, except one a schedule still runs in. The sidebar lists them under their schedule.",
+                        "name": "hide_schedule_runs",
+                        "in": "query"
+                    },
+                    {
                         "type": "integer",
                         "description": "Page size (1..200). Defaults to 50.",
                         "name": "limit",
@@ -7738,13 +8409,13 @@ const docTemplate = `{
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "403": {
                         "description": "Forbidden",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     }
                 }
@@ -7782,13 +8453,13 @@ const docTemplate = `{
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "403": {
                         "description": "Forbidden",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     }
                 }
@@ -7796,7 +8467,7 @@ const docTemplate = `{
         },
         "/bots/{bot_id}/sessions/events": {
             "get": {
-                "description": "Lightweight SSE for sidebar live-sort. Carries only session\nidentifiers and minimal metadata (touched timestamps, titles).\nNever includes message bodies. Filters out internal session\ntypes such as schedule and subagent.",
+                "description": "Lightweight SSE for sidebar live-sort. Carries only session\nidentifiers and minimal metadata (touched timestamps, titles).\nNever includes message bodies. Filters out sessions with\ninternal visibility, such as managed subagent work.",
                 "produces": [
                     "text/event-stream"
                 ],
@@ -7823,19 +8494,19 @@ const docTemplate = `{
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "403": {
                         "description": "Forbidden",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "500": {
                         "description": "Internal Server Error",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     }
                 }
@@ -7866,13 +8537,13 @@ const docTemplate = `{
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "403": {
                         "description": "Forbidden",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     }
                 }
@@ -7910,19 +8581,19 @@ const docTemplate = `{
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "403": {
                         "description": "Forbidden",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "404": {
                         "description": "Not Found",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     }
                 }
@@ -7955,13 +8626,13 @@ const docTemplate = `{
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "403": {
                         "description": "Forbidden",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     }
                 }
@@ -8006,25 +8677,25 @@ const docTemplate = `{
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "403": {
                         "description": "Forbidden",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "404": {
                         "description": "Not Found",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "409": {
                         "description": "Conflict",
                         "schema": {
-                            "$ref": "#/definitions/apperror.Problem"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     }
                 }
@@ -8062,31 +8733,31 @@ const docTemplate = `{
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "$ref": "#/definitions/apperror.Problem"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "403": {
                         "description": "Forbidden",
                         "schema": {
-                            "$ref": "#/definitions/apperror.Problem"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "404": {
                         "description": "Not Found",
                         "schema": {
-                            "$ref": "#/definitions/apperror.Problem"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "409": {
                         "description": "Conflict",
                         "schema": {
-                            "$ref": "#/definitions/apperror.Problem"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "500": {
                         "description": "Internal Server Error",
                         "schema": {
-                            "$ref": "#/definitions/apperror.Problem"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     }
                 }
@@ -8122,37 +8793,37 @@ const docTemplate = `{
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "$ref": "#/definitions/apperror.Problem"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "403": {
                         "description": "Forbidden",
                         "schema": {
-                            "$ref": "#/definitions/apperror.Problem"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "404": {
                         "description": "Not Found",
                         "schema": {
-                            "$ref": "#/definitions/apperror.Problem"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "409": {
                         "description": "Conflict",
                         "schema": {
-                            "$ref": "#/definitions/apperror.Problem"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "500": {
                         "description": "Internal Server Error",
                         "schema": {
-                            "$ref": "#/definitions/apperror.Problem"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "502": {
                         "description": "Bad Gateway",
                         "schema": {
-                            "$ref": "#/definitions/apperror.Problem"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     }
                 }
@@ -8200,37 +8871,37 @@ const docTemplate = `{
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "$ref": "#/definitions/apperror.Problem"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "403": {
                         "description": "Forbidden",
                         "schema": {
-                            "$ref": "#/definitions/apperror.Problem"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "404": {
                         "description": "Not Found",
                         "schema": {
-                            "$ref": "#/definitions/apperror.Problem"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "409": {
                         "description": "Conflict",
                         "schema": {
-                            "$ref": "#/definitions/apperror.Problem"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "500": {
                         "description": "Internal Server Error",
                         "schema": {
-                            "$ref": "#/definitions/apperror.Problem"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "502": {
                         "description": "Bad Gateway",
                         "schema": {
-                            "$ref": "#/definitions/apperror.Problem"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     }
                 }
@@ -8277,37 +8948,37 @@ const docTemplate = `{
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "$ref": "#/definitions/apperror.Problem"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "403": {
                         "description": "Forbidden",
                         "schema": {
-                            "$ref": "#/definitions/apperror.Problem"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "404": {
                         "description": "Not Found",
                         "schema": {
-                            "$ref": "#/definitions/apperror.Problem"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "409": {
                         "description": "Conflict",
                         "schema": {
-                            "$ref": "#/definitions/apperror.Problem"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "500": {
                         "description": "Internal Server Error",
                         "schema": {
-                            "$ref": "#/definitions/apperror.Problem"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "502": {
                         "description": "Bad Gateway",
                         "schema": {
-                            "$ref": "#/definitions/apperror.Problem"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     }
                 }
@@ -8354,37 +9025,37 @@ const docTemplate = `{
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "$ref": "#/definitions/apperror.Problem"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "403": {
                         "description": "Forbidden",
                         "schema": {
-                            "$ref": "#/definitions/apperror.Problem"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "404": {
                         "description": "Not Found",
                         "schema": {
-                            "$ref": "#/definitions/apperror.Problem"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "409": {
                         "description": "Conflict",
                         "schema": {
-                            "$ref": "#/definitions/apperror.Problem"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "500": {
                         "description": "Internal Server Error",
                         "schema": {
-                            "$ref": "#/definitions/apperror.Problem"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "502": {
                         "description": "Bad Gateway",
                         "schema": {
-                            "$ref": "#/definitions/apperror.Problem"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     }
                 }
@@ -8423,13 +9094,13 @@ const docTemplate = `{
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "$ref": "#/definitions/apperror.Problem"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "500": {
                         "description": "Internal Server Error",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     }
                 }
@@ -8474,31 +9145,31 @@ const docTemplate = `{
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "$ref": "#/definitions/apperror.Problem"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "401": {
                         "description": "Unauthorized",
                         "schema": {
-                            "$ref": "#/definitions/apperror.Problem"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "403": {
                         "description": "Forbidden",
                         "schema": {
-                            "$ref": "#/definitions/apperror.Problem"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "404": {
                         "description": "Not Found",
                         "schema": {
-                            "$ref": "#/definitions/apperror.Problem"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "500": {
                         "description": "Internal Server Error",
                         "schema": {
-                            "$ref": "#/definitions/apperror.Problem"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     }
                 }
@@ -8536,7 +9207,7 @@ const docTemplate = `{
                     "403": {
                         "description": "Forbidden",
                         "schema": {
-                            "$ref": "#/definitions/apperror.Problem"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     }
                 }
@@ -8581,19 +9252,19 @@ const docTemplate = `{
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "$ref": "#/definitions/apperror.Problem"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "403": {
                         "description": "Forbidden",
                         "schema": {
-                            "$ref": "#/definitions/apperror.Problem"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "409": {
                         "description": "Conflict",
                         "schema": {
-                            "$ref": "#/definitions/apperror.Problem"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     }
                 }
@@ -8640,19 +9311,19 @@ const docTemplate = `{
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "$ref": "#/definitions/apperror.Problem"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "403": {
                         "description": "Forbidden",
                         "schema": {
-                            "$ref": "#/definitions/apperror.Problem"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "409": {
                         "description": "Conflict",
                         "schema": {
-                            "$ref": "#/definitions/apperror.Problem"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     }
                 }
@@ -8694,19 +9365,19 @@ const docTemplate = `{
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "$ref": "#/definitions/apperror.Problem"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "403": {
                         "description": "Forbidden",
                         "schema": {
-                            "$ref": "#/definitions/apperror.Problem"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "409": {
                         "description": "Conflict",
                         "schema": {
-                            "$ref": "#/definitions/apperror.Problem"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     }
                 }
@@ -8758,19 +9429,19 @@ const docTemplate = `{
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "$ref": "#/definitions/apperror.Problem"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "403": {
                         "description": "Forbidden",
                         "schema": {
-                            "$ref": "#/definitions/apperror.Problem"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "409": {
                         "description": "Conflict",
                         "schema": {
-                            "$ref": "#/definitions/apperror.Problem"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     }
                 }
@@ -8815,19 +9486,19 @@ const docTemplate = `{
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "$ref": "#/definitions/apperror.Problem"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "403": {
                         "description": "Forbidden",
                         "schema": {
-                            "$ref": "#/definitions/apperror.Problem"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "409": {
                         "description": "Conflict",
                         "schema": {
-                            "$ref": "#/definitions/apperror.Problem"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     }
                 }
@@ -8874,25 +9545,89 @@ const docTemplate = `{
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "403": {
                         "description": "Forbidden",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "404": {
                         "description": "Not Found",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "409": {
                         "description": "Conflict",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
+                        }
+                    }
+                }
+            }
+        },
+        "/bots/{bot_id}/sessions/{session_id}/invocations/{invocation_id}": {
+            "get": {
+                "description": "Read-only. Lets a client that lost the acknowledgement of a send learn whether the invocation was admitted and what state its run is in. An unknown invocation returns 200 with found=false.",
+                "tags": [
+                    "sessions"
+                ],
+                "summary": "Look up the run admitted for a client invocation",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Bot ID",
+                        "name": "bot_id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Session ID",
+                        "name": "session_id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Client invocation ID",
+                        "name": "invocation_id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.sessionInvocationResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/server.Problem"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "$ref": "#/definitions/server.Problem"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/server.Problem"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/server.Problem"
                         }
                     }
                 }
@@ -8930,7 +9665,291 @@ const docTemplate = `{
                     "403": {
                         "description": "Forbidden",
                         "schema": {
-                            "$ref": "#/definitions/apperror.Problem"
+                            "$ref": "#/definitions/server.Problem"
+                        }
+                    }
+                }
+            }
+        },
+        "/bots/{bot_id}/sessions/{session_id}/runtime-controls": {
+            "get": {
+                "tags": [
+                    "sessions"
+                ],
+                "summary": "Get session runtime controls",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Bot ID",
+                        "name": "bot_id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Session ID",
+                        "name": "session_id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/external.Controls"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/server.Problem"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "$ref": "#/definitions/server.Problem"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/server.Problem"
+                        }
+                    }
+                }
+            }
+        },
+        "/bots/{bot_id}/sessions/{session_id}/runtime-controls/commands": {
+            "post": {
+                "tags": [
+                    "sessions"
+                ],
+                "summary": "Execute a read or operation runtime command",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Bot ID",
+                        "name": "bot_id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Session ID",
+                        "name": "session_id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "Runtime command",
+                        "name": "payload",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/handlers.RuntimeCommandRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.RuntimeCommandResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/server.Problem"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "$ref": "#/definitions/server.Problem"
+                        }
+                    },
+                    "409": {
+                        "description": "Conflict",
+                        "schema": {
+                            "$ref": "#/definitions/server.Problem"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/server.Problem"
+                        }
+                    }
+                }
+            }
+        },
+        "/bots/{bot_id}/sessions/{session_id}/runtime-controls/goal": {
+            "get": {
+                "tags": [
+                    "sessions"
+                ],
+                "summary": "Get the runtime-owned goal",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Bot ID",
+                        "name": "bot_id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Session ID",
+                        "name": "session_id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.RuntimeGoalResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/server.Problem"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "$ref": "#/definitions/server.Problem"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/server.Problem"
+                        }
+                    }
+                }
+            },
+            "post": {
+                "tags": [
+                    "sessions"
+                ],
+                "summary": "Pause or clear a runtime-owned goal",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Bot ID",
+                        "name": "bot_id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Session ID",
+                        "name": "session_id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "Goal action",
+                        "name": "payload",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/handlers.RuntimeGoalRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "204": {
+                        "description": "No Content"
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/server.Problem"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "$ref": "#/definitions/server.Problem"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/server.Problem"
+                        }
+                    }
+                }
+            }
+        },
+        "/bots/{bot_id}/sessions/{session_id}/runtime-controls/mode": {
+            "patch": {
+                "tags": [
+                    "sessions"
+                ],
+                "summary": "Set session runtime permission or planning mode",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Bot ID",
+                        "name": "bot_id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Session ID",
+                        "name": "session_id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "Permission mode",
+                        "name": "payload",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/handlers.RuntimeModeRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/external.ModeState"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/server.Problem"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "$ref": "#/definitions/server.Problem"
+                        }
+                    },
+                    "409": {
+                        "description": "Conflict",
+                        "schema": {
+                            "$ref": "#/definitions/server.Problem"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/server.Problem"
                         }
                     }
                 }
@@ -8975,19 +9994,19 @@ const docTemplate = `{
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "403": {
                         "description": "Forbidden",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "500": {
                         "description": "Internal Server Error",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     }
                 }
@@ -9025,7 +10044,7 @@ const docTemplate = `{
                     "403": {
                         "description": "Forbidden",
                         "schema": {
-                            "$ref": "#/definitions/apperror.Problem"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     }
                 }
@@ -9070,19 +10089,19 @@ const docTemplate = `{
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "$ref": "#/definitions/apperror.Problem"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "403": {
                         "description": "Forbidden",
                         "schema": {
-                            "$ref": "#/definitions/apperror.Problem"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "409": {
                         "description": "Conflict",
                         "schema": {
-                            "$ref": "#/definitions/apperror.Problem"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     }
                 }
@@ -9129,19 +10148,19 @@ const docTemplate = `{
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "$ref": "#/definitions/apperror.Problem"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "403": {
                         "description": "Forbidden",
                         "schema": {
-                            "$ref": "#/definitions/apperror.Problem"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "409": {
                         "description": "Conflict",
                         "schema": {
-                            "$ref": "#/definitions/apperror.Problem"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     }
                 }
@@ -9183,19 +10202,19 @@ const docTemplate = `{
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "$ref": "#/definitions/apperror.Problem"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "403": {
                         "description": "Forbidden",
                         "schema": {
-                            "$ref": "#/definitions/apperror.Problem"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "409": {
                         "description": "Conflict",
                         "schema": {
-                            "$ref": "#/definitions/apperror.Problem"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     }
                 }
@@ -9247,19 +10266,19 @@ const docTemplate = `{
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "$ref": "#/definitions/apperror.Problem"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "403": {
                         "description": "Forbidden",
                         "schema": {
-                            "$ref": "#/definitions/apperror.Problem"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "409": {
                         "description": "Conflict",
                         "schema": {
-                            "$ref": "#/definitions/apperror.Problem"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     }
                 }
@@ -9291,13 +10310,13 @@ const docTemplate = `{
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "500": {
                         "description": "Internal Server Error",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     }
                 }
@@ -9336,19 +10355,19 @@ const docTemplate = `{
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "$ref": "#/definitions/apperror.Problem"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "500": {
                         "description": "Internal Server Error",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "503": {
                         "description": "Service Unavailable",
                         "schema": {
-                            "$ref": "#/definitions/apperror.Problem"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     }
                 }
@@ -9387,19 +10406,19 @@ const docTemplate = `{
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "$ref": "#/definitions/apperror.Problem"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "500": {
                         "description": "Internal Server Error",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "503": {
                         "description": "Service Unavailable",
                         "schema": {
-                            "$ref": "#/definitions/apperror.Problem"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     }
                 }
@@ -9426,13 +10445,13 @@ const docTemplate = `{
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "500": {
                         "description": "Internal Server Error",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     }
                 }
@@ -9463,100 +10482,37 @@ const docTemplate = `{
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "403": {
                         "description": "Forbidden",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "404": {
                         "description": "Not Found",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "500": {
                         "description": "Internal Server Error",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     }
                 }
             }
         },
-        "/bots/{bot_id}/supermarket/install-package": {
-            "post": {
-                "tags": [
-                    "supermarket"
-                ],
-                "summary": "Install an immutable Skill Package release to a bot workspace",
-                "parameters": [
-                    {
-                        "type": "string",
-                        "description": "Bot ID",
-                        "name": "bot_id",
-                        "in": "path",
-                        "required": true
-                    },
-                    {
-                        "description": "Install Package request",
-                        "name": "payload",
-                        "in": "body",
-                        "required": true,
-                        "schema": {
-                            "$ref": "#/definitions/handlers.InstallPackageRequest"
-                        }
-                    }
-                ],
-                "responses": {
-                    "200": {
-                        "description": "OK",
-                        "schema": {
-                            "$ref": "#/definitions/handlers.InstallRegistryPackageResponse"
-                        }
-                    },
-                    "400": {
-                        "description": "Bad Request",
-                        "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
-                        }
-                    },
-                    "404": {
-                        "description": "Not Found",
-                        "schema": {
-                            "$ref": "#/definitions/apperror.Problem"
-                        }
-                    },
-                    "409": {
-                        "description": "Conflict",
-                        "schema": {
-                            "$ref": "#/definitions/apperror.Problem"
-                        }
-                    },
-                    "500": {
-                        "description": "Internal Server Error",
-                        "schema": {
-                            "$ref": "#/definitions/apperror.Problem"
-                        }
-                    },
-                    "502": {
-                        "description": "Bad Gateway",
-                        "schema": {
-                            "$ref": "#/definitions/apperror.Problem"
-                        }
-                    }
-                }
-            }
-        },
-        "/bots/{bot_id}/supermarket/packages": {
+        "/bots/{bot_id}/starter-prompts": {
             "get": {
+                "description": "Suggestions for the current user's new chat with a bot, generated from the bot's memory, the user's recent session titles, the bot's installed Apps and its name. The server keeps nothing: pass the hash of the set you hold as known_hash, and the response says unchanged while that set is still current; otherwise a new set is generated, which can take a while.",
                 "tags": [
-                    "supermarket"
+                    "bots"
                 ],
-                "summary": "List Skill Packages installed for a bot",
+                "summary": "Get new-chat starter prompts",
                 "parameters": [
                     {
                         "type": "string",
@@ -9567,8 +10523,14 @@ const docTemplate = `{
                     },
                     {
                         "type": "string",
-                        "description": "Workspace target ID",
-                        "name": "workspace_target_id",
+                        "description": "BCP 47 language tag the suggestions are written in. Defaults to en.",
+                        "name": "locale",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Hash of the set the client already holds.",
+                        "name": "known_hash",
                         "in": "query"
                     }
                 ],
@@ -9576,27 +10538,37 @@ const docTemplate = `{
                     "200": {
                         "description": "OK",
                         "schema": {
-                            "type": "array",
-                            "items": {
-                                "$ref": "#/definitions/skillpackages.Installation"
-                            }
+                            "$ref": "#/definitions/handlers.StarterPromptsResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/server.Problem"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "500": {
                         "description": "Internal Server Error",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     }
                 }
             }
         },
-        "/bots/{bot_id}/supermarket/packages/{installation_id}": {
-            "delete": {
+        "/bots/{bot_id}/starter-prompts/refresh": {
+            "post": {
+                "description": "Generates a new set for the current user's new chat with a bot, steering away from the prompts already on screen. The returned hash is the same one Get reports for the current material, so later Get calls answer unchanged for the refreshed set.",
                 "tags": [
-                    "supermarket"
+                    "bots"
                 ],
-                "summary": "Uninstall a Skill Package from a bot",
+                "summary": "Generate a different set of new-chat starter prompts",
                 "parameters": [
                     {
                         "type": "string",
@@ -9606,24 +10578,38 @@ const docTemplate = `{
                         "required": true
                     },
                     {
-                        "type": "string",
-                        "description": "Package installation ID",
-                        "name": "installation_id",
-                        "in": "path",
-                        "required": true
+                        "description": "Locale and the prompts on screen",
+                        "name": "payload",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/handlers.StarterPromptsRefreshRequest"
+                        }
                     }
                 ],
                 "responses": {
                     "200": {
                         "description": "OK",
                         "schema": {
-                            "$ref": "#/definitions/supermarket.UninstallPackageResponse"
+                            "$ref": "#/definitions/handlers.StarterPromptsResponse"
                         }
                     },
-                    "404": {
-                        "description": "Not Found",
+                    "400": {
+                        "description": "Bad Request",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "$ref": "#/definitions/server.Problem"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/server.Problem"
                         }
                     }
                 }
@@ -9666,7 +10652,7 @@ const docTemplate = `{
                     },
                     {
                         "type": "string",
-                        "description": "Optional session type: chat, discuss, schedule, or acp_agent. acp_agent filters by runtime.",
+                        "description": "Optional session type: chat, discuss, schedule, acp_agent, or memory. acp_agent filters by runtime; memory selects memory LLM calls.",
                         "name": "session_type",
                         "in": "query"
                     }
@@ -9681,19 +10667,19 @@ const docTemplate = `{
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "403": {
                         "description": "Forbidden",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "500": {
                         "description": "Internal Server Error",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     }
                 }
@@ -9739,7 +10725,7 @@ const docTemplate = `{
                     },
                     {
                         "type": "string",
-                        "description": "Optional session type: chat, discuss, schedule, or acp_agent. acp_agent filters by runtime.",
+                        "description": "Optional session type: chat, discuss, schedule, acp_agent, or memory. acp_agent filters by runtime; memory selects memory LLM calls.",
                         "name": "session_type",
                         "in": "query"
                     },
@@ -9767,19 +10753,19 @@ const docTemplate = `{
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "403": {
                         "description": "Forbidden",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "500": {
                         "description": "Internal Server Error",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     }
                 }
@@ -9828,31 +10814,31 @@ const docTemplate = `{
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "$ref": "#/definitions/apperror.Problem"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "403": {
                         "description": "Forbidden",
                         "schema": {
-                            "$ref": "#/definitions/apperror.Problem"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "404": {
                         "description": "Not Found",
                         "schema": {
-                            "$ref": "#/definitions/apperror.Problem"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "409": {
                         "description": "Conflict",
                         "schema": {
-                            "$ref": "#/definitions/apperror.Problem"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "500": {
                         "description": "Internal Server Error",
                         "schema": {
-                            "$ref": "#/definitions/apperror.Problem"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     }
                 }
@@ -9901,31 +10887,31 @@ const docTemplate = `{
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "$ref": "#/definitions/apperror.Problem"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "403": {
                         "description": "Forbidden",
                         "schema": {
-                            "$ref": "#/definitions/apperror.Problem"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "404": {
                         "description": "Not Found",
                         "schema": {
-                            "$ref": "#/definitions/apperror.Problem"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "409": {
                         "description": "Conflict",
                         "schema": {
-                            "$ref": "#/definitions/apperror.Problem"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "500": {
                         "description": "Internal Server Error",
                         "schema": {
-                            "$ref": "#/definitions/apperror.Problem"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     }
                 }
@@ -9966,19 +10952,19 @@ const docTemplate = `{
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "404": {
                         "description": "Not Found",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "500": {
                         "description": "Internal Server Error",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     }
                 }
@@ -10025,13 +11011,13 @@ const docTemplate = `{
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "500": {
                         "description": "Internal Server Error",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     }
                 }
@@ -10063,19 +11049,19 @@ const docTemplate = `{
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "403": {
                         "description": "Forbidden",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "500": {
                         "description": "Internal Server Error",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     }
                 }
@@ -10114,25 +11100,25 @@ const docTemplate = `{
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "403": {
                         "description": "Forbidden",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "409": {
                         "description": "Conflict",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "500": {
                         "description": "Internal Server Error",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     }
                 }
@@ -10176,19 +11162,19 @@ const docTemplate = `{
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "403": {
                         "description": "Forbidden",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "500": {
                         "description": "Internal Server Error",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     }
                 }
@@ -10236,25 +11222,25 @@ const docTemplate = `{
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "403": {
                         "description": "Forbidden",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "404": {
                         "description": "Not Found",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "500": {
                         "description": "Internal Server Error",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     }
                 }
@@ -10288,25 +11274,25 @@ const docTemplate = `{
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "403": {
                         "description": "Forbidden",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "404": {
                         "description": "Not Found",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "500": {
                         "description": "Internal Server Error",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     }
                 }
@@ -10356,19 +11342,19 @@ const docTemplate = `{
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "403": {
                         "description": "Forbidden",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "500": {
                         "description": "Internal Server Error",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     }
                 }
@@ -10403,19 +11389,19 @@ const docTemplate = `{
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "403": {
                         "description": "Forbidden",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "500": {
                         "description": "Internal Server Error",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     }
                 }
@@ -10447,19 +11433,19 @@ const docTemplate = `{
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "403": {
                         "description": "Forbidden",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "500": {
                         "description": "Internal Server Error",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     }
                 }
@@ -10499,13 +11485,13 @@ const docTemplate = `{
                     "403": {
                         "description": "Forbidden",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "500": {
                         "description": "Internal Server Error",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     }
                 }
@@ -10550,25 +11536,96 @@ const docTemplate = `{
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "403": {
                         "description": "Forbidden",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "404": {
                         "description": "Not Found",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "409": {
                         "description": "Conflict",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
+                        }
+                    }
+                }
+            }
+        },
+        "/bots/{bot_id}/workdirs/directories": {
+            "get": {
+                "description": "Lists the child directories of a directory on one workspace target, so a workdir path can be picked instead of typed. An empty path starts at the target's default directory: the data mount on the native workspace, the reported workspace base on a remote computer.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "workdirs"
+                ],
+                "summary": "List directories for choosing a workdir path",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Bot ID",
+                        "name": "bot_id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Workspace target ID; defaults to the native workspace",
+                        "name": "workspace_target_id",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Absolute directory path on that target",
+                        "name": "path",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/workdir.DirectoriesResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/server.Problem"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "$ref": "#/definitions/server.Problem"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/server.Problem"
+                        }
+                    },
+                    "409": {
+                        "description": "Conflict",
+                        "schema": {
+                            "$ref": "#/definitions/server.Problem"
+                        }
+                    },
+                    "503": {
+                        "description": "Service Unavailable",
+                        "schema": {
+                            "$ref": "#/definitions/server.Problem"
                         }
                     }
                 }
@@ -10604,13 +11661,13 @@ const docTemplate = `{
                     "403": {
                         "description": "Forbidden",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "404": {
                         "description": "Not Found",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     }
                 }
@@ -10662,19 +11719,141 @@ const docTemplate = `{
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "403": {
                         "description": "Forbidden",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "404": {
                         "description": "Not Found",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
+                        }
+                    }
+                }
+            }
+        },
+        "/bots/{bot_id}/workdirs/{workdir_id}/git-branch": {
+            "get": {
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "workdirs"
+                ],
+                "summary": "Read a workdir's current Git branch",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Bot ID",
+                        "name": "bot_id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Workdir ID",
+                        "name": "workdir_id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/workdir.GitBranchResponse"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "$ref": "#/definitions/server.Problem"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/server.Problem"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/server.Problem"
+                        }
+                    }
+                }
+            },
+            "post": {
+                "consumes": [
+                    "application/json"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "workdirs"
+                ],
+                "summary": "Switch a workdir to an existing local Git branch",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Bot ID",
+                        "name": "bot_id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Workdir ID",
+                        "name": "workdir_id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "description": "Local branch",
+                        "name": "request",
+                        "in": "body",
+                        "required": true,
+                        "schema": {
+                            "$ref": "#/definitions/workdir.SwitchGitBranchRequest"
+                        }
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/workdir.GitBranchResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/server.Problem"
+                        }
+                    },
+                    "403": {
+                        "description": "Forbidden",
+                        "schema": {
+                            "$ref": "#/definitions/server.Problem"
+                        }
+                    },
+                    "409": {
+                        "description": "Conflict",
+                        "schema": {
+                            "$ref": "#/definitions/server.Problem"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/server.Problem"
                         }
                     }
                 }
@@ -10708,13 +11887,13 @@ const docTemplate = `{
                     "403": {
                         "description": "Forbidden",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "500": {
                         "description": "Internal Server Error",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     }
                 }
@@ -10754,19 +11933,19 @@ const docTemplate = `{
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "403": {
                         "description": "Forbidden",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "404": {
                         "description": "Not Found",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     }
                 }
@@ -10807,19 +11986,19 @@ const docTemplate = `{
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "403": {
                         "description": "Forbidden",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "404": {
                         "description": "Not Found",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     }
                 }
@@ -10855,19 +12034,19 @@ const docTemplate = `{
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "403": {
                         "description": "Forbidden",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "404": {
                         "description": "Not Found",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     }
                 }
@@ -10915,19 +12094,19 @@ const docTemplate = `{
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "403": {
                         "description": "Forbidden",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "404": {
                         "description": "Not Found",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     }
                 }
@@ -10959,25 +12138,25 @@ const docTemplate = `{
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "403": {
                         "description": "Forbidden",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "404": {
                         "description": "Not Found",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "500": {
                         "description": "Internal Server Error",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     }
                 }
@@ -11016,31 +12195,31 @@ const docTemplate = `{
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "403": {
                         "description": "Forbidden",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "404": {
                         "description": "Not Found",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "409": {
                         "description": "Conflict",
                         "schema": {
-                            "$ref": "#/definitions/apperror.Problem"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "500": {
                         "description": "Internal Server Error",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     }
                 }
@@ -11073,25 +12252,25 @@ const docTemplate = `{
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "403": {
                         "description": "Forbidden",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "404": {
                         "description": "Not Found",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "500": {
                         "description": "Internal Server Error",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     }
                 }
@@ -11130,25 +12309,25 @@ const docTemplate = `{
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "403": {
                         "description": "Forbidden",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "404": {
                         "description": "Not Found",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "500": {
                         "description": "Internal Server Error",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     }
                 }
@@ -11194,37 +12373,37 @@ const docTemplate = `{
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "403": {
                         "description": "Forbidden",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "404": {
                         "description": "Not Found",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "500": {
                         "description": "Internal Server Error",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "502": {
                         "description": "Bad Gateway",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "503": {
                         "description": "Service Unavailable",
                         "schema": {
-                            "$ref": "#/definitions/apperror.Problem"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     }
                 }
@@ -11258,25 +12437,25 @@ const docTemplate = `{
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "403": {
                         "description": "Forbidden",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "500": {
                         "description": "Internal Server Error",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "503": {
                         "description": "Service Unavailable",
                         "schema": {
-                            "$ref": "#/definitions/apperror.Problem"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     }
                 }
@@ -11327,31 +12506,31 @@ const docTemplate = `{
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "403": {
                         "description": "Forbidden",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "404": {
                         "description": "Not Found",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "500": {
                         "description": "Internal Server Error",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "503": {
                         "description": "Service Unavailable",
                         "schema": {
-                            "$ref": "#/definitions/apperror.Problem"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     }
                 }
@@ -11402,31 +12581,31 @@ const docTemplate = `{
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "401": {
                         "description": "Unauthorized",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "403": {
                         "description": "Forbidden",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "500": {
                         "description": "Internal Server Error",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "503": {
                         "description": "Service Unavailable",
                         "schema": {
-                            "$ref": "#/definitions/apperror.Problem"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     }
                 }
@@ -11474,37 +12653,37 @@ const docTemplate = `{
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "403": {
                         "description": "Forbidden",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "404": {
                         "description": "Not Found",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "500": {
                         "description": "Internal Server Error",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "502": {
                         "description": "Bad Gateway",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "503": {
                         "description": "Service Unavailable",
                         "schema": {
-                            "$ref": "#/definitions/apperror.Problem"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     }
                 }
@@ -11552,31 +12731,31 @@ const docTemplate = `{
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "403": {
                         "description": "Forbidden",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "404": {
                         "description": "Not Found",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "502": {
                         "description": "Bad Gateway",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "503": {
                         "description": "Service Unavailable",
                         "schema": {
-                            "$ref": "#/definitions/apperror.Problem"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     }
                 }
@@ -11608,25 +12787,25 @@ const docTemplate = `{
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "403": {
                         "description": "Forbidden",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "404": {
                         "description": "Not Found",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "500": {
                         "description": "Internal Server Error",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     }
                 }
@@ -11667,25 +12846,25 @@ const docTemplate = `{
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "403": {
                         "description": "Forbidden",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "404": {
                         "description": "Not Found",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "500": {
                         "description": "Internal Server Error",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     }
                 }
@@ -11711,7 +12890,7 @@ const docTemplate = `{
                     "500": {
                         "description": "Internal Server Error",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     }
                 }
@@ -11743,13 +12922,13 @@ const docTemplate = `{
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "404": {
                         "description": "Not Found",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     }
                 }
@@ -11775,435 +12954,19 @@ const docTemplate = `{
                     "403": {
                         "description": "Forbidden",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "502": {
                         "description": "Bad Gateway",
                         "schema": {
-                            "$ref": "#/definitions/apperror.Problem"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "503": {
                         "description": "Service Unavailable",
                         "schema": {
-                            "$ref": "#/definitions/apperror.Problem"
-                        }
-                    }
-                }
-            }
-        },
-        "/email-providers": {
-            "get": {
-                "produces": [
-                    "application/json"
-                ],
-                "tags": [
-                    "email-providers"
-                ],
-                "summary": "List email providers",
-                "parameters": [
-                    {
-                        "type": "string",
-                        "description": "Provider type filter",
-                        "name": "provider",
-                        "in": "query"
-                    }
-                ],
-                "responses": {
-                    "200": {
-                        "description": "OK",
-                        "schema": {
-                            "type": "array",
-                            "items": {
-                                "$ref": "#/definitions/email.ProviderResponse"
-                            }
-                        }
-                    },
-                    "500": {
-                        "description": "Internal Server Error",
-                        "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
-                        }
-                    }
-                }
-            },
-            "post": {
-                "consumes": [
-                    "application/json"
-                ],
-                "produces": [
-                    "application/json"
-                ],
-                "tags": [
-                    "email-providers"
-                ],
-                "summary": "Create an email provider",
-                "parameters": [
-                    {
-                        "description": "Email provider configuration",
-                        "name": "request",
-                        "in": "body",
-                        "required": true,
-                        "schema": {
-                            "$ref": "#/definitions/email.CreateProviderRequest"
-                        }
-                    }
-                ],
-                "responses": {
-                    "201": {
-                        "description": "Created",
-                        "schema": {
-                            "$ref": "#/definitions/email.ProviderResponse"
-                        }
-                    },
-                    "400": {
-                        "description": "Bad Request",
-                        "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
-                        }
-                    },
-                    "500": {
-                        "description": "Internal Server Error",
-                        "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
-                        }
-                    }
-                }
-            }
-        },
-        "/email-providers/meta": {
-            "get": {
-                "description": "List available email provider types and config schemas",
-                "tags": [
-                    "email-providers"
-                ],
-                "summary": "List email provider metadata",
-                "responses": {
-                    "200": {
-                        "description": "OK",
-                        "schema": {
-                            "type": "array",
-                            "items": {
-                                "$ref": "#/definitions/email.ProviderMeta"
-                            }
-                        }
-                    }
-                }
-            }
-        },
-        "/email-providers/{id}": {
-            "get": {
-                "produces": [
-                    "application/json"
-                ],
-                "tags": [
-                    "email-providers"
-                ],
-                "summary": "Get an email provider",
-                "parameters": [
-                    {
-                        "type": "string",
-                        "description": "Provider ID",
-                        "name": "id",
-                        "in": "path",
-                        "required": true
-                    }
-                ],
-                "responses": {
-                    "200": {
-                        "description": "OK",
-                        "schema": {
-                            "$ref": "#/definitions/email.ProviderResponse"
-                        }
-                    },
-                    "404": {
-                        "description": "Not Found",
-                        "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
-                        }
-                    }
-                }
-            },
-            "put": {
-                "consumes": [
-                    "application/json"
-                ],
-                "produces": [
-                    "application/json"
-                ],
-                "tags": [
-                    "email-providers"
-                ],
-                "summary": "Update an email provider",
-                "parameters": [
-                    {
-                        "type": "string",
-                        "description": "Provider ID",
-                        "name": "id",
-                        "in": "path",
-                        "required": true
-                    },
-                    {
-                        "description": "Updated configuration",
-                        "name": "request",
-                        "in": "body",
-                        "required": true,
-                        "schema": {
-                            "$ref": "#/definitions/email.UpdateProviderRequest"
-                        }
-                    }
-                ],
-                "responses": {
-                    "200": {
-                        "description": "OK",
-                        "schema": {
-                            "$ref": "#/definitions/email.ProviderResponse"
-                        }
-                    },
-                    "400": {
-                        "description": "Bad Request",
-                        "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
-                        }
-                    },
-                    "500": {
-                        "description": "Internal Server Error",
-                        "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
-                        }
-                    }
-                }
-            },
-            "delete": {
-                "tags": [
-                    "email-providers"
-                ],
-                "summary": "Delete an email provider",
-                "parameters": [
-                    {
-                        "type": "string",
-                        "description": "Provider ID",
-                        "name": "id",
-                        "in": "path",
-                        "required": true
-                    }
-                ],
-                "responses": {
-                    "204": {
-                        "description": "No Content"
-                    },
-                    "500": {
-                        "description": "Internal Server Error",
-                        "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
-                        }
-                    }
-                }
-            }
-        },
-        "/email-providers/{id}/oauth/authorize": {
-            "get": {
-                "description": "Returns the authorization URL to redirect the user to",
-                "tags": [
-                    "email-oauth"
-                ],
-                "summary": "Start OAuth2 authorization for an email provider",
-                "parameters": [
-                    {
-                        "type": "string",
-                        "description": "Email provider ID",
-                        "name": "id",
-                        "in": "path",
-                        "required": true
-                    }
-                ],
-                "responses": {
-                    "200": {
-                        "description": "OK",
-                        "schema": {
-                            "type": "object",
-                            "additionalProperties": {
-                                "type": "string"
-                            }
-                        }
-                    },
-                    "400": {
-                        "description": "Bad Request",
-                        "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
-                        }
-                    },
-                    "404": {
-                        "description": "Not Found",
-                        "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
-                        }
-                    }
-                }
-            }
-        },
-        "/email-providers/{id}/oauth/status": {
-            "get": {
-                "tags": [
-                    "email-oauth"
-                ],
-                "summary": "Get OAuth2 status for an email provider",
-                "parameters": [
-                    {
-                        "type": "string",
-                        "description": "Email provider ID",
-                        "name": "id",
-                        "in": "path",
-                        "required": true
-                    }
-                ],
-                "responses": {
-                    "200": {
-                        "description": "OK",
-                        "schema": {
-                            "$ref": "#/definitions/handlers.emailOAuthStatusResponse"
-                        }
-                    },
-                    "400": {
-                        "description": "Bad Request",
-                        "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
-                        }
-                    },
-                    "404": {
-                        "description": "Not Found",
-                        "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
-                        }
-                    }
-                }
-            }
-        },
-        "/email-providers/{id}/oauth/token": {
-            "delete": {
-                "tags": [
-                    "email-oauth"
-                ],
-                "summary": "Revoke stored OAuth2 tokens for an email provider",
-                "parameters": [
-                    {
-                        "type": "string",
-                        "description": "Email provider ID",
-                        "name": "id",
-                        "in": "path",
-                        "required": true
-                    }
-                ],
-                "responses": {
-                    "204": {
-                        "description": "No Content"
-                    },
-                    "400": {
-                        "description": "Bad Request",
-                        "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
-                        }
-                    },
-                    "404": {
-                        "description": "Not Found",
-                        "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
-                        }
-                    }
-                }
-            }
-        },
-        "/email/mailgun/webhook/{config_id}": {
-            "post": {
-                "description": "Receives inbound emails from Mailgun",
-                "tags": [
-                    "email-webhook"
-                ],
-                "summary": "Mailgun inbound email webhook",
-                "parameters": [
-                    {
-                        "type": "string",
-                        "description": "Email provider config ID",
-                        "name": "config_id",
-                        "in": "path",
-                        "required": true
-                    }
-                ],
-                "responses": {
-                    "200": {
-                        "description": "OK",
-                        "schema": {
-                            "type": "object",
-                            "additionalProperties": {
-                                "type": "string"
-                            }
-                        }
-                    },
-                    "400": {
-                        "description": "Bad Request",
-                        "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
-                        }
-                    },
-                    "403": {
-                        "description": "Forbidden",
-                        "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
-                        }
-                    },
-                    "500": {
-                        "description": "Internal Server Error",
-                        "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
-                        }
-                    }
-                }
-            }
-        },
-        "/email/oauth/callback": {
-            "get": {
-                "description": "Handles the OAuth2 callback, exchanges the code for tokens",
-                "tags": [
-                    "email-oauth"
-                ],
-                "summary": "OAuth2 callback for email providers",
-                "parameters": [
-                    {
-                        "type": "string",
-                        "description": "Authorization code",
-                        "name": "code",
-                        "in": "query",
-                        "required": true
-                    },
-                    {
-                        "type": "string",
-                        "description": "State parameter",
-                        "name": "state",
-                        "in": "query",
-                        "required": true
-                    }
-                ],
-                "responses": {
-                    "200": {
-                        "description": "OK",
-                        "schema": {
-                            "type": "object",
-                            "additionalProperties": {
-                                "type": "string"
-                            }
-                        }
-                    },
-                    "400": {
-                        "description": "Bad Request",
-                        "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
-                        }
-                    },
-                    "500": {
-                        "description": "Internal Server Error",
-                        "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     }
                 }
@@ -12243,7 +13006,7 @@ const docTemplate = `{
                     "500": {
                         "description": "Internal Server Error",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     }
                 }
@@ -12281,13 +13044,13 @@ const docTemplate = `{
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "500": {
                         "description": "Internal Server Error",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     }
                 }
@@ -12345,13 +13108,13 @@ const docTemplate = `{
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "404": {
                         "description": "Not Found",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     }
                 }
@@ -12396,13 +13159,13 @@ const docTemplate = `{
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "500": {
                         "description": "Internal Server Error",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     }
                 }
@@ -12435,153 +13198,45 @@ const docTemplate = `{
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "500": {
                         "description": "Internal Server Error",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     }
                 }
             }
         },
-        "/memory-providers": {
+        "/memory/config": {
             "get": {
-                "description": "List configured memory providers",
+                "description": "Get the team-level Built-in Memory configuration",
                 "produces": [
                     "application/json"
                 ],
                 "tags": [
-                    "memory-providers"
+                    "memory"
                 ],
-                "summary": "List memory providers",
+                "summary": "Get Built-in Memory configuration",
                 "responses": {
                     "200": {
                         "description": "OK",
                         "schema": {
-                            "type": "array",
-                            "items": {
-                                "$ref": "#/definitions/adapters.ProviderGetResponse"
-                            }
+                            "$ref": "#/definitions/adapters.MemoryConfig"
                         }
                     },
                     "500": {
                         "description": "Internal Server Error",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
-                        }
-                    }
-                }
-            },
-            "post": {
-                "description": "Create a memory provider configuration",
-                "consumes": [
-                    "application/json"
-                ],
-                "produces": [
-                    "application/json"
-                ],
-                "tags": [
-                    "memory-providers"
-                ],
-                "summary": "Create a memory provider",
-                "parameters": [
-                    {
-                        "description": "Memory provider configuration",
-                        "name": "request",
-                        "in": "body",
-                        "required": true,
-                        "schema": {
-                            "$ref": "#/definitions/adapters.ProviderCreateRequest"
-                        }
-                    }
-                ],
-                "responses": {
-                    "201": {
-                        "description": "Created",
-                        "schema": {
-                            "$ref": "#/definitions/adapters.ProviderGetResponse"
-                        }
-                    },
-                    "400": {
-                        "description": "Bad Request",
-                        "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
-                        }
-                    },
-                    "500": {
-                        "description": "Internal Server Error",
-                        "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
-                        }
-                    }
-                }
-            }
-        },
-        "/memory-providers/meta": {
-            "get": {
-                "description": "List available memory provider types and config schemas",
-                "tags": [
-                    "memory-providers"
-                ],
-                "summary": "List memory provider metadata",
-                "responses": {
-                    "200": {
-                        "description": "OK",
-                        "schema": {
-                            "type": "array",
-                            "items": {
-                                "$ref": "#/definitions/adapters.ProviderMeta"
-                            }
-                        }
-                    }
-                }
-            }
-        },
-        "/memory-providers/{id}": {
-            "get": {
-                "description": "Get memory provider by ID",
-                "produces": [
-                    "application/json"
-                ],
-                "tags": [
-                    "memory-providers"
-                ],
-                "summary": "Get a memory provider",
-                "parameters": [
-                    {
-                        "type": "string",
-                        "description": "Provider ID",
-                        "name": "id",
-                        "in": "path",
-                        "required": true
-                    }
-                ],
-                "responses": {
-                    "200": {
-                        "description": "OK",
-                        "schema": {
-                            "$ref": "#/definitions/adapters.ProviderGetResponse"
-                        }
-                    },
-                    "400": {
-                        "description": "Bad Request",
-                        "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
-                        }
-                    },
-                    "404": {
-                        "description": "Not Found",
-                        "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     }
                 }
             },
             "put": {
-                "description": "Update memory provider by ID",
+                "description": "Update the team-level Built-in Memory configuration",
                 "consumes": [
                     "application/json"
                 ],
@@ -12589,24 +13244,17 @@ const docTemplate = `{
                     "application/json"
                 ],
                 "tags": [
-                    "memory-providers"
+                    "memory"
                 ],
-                "summary": "Update a memory provider",
+                "summary": "Update Built-in Memory configuration",
                 "parameters": [
                     {
-                        "type": "string",
-                        "description": "Provider ID",
-                        "name": "id",
-                        "in": "path",
-                        "required": true
-                    },
-                    {
-                        "description": "Updated configuration",
+                        "description": "Built-in Memory configuration",
                         "name": "request",
                         "in": "body",
                         "required": true,
                         "schema": {
-                            "$ref": "#/definitions/adapters.ProviderUpdateRequest"
+                            "$ref": "#/definitions/adapters.MemoryConfigUpdateRequest"
                         }
                     }
                 ],
@@ -12614,99 +13262,19 @@ const docTemplate = `{
                     "200": {
                         "description": "OK",
                         "schema": {
-                            "$ref": "#/definitions/adapters.ProviderGetResponse"
+                            "$ref": "#/definitions/adapters.MemoryConfig"
                         }
                     },
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "500": {
                         "description": "Internal Server Error",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
-                        }
-                    }
-                }
-            },
-            "delete": {
-                "description": "Delete memory provider by ID",
-                "tags": [
-                    "memory-providers"
-                ],
-                "summary": "Delete a memory provider",
-                "parameters": [
-                    {
-                        "type": "string",
-                        "description": "Provider ID",
-                        "name": "id",
-                        "in": "path",
-                        "required": true
-                    }
-                ],
-                "responses": {
-                    "204": {
-                        "description": "No Content"
-                    },
-                    "400": {
-                        "description": "Bad Request",
-                        "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
-                        }
-                    },
-                    "500": {
-                        "description": "Internal Server Error",
-                        "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
-                        }
-                    }
-                }
-            }
-        },
-        "/memory-providers/{id}/status": {
-            "get": {
-                "description": "Get runtime status data for a memory provider",
-                "produces": [
-                    "application/json"
-                ],
-                "tags": [
-                    "memory-providers"
-                ],
-                "summary": "Get memory provider status",
-                "parameters": [
-                    {
-                        "type": "string",
-                        "description": "Provider ID",
-                        "name": "id",
-                        "in": "path",
-                        "required": true
-                    }
-                ],
-                "responses": {
-                    "200": {
-                        "description": "OK",
-                        "schema": {
-                            "$ref": "#/definitions/adapters.ProviderStatusResponse"
-                        }
-                    },
-                    "400": {
-                        "description": "Bad Request",
-                        "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
-                        }
-                    },
-                    "404": {
-                        "description": "Not Found",
-                        "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
-                        }
-                    },
-                    "500": {
-                        "description": "Internal Server Error",
-                        "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     }
                 }
@@ -12746,13 +13314,13 @@ const docTemplate = `{
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "500": {
                         "description": "Internal Server Error",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     }
                 }
@@ -12784,13 +13352,13 @@ const docTemplate = `{
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "500": {
                         "description": "Internal Server Error",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     }
                 }
@@ -12821,13 +13389,13 @@ const docTemplate = `{
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "500": {
                         "description": "Internal Server Error",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     }
                 }
@@ -12859,19 +13427,19 @@ const docTemplate = `{
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "404": {
                         "description": "Not Found",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "500": {
                         "description": "Internal Server Error",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     }
                 }
@@ -12910,19 +13478,19 @@ const docTemplate = `{
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "404": {
                         "description": "Not Found",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "500": {
                         "description": "Internal Server Error",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     }
                 }
@@ -12949,19 +13517,19 @@ const docTemplate = `{
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "404": {
                         "description": "Not Found",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "500": {
                         "description": "Internal Server Error",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     }
                 }
@@ -12993,19 +13561,19 @@ const docTemplate = `{
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "404": {
                         "description": "Not Found",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "500": {
                         "description": "Internal Server Error",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     }
                 }
@@ -13044,19 +13612,19 @@ const docTemplate = `{
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "404": {
                         "description": "Not Found",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "500": {
                         "description": "Internal Server Error",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     }
                 }
@@ -13083,19 +13651,19 @@ const docTemplate = `{
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "404": {
                         "description": "Not Found",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "500": {
                         "description": "Internal Server Error",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     }
                 }
@@ -13133,19 +13701,19 @@ const docTemplate = `{
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "404": {
                         "description": "Not Found",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "500": {
                         "description": "Internal Server Error",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     }
                 }
@@ -13247,13 +13815,13 @@ const docTemplate = `{
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "$ref": "#/definitions/apperror.Problem"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "500": {
                         "description": "Internal Server Error",
                         "schema": {
-                            "$ref": "#/definitions/apperror.Problem"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     }
                 }
@@ -13288,13 +13856,13 @@ const docTemplate = `{
                     "404": {
                         "description": "Not Found",
                         "schema": {
-                            "$ref": "#/definitions/apperror.Problem"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "500": {
                         "description": "Internal Server Error",
                         "schema": {
-                            "$ref": "#/definitions/apperror.Problem"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     }
                 }
@@ -13326,7 +13894,7 @@ const docTemplate = `{
                     "500": {
                         "description": "Internal Server Error",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     }
                 }
@@ -13364,13 +13932,13 @@ const docTemplate = `{
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "500": {
                         "description": "Internal Server Error",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     }
                 }
@@ -13399,7 +13967,7 @@ const docTemplate = `{
                     "500": {
                         "description": "Internal Server Error",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     }
                 }
@@ -13439,25 +14007,25 @@ const docTemplate = `{
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "$ref": "#/definitions/apperror.Problem"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "404": {
                         "description": "Not Found",
                         "schema": {
-                            "$ref": "#/definitions/apperror.Problem"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "409": {
                         "description": "Conflict",
                         "schema": {
-                            "$ref": "#/definitions/apperror.Problem"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "500": {
                         "description": "Internal Server Error",
                         "schema": {
-                            "$ref": "#/definitions/apperror.Problem"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     }
                 }
@@ -13495,19 +14063,19 @@ const docTemplate = `{
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "404": {
                         "description": "Not Found",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "500": {
                         "description": "Internal Server Error",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     }
                 }
@@ -13545,7 +14113,7 @@ const docTemplate = `{
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     }
                 }
@@ -13583,19 +14151,19 @@ const docTemplate = `{
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "404": {
                         "description": "Not Found",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "500": {
                         "description": "Internal Server Error",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     }
                 }
@@ -13640,19 +14208,19 @@ const docTemplate = `{
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "404": {
                         "description": "Not Found",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "500": {
                         "description": "Internal Server Error",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     }
                 }
@@ -13685,19 +14253,19 @@ const docTemplate = `{
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "404": {
                         "description": "Not Found",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "500": {
                         "description": "Internal Server Error",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     }
                 }
@@ -13743,19 +14311,19 @@ const docTemplate = `{
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "404": {
                         "description": "Not Found",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "500": {
                         "description": "Internal Server Error",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     }
                 }
@@ -13796,19 +14364,19 @@ const docTemplate = `{
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "404": {
                         "description": "Not Found",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "500": {
                         "description": "Internal Server Error",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     }
                 }
@@ -13839,13 +14407,13 @@ const docTemplate = `{
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "404": {
                         "description": "Not Found",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     }
                 }
@@ -13876,13 +14444,13 @@ const docTemplate = `{
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "404": {
                         "description": "Not Found",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     }
                 }
@@ -13913,13 +14481,13 @@ const docTemplate = `{
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "404": {
                         "description": "Not Found",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     }
                 }
@@ -13947,13 +14515,13 @@ const docTemplate = `{
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "404": {
                         "description": "Not Found",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     }
                 }
@@ -13991,19 +14559,19 @@ const docTemplate = `{
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "404": {
                         "description": "Not Found",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "500": {
                         "description": "Internal Server Error",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     }
                 }
@@ -14043,7 +14611,7 @@ const docTemplate = `{
                     "500": {
                         "description": "Internal Server Error",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     }
                 }
@@ -14081,13 +14649,13 @@ const docTemplate = `{
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "500": {
                         "description": "Internal Server Error",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     }
                 }
@@ -14145,13 +14713,13 @@ const docTemplate = `{
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "404": {
                         "description": "Not Found",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     }
                 }
@@ -14196,13 +14764,13 @@ const docTemplate = `{
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "500": {
                         "description": "Internal Server Error",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     }
                 }
@@ -14235,13 +14803,38 @@ const docTemplate = `{
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "500": {
                         "description": "Internal Server Error",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
+                        }
+                    }
+                }
+            }
+        },
+        "/site-icon": {
+            "get": {
+                "tags": [
+                    "site-icon"
+                ],
+                "summary": "Resolve a public site's favicons for light and dark color schemes",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Public page or site URL; only its origin is fetched",
+                        "name": "url",
+                        "in": "query",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.SiteIconResponse"
                         }
                     }
                 }
@@ -14270,7 +14863,7 @@ const docTemplate = `{
                     "500": {
                         "description": "Internal Server Error",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     }
                 }
@@ -14304,7 +14897,7 @@ const docTemplate = `{
                     "404": {
                         "description": "Not Found",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     }
                 }
@@ -14348,13 +14941,13 @@ const docTemplate = `{
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "500": {
                         "description": "Internal Server Error",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     }
                 }
@@ -14388,7 +14981,7 @@ const docTemplate = `{
                     "404": {
                         "description": "Not Found",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     }
                 }
@@ -14435,13 +15028,13 @@ const docTemplate = `{
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "500": {
                         "description": "Internal Server Error",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     }
                 }
@@ -14470,7 +15063,7 @@ const docTemplate = `{
                     "500": {
                         "description": "Internal Server Error",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     }
                 }
@@ -14525,13 +15118,13 @@ const docTemplate = `{
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "404": {
                         "description": "Not Found",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     }
                 }
@@ -14569,19 +15162,19 @@ const docTemplate = `{
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "404": {
                         "description": "Not Found",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "500": {
                         "description": "Internal Server Error",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     }
                 }
@@ -14619,13 +15212,96 @@ const docTemplate = `{
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "500": {
                         "description": "Internal Server Error",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
+                        }
+                    }
+                }
+            }
+        },
+        "/supermarket/apps": {
+            "get": {
+                "tags": [
+                    "supermarket"
+                ],
+                "summary": "List Skill Apps across supermarket Registries",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Search query",
+                        "name": "q",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Registry ID",
+                        "name": "registry",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Category ID",
+                        "name": "category",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Exact tag",
+                        "name": "tag",
+                        "in": "query"
+                    },
+                    {
+                        "enum": [
+                            "skills",
+                            "dependencies",
+                            "connectors"
+                        ],
+                        "type": "string",
+                        "description": "Component filter",
+                        "name": "component",
+                        "in": "query"
+                    },
+                    {
+                        "type": "integer",
+                        "description": "Page number",
+                        "name": "page",
+                        "in": "query"
+                    },
+                    {
+                        "type": "integer",
+                        "description": "Items per page",
+                        "name": "limit",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Sort order",
+                        "name": "sort",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/handlers.SupermarketAppListResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/server.Problem"
+                        }
+                    },
+                    "502": {
+                        "description": "Bad Gateway",
+                        "schema": {
+                            "$ref": "#/definitions/server.Problem"
                         }
                     }
                 }
@@ -14656,71 +15332,35 @@ const docTemplate = `{
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "404": {
                         "description": "Not Found",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "502": {
                         "description": "Bad Gateway",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     }
                 }
             }
         },
-        "/supermarket/packages": {
+        "/supermarket/categories": {
             "get": {
                 "tags": [
                     "supermarket"
                 ],
-                "summary": "List Skill Packages across supermarket Registries",
+                "summary": "List App categories with localized names",
                 "parameters": [
-                    {
-                        "type": "string",
-                        "description": "Search query",
-                        "name": "q",
-                        "in": "query"
-                    },
                     {
                         "type": "string",
                         "description": "Registry ID",
                         "name": "registry",
-                        "in": "query"
-                    },
-                    {
-                        "type": "string",
-                        "description": "Category ID",
-                        "name": "category",
-                        "in": "query"
-                    },
-                    {
-                        "type": "string",
-                        "description": "Exact tag",
-                        "name": "tag",
-                        "in": "query"
-                    },
-                    {
-                        "type": "integer",
-                        "description": "Page number",
-                        "name": "page",
-                        "in": "query"
-                    },
-                    {
-                        "type": "integer",
-                        "description": "Items per page",
-                        "name": "limit",
-                        "in": "query"
-                    },
-                    {
-                        "type": "string",
-                        "description": "Sort order",
-                        "name": "sort",
                         "in": "query"
                     }
                 ],
@@ -14728,19 +15368,25 @@ const docTemplate = `{
                     "200": {
                         "description": "OK",
                         "schema": {
-                            "$ref": "#/definitions/handlers.SupermarketSkillPackageListResponse"
+                            "$ref": "#/definitions/handlers.SupermarketAppCategoryListResponse"
                         }
                     },
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "502": {
                         "description": "Bad Gateway",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     }
                 }
@@ -14762,61 +15408,18 @@ const docTemplate = `{
                     "502": {
                         "description": "Bad Gateway",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     }
                 }
             }
         },
-        "/supermarket/registries/{registry_id}/categories": {
+        "/supermarket/registries/{registry_id}/apps": {
             "get": {
                 "tags": [
                     "supermarket"
                 ],
-                "summary": "List categories in a Skill Registry",
-                "parameters": [
-                    {
-                        "type": "string",
-                        "description": "Registry ID",
-                        "name": "registry_id",
-                        "in": "path",
-                        "required": true
-                    }
-                ],
-                "responses": {
-                    "200": {
-                        "description": "OK",
-                        "schema": {
-                            "$ref": "#/definitions/handlers.SupermarketSkillCategoryListResponse"
-                        }
-                    },
-                    "400": {
-                        "description": "Bad Request",
-                        "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
-                        }
-                    },
-                    "404": {
-                        "description": "Not Found",
-                        "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
-                        }
-                    },
-                    "502": {
-                        "description": "Bad Gateway",
-                        "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
-                        }
-                    }
-                }
-            }
-        },
-        "/supermarket/registries/{registry_id}/packages": {
-            "get": {
-                "tags": [
-                    "supermarket"
-                ],
-                "summary": "List Skill Packages in one Registry",
+                "summary": "List Skill Apps in one Registry",
                 "parameters": [
                     {
                         "type": "string",
@@ -14866,36 +15469,36 @@ const docTemplate = `{
                     "200": {
                         "description": "OK",
                         "schema": {
-                            "$ref": "#/definitions/handlers.SupermarketSkillPackageListResponse"
+                            "$ref": "#/definitions/handlers.SupermarketAppListResponse"
                         }
                     },
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "404": {
                         "description": "Not Found",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "502": {
                         "description": "Bad Gateway",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     }
                 }
             }
         },
-        "/supermarket/registries/{registry_id}/packages/{package_id}": {
+        "/supermarket/registries/{registry_id}/apps/{app_id}": {
             "get": {
                 "tags": [
                     "supermarket"
                 ],
-                "summary": "Get a namespaced Skill Package",
+                "summary": "Get a namespaced Skill App",
                 "parameters": [
                     {
                         "type": "string",
@@ -14906,8 +15509,8 @@ const docTemplate = `{
                     },
                     {
                         "type": "string",
-                        "description": "Package ID",
-                        "name": "package_id",
+                        "description": "App ID",
+                        "name": "app_id",
                         "in": "path",
                         "required": true
                     }
@@ -14916,36 +15519,36 @@ const docTemplate = `{
                     "200": {
                         "description": "OK",
                         "schema": {
-                            "$ref": "#/definitions/handlers.SupermarketSkillPackageDescriptor"
+                            "$ref": "#/definitions/handlers.SupermarketAppDescriptor"
                         }
                     },
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "404": {
                         "description": "Not Found",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "502": {
                         "description": "Bad Gateway",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     }
                 }
             }
         },
-        "/supermarket/registries/{registry_id}/packages/{package_id}/releases/{revision}": {
+        "/supermarket/registries/{registry_id}/apps/{app_id}/releases/{revision}": {
             "get": {
                 "tags": [
                     "supermarket"
                 ],
-                "summary": "Get an immutable Skill Package release",
+                "summary": "Get an immutable Skill App release",
                 "parameters": [
                     {
                         "type": "string",
@@ -14956,14 +15559,14 @@ const docTemplate = `{
                     },
                     {
                         "type": "string",
-                        "description": "Package ID",
-                        "name": "package_id",
+                        "description": "App ID",
+                        "name": "app_id",
                         "in": "path",
                         "required": true
                     },
                     {
                         "type": "string",
-                        "description": "Package revision",
+                        "description": "App revision",
                         "name": "revision",
                         "in": "path",
                         "required": true
@@ -14973,31 +15576,31 @@ const docTemplate = `{
                     "200": {
                         "description": "OK",
                         "schema": {
-                            "$ref": "#/definitions/handlers.SupermarketSkillPackageDescriptor"
+                            "$ref": "#/definitions/handlers.SupermarketAppDescriptor"
                         }
                     },
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "404": {
                         "description": "Not Found",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "502": {
                         "description": "Bad Gateway",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     }
                 }
             }
         },
-        "/supermarket/registries/{registry_id}/packages/{package_id}/skills/{skill_id}": {
+        "/supermarket/registries/{registry_id}/apps/{app_id}/skills/{skill_id}": {
             "get": {
                 "tags": [
                     "supermarket"
@@ -15013,8 +15616,8 @@ const docTemplate = `{
                     },
                     {
                         "type": "string",
-                        "description": "Package ID",
-                        "name": "package_id",
+                        "description": "App ID",
+                        "name": "app_id",
                         "in": "path",
                         "required": true
                     },
@@ -15036,19 +15639,19 @@ const docTemplate = `{
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "404": {
                         "description": "Not Found",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "502": {
                         "description": "Bad Gateway",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     }
                 }
@@ -15075,8 +15678,8 @@ const docTemplate = `{
                     },
                     {
                         "type": "string",
-                        "description": "Package ID",
-                        "name": "package",
+                        "description": "App ID",
+                        "name": "app",
                         "in": "query"
                     },
                     {
@@ -15120,13 +15723,13 @@ const docTemplate = `{
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "502": {
                         "description": "Bad Gateway",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     }
                 }
@@ -15155,7 +15758,7 @@ const docTemplate = `{
                     "500": {
                         "description": "Internal Server Error",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     }
                 }
@@ -15189,7 +15792,7 @@ const docTemplate = `{
                     "404": {
                         "description": "Not Found",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     }
                 }
@@ -15233,13 +15836,13 @@ const docTemplate = `{
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "500": {
                         "description": "Internal Server Error",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     }
                 }
@@ -15273,7 +15876,7 @@ const docTemplate = `{
                     "404": {
                         "description": "Not Found",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     }
                 }
@@ -15324,13 +15927,13 @@ const docTemplate = `{
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "500": {
                         "description": "Internal Server Error",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     }
                 }
@@ -15359,7 +15962,7 @@ const docTemplate = `{
                     "500": {
                         "description": "Internal Server Error",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     }
                 }
@@ -15414,13 +16017,13 @@ const docTemplate = `{
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "404": {
                         "description": "Not Found",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     }
                 }
@@ -15458,19 +16061,19 @@ const docTemplate = `{
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "404": {
                         "description": "Not Found",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "500": {
                         "description": "Internal Server Error",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     }
                 }
@@ -15508,13 +16111,13 @@ const docTemplate = `{
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "500": {
                         "description": "Internal Server Error",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     }
                 }
@@ -15537,19 +16140,19 @@ const docTemplate = `{
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "403": {
                         "description": "Forbidden",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "500": {
                         "description": "Internal Server Error",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     }
                 }
@@ -15581,19 +16184,19 @@ const docTemplate = `{
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "403": {
                         "description": "Forbidden",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "500": {
                         "description": "Internal Server Error",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     }
                 }
@@ -15616,19 +16219,19 @@ const docTemplate = `{
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "401": {
                         "description": "Unauthorized",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "500": {
                         "description": "Internal Server Error",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     }
                 }
@@ -15660,13 +16263,13 @@ const docTemplate = `{
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "$ref": "#/definitions/apperror.Problem"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "500": {
                         "description": "Internal Server Error",
                         "schema": {
-                            "$ref": "#/definitions/apperror.Problem"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     }
                 }
@@ -15689,7 +16292,7 @@ const docTemplate = `{
                     "500": {
                         "description": "Internal Server Error",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     }
                 }
@@ -15718,13 +16321,13 @@ const docTemplate = `{
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "500": {
                         "description": "Internal Server Error",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     }
                 }
@@ -15757,13 +16360,13 @@ const docTemplate = `{
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "500": {
                         "description": "Internal Server Error",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     }
                 }
@@ -15795,19 +16398,19 @@ const docTemplate = `{
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "404": {
                         "description": "Not Found",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "500": {
                         "description": "Internal Server Error",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     }
                 }
@@ -15846,13 +16449,13 @@ const docTemplate = `{
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "500": {
                         "description": "Internal Server Error",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     }
                 }
@@ -15878,13 +16481,13 @@ const docTemplate = `{
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "500": {
                         "description": "Internal Server Error",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     }
                 }
@@ -15915,13 +16518,13 @@ const docTemplate = `{
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "500": {
                         "description": "Internal Server Error",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     }
                 }
@@ -15949,7 +16552,7 @@ const docTemplate = `{
                     "500": {
                         "description": "Internal Server Error",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     }
                 }
@@ -15987,19 +16590,19 @@ const docTemplate = `{
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "409": {
                         "description": "Conflict",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "500": {
                         "description": "Internal Server Error",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     }
                 }
@@ -16027,19 +16630,19 @@ const docTemplate = `{
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "404": {
                         "description": "Not Found",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "500": {
                         "description": "Internal Server Error",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     }
                 }
@@ -16071,25 +16674,25 @@ const docTemplate = `{
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "403": {
                         "description": "Forbidden",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "404": {
                         "description": "Not Found",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "500": {
                         "description": "Internal Server Error",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     }
                 }
@@ -16128,31 +16731,31 @@ const docTemplate = `{
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "403": {
                         "description": "Forbidden",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "404": {
                         "description": "Not Found",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "409": {
                         "description": "Conflict",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "500": {
                         "description": "Internal Server Error",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     }
                 }
@@ -16179,31 +16782,31 @@ const docTemplate = `{
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "403": {
                         "description": "Forbidden",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "404": {
                         "description": "Not Found",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "409": {
                         "description": "Conflict",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "500": {
                         "description": "Internal Server Error",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     }
                 }
@@ -16231,7 +16834,7 @@ const docTemplate = `{
                     "500": {
                         "description": "Internal Server Error",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     }
                 }
@@ -16265,13 +16868,13 @@ const docTemplate = `{
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "404": {
                         "description": "Not Found",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     }
                 }
@@ -16315,19 +16918,19 @@ const docTemplate = `{
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "404": {
                         "description": "Not Found",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "500": {
                         "description": "Internal Server Error",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     }
                 }
@@ -16356,7 +16959,7 @@ const docTemplate = `{
                     "500": {
                         "description": "Internal Server Error",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     }
                 }
@@ -16410,13 +17013,13 @@ const docTemplate = `{
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "404": {
                         "description": "Not Found",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     }
                 }
@@ -16453,13 +17056,13 @@ const docTemplate = `{
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "500": {
                         "description": "Internal Server Error",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     }
                 }
@@ -16496,13 +17099,13 @@ const docTemplate = `{
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "500": {
                         "description": "Internal Server Error",
                         "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     }
                 }
@@ -16524,24 +17127,16 @@ const docTemplate = `{
                 }
             }
         },
-        "/workspace-dependencies/catalog": {
+        "/workspace-dependencies": {
             "get": {
-                "description": "Every dependency the catalog declares, as its manifest describes it: what it provides, where it installs, whether it can be installed and whether the workspace image ships a baseline copy. Reads no workspace and needs no bot; the Supermarket shows it before a bot is chosen.",
+                "description": "Reads names, descriptions and verified icon URLs without inspecting or starting a bot workspace.",
                 "produces": [
                     "application/json"
                 ],
                 "tags": [
                     "containerd"
                 ],
-                "summary": "List the workspace dependency catalog",
-                "parameters": [
-                    {
-                        "type": "boolean",
-                        "description": "Refresh the remote catalog",
-                        "name": "refresh",
-                        "in": "query"
-                    }
-                ],
+                "summary": "List published workspace dependency metadata",
                 "responses": {
                     "200": {
                         "description": "OK",
@@ -16549,16 +17144,10 @@ const docTemplate = `{
                             "$ref": "#/definitions/handlers.WorkspaceDependencyCatalogResponse"
                         }
                     },
-                    "401": {
-                        "description": "Unauthorized",
-                        "schema": {
-                            "$ref": "#/definitions/handlers.ErrorResponse"
-                        }
-                    },
                     "503": {
                         "description": "Service Unavailable",
                         "schema": {
-                            "$ref": "#/definitions/apperror.Problem"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     }
                 }
@@ -16592,13 +17181,13 @@ const docTemplate = `{
                     "400": {
                         "description": "Bad Request",
                         "schema": {
-                            "$ref": "#/definitions/apperror.Problem"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     },
                     "404": {
                         "description": "Not Found",
                         "schema": {
-                            "$ref": "#/definitions/apperror.Problem"
+                            "$ref": "#/definitions/server.Problem"
                         }
                     }
                 }
@@ -17193,6 +17782,17 @@ const docTemplate = `{
                 }
             }
         },
+        "adapters.CompactUnavailableReason": {
+            "type": "string",
+            "enum": [
+                "unsupported",
+                "not_configured"
+            ],
+            "x-enum-varnames": [
+                "CompactUnsupported",
+                "CompactNotConfigured"
+            ]
+        },
         "adapters.DeleteResponse": {
             "type": "object",
             "properties": {
@@ -17232,13 +17832,35 @@ const docTemplate = `{
                     "type": "boolean"
                 },
                 "reason": {
-                    "type": "string"
+                    "description": "Reason says why Semantic is false.",
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/adapters.CompactUnavailableReason"
+                        }
+                    ]
                 },
                 "rebuild_index": {
                     "type": "boolean"
                 },
                 "semantic": {
                     "type": "boolean"
+                }
+            }
+        },
+        "adapters.MemoryConfig": {
+            "type": "object",
+            "properties": {
+                "embedding_model_id": {
+                    "description": "EmbeddingModelID optionally maintains the pgvector semantic seed index\nfor graph recall. Empty means graph-only recall.",
+                    "type": "string"
+                }
+            }
+        },
+        "adapters.MemoryConfigUpdateRequest": {
+            "type": "object",
+            "properties": {
+                "embedding_model_id": {
+                    "type": "string"
                 }
             }
         },
@@ -17340,156 +17962,6 @@ const docTemplate = `{
                 }
             }
         },
-        "adapters.ProviderCollectionStatus": {
-            "type": "object",
-            "properties": {
-                "exists": {
-                    "type": "boolean"
-                },
-                "health": {
-                    "$ref": "#/definitions/adapters.HealthStatus"
-                },
-                "name": {
-                    "type": "string"
-                },
-                "points": {
-                    "type": "integer"
-                }
-            }
-        },
-        "adapters.ProviderConfigSchema": {
-            "type": "object",
-            "properties": {
-                "fields": {
-                    "type": "object",
-                    "additionalProperties": {
-                        "$ref": "#/definitions/adapters.ProviderFieldSchema"
-                    }
-                }
-            }
-        },
-        "adapters.ProviderCreateRequest": {
-            "type": "object",
-            "properties": {
-                "config": {
-                    "type": "object",
-                    "additionalProperties": {}
-                },
-                "name": {
-                    "type": "string"
-                },
-                "provider": {
-                    "$ref": "#/definitions/adapters.ProviderType"
-                }
-            }
-        },
-        "adapters.ProviderFieldSchema": {
-            "type": "object",
-            "properties": {
-                "description": {
-                    "type": "string"
-                },
-                "example": {},
-                "required": {
-                    "type": "boolean"
-                },
-                "secret": {
-                    "type": "boolean"
-                },
-                "title": {
-                    "type": "string"
-                },
-                "type": {
-                    "type": "string"
-                }
-            }
-        },
-        "adapters.ProviderGetResponse": {
-            "type": "object",
-            "properties": {
-                "config": {
-                    "type": "object",
-                    "additionalProperties": {}
-                },
-                "created_at": {
-                    "type": "string"
-                },
-                "id": {
-                    "type": "string"
-                },
-                "is_default": {
-                    "type": "boolean"
-                },
-                "name": {
-                    "type": "string"
-                },
-                "provider": {
-                    "type": "string"
-                },
-                "updated_at": {
-                    "type": "string"
-                }
-            }
-        },
-        "adapters.ProviderMeta": {
-            "type": "object",
-            "properties": {
-                "config_schema": {
-                    "$ref": "#/definitions/adapters.ProviderConfigSchema"
-                },
-                "display_name": {
-                    "type": "string"
-                },
-                "provider": {
-                    "type": "string"
-                }
-            }
-        },
-        "adapters.ProviderStatusResponse": {
-            "type": "object",
-            "properties": {
-                "collections": {
-                    "type": "array",
-                    "items": {
-                        "$ref": "#/definitions/adapters.ProviderCollectionStatus"
-                    }
-                },
-                "embedding_model_id": {
-                    "type": "string"
-                },
-                "memory_mode": {
-                    "type": "string"
-                },
-                "provider_type": {
-                    "type": "string"
-                }
-            }
-        },
-        "adapters.ProviderType": {
-            "type": "string",
-            "enum": [
-                "builtin",
-                "mem0",
-                "openviking"
-            ],
-            "x-enum-varnames": [
-                "ProviderBuiltin",
-                "ProviderMem0",
-                "ProviderOpenViking"
-            ]
-        },
-        "adapters.ProviderUpdateRequest": {
-            "type": "object",
-            "properties": {
-                "config": {
-                    "type": "object",
-                    "additionalProperties": {}
-                },
-                "name": {
-                    "type": "string"
-                }
-            }
-        },
         "adapters.RebuildResult": {
             "type": "object",
             "properties": {
@@ -17545,6 +18017,76 @@ const docTemplate = `{
                 }
             }
         },
+        "agentcredential.Authorization": {
+            "type": "object",
+            "required": [
+                "auth_kind",
+                "expires_at",
+                "id",
+                "runtime",
+                "status"
+            ],
+            "properties": {
+                "auth_kind": {
+                    "type": "string"
+                },
+                "authorization_url": {
+                    "type": "string"
+                },
+                "expires_at": {
+                    "type": "string"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "interval_seconds": {
+                    "type": "integer"
+                },
+                "runtime": {
+                    "type": "string"
+                },
+                "status": {
+                    "type": "string",
+                    "enum": [
+                        "pending",
+                        "ready",
+                        "claimed"
+                    ]
+                },
+                "user_code": {
+                    "type": "string"
+                },
+                "verification_url": {
+                    "type": "string"
+                }
+            }
+        },
+        "agentcredential.AuthorizationRequest": {
+            "type": "object",
+            "required": [
+                "auth_kind",
+                "runtime"
+            ],
+            "properties": {
+                "auth_kind": {
+                    "type": "string"
+                },
+                "runtime": {
+                    "type": "string",
+                    "enum": [
+                        "codex",
+                        "claude-code",
+                        "grok-build"
+                    ]
+                },
+                "secret": {
+                    "type": "object",
+                    "additionalProperties": {
+                        "type": "string"
+                    }
+                }
+            }
+        },
         "agentcredential.PublicCredential": {
             "type": "object",
             "properties": {
@@ -17584,38 +18126,20 @@ const docTemplate = `{
                 }
             }
         },
-        "apperror.Problem": {
-            "type": "object",
-            "required": [
-                "args",
-                "code",
-                "detail",
-                "status",
-                "type"
+        "apperror.Fault": {
+            "type": "string",
+            "enum": [
+                "client",
+                "server",
+                "dependency",
+                "canceled"
             ],
-            "properties": {
-                "args": {
-                    "type": "object",
-                    "additionalProperties": {
-                        "type": "string"
-                    }
-                },
-                "code": {
-                    "type": "string"
-                },
-                "detail": {
-                    "type": "string"
-                },
-                "request_id": {
-                    "type": "string"
-                },
-                "status": {
-                    "type": "integer"
-                },
-                "type": {
-                    "type": "string"
-                }
-            }
+            "x-enum-varnames": [
+                "FaultClient",
+                "FaultServer",
+                "FaultDependency",
+                "FaultCanceled"
+            ]
         },
         "audio.ConfigSchema": {
             "type": "object",
@@ -18277,7 +18801,6 @@ const docTemplate = `{
                 "channels",
                 "mcp",
                 "schedules",
-                "email",
                 "history",
                 "assets",
                 "workspace"
@@ -18290,7 +18813,6 @@ const docTemplate = `{
                 "SectionChannels",
                 "SectionMCP",
                 "SectionSchedules",
-                "SectionEmail",
                 "SectionHistory",
                 "SectionAssets",
                 "SectionWorkspace"
@@ -19487,6 +20009,10 @@ const docTemplate = `{
                 },
                 "status": {
                     "type": "string"
+                },
+                "tool_discovery_error": {
+                    "description": "ToolDiscoveryError is set when the last attempt to load this\nconnection's tools for the agent failed, even though the connection\nitself is authorized. Empty when the tools loaded or were never asked.",
+                    "type": "string"
                 }
             }
         },
@@ -19498,6 +20024,45 @@ const docTemplate = `{
                     "items": {
                         "$ref": "#/definitions/connectors.Connector"
                     }
+                },
+                "tool_discovery": {
+                    "description": "ToolDiscovery reports the last outcome of loading the bot's connector\ntools for the agent; absent until the agent has tried.",
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/connectors.ToolDiscoveryStatus"
+                        }
+                    ]
+                }
+            }
+        },
+        "connectors.ToolDiscoveryFailure": {
+            "type": "object",
+            "properties": {
+                "alias": {
+                    "type": "string"
+                },
+                "connection_id": {
+                    "type": "string"
+                },
+                "error": {
+                    "type": "string"
+                }
+            }
+        },
+        "connectors.ToolDiscoveryStatus": {
+            "type": "object",
+            "properties": {
+                "error": {
+                    "type": "string"
+                },
+                "failed_connections": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/connectors.ToolDiscoveryFailure"
+                    }
+                },
+                "observed_at": {
+                    "type": "string"
                 }
             }
         },
@@ -19894,6 +20459,8 @@ const docTemplate = `{
                 "read_media",
                 "renderer_prune",
                 "mid_stream_retry",
+                "current_input_omitted",
+                "current_input_images_omitted",
                 "run_abort_observed"
             ],
             "x-enum-varnames": [
@@ -19909,6 +20476,8 @@ const docTemplate = `{
                 "MutationReadMedia",
                 "MutationRendererPrune",
                 "MutationMidStreamRetry",
+                "MutationCurrentInputOmitted",
+                "MutationCurrentInputImagesOmitted",
                 "MutationRunAbortObserved"
             ]
         },
@@ -20290,7 +20859,7 @@ const docTemplate = `{
                     "$ref": "#/definitions/conversation.UIToolApproval"
                 },
                 "args": {
-                    "description": "Args are the machine-readable parameters of a notice block: the string\nvalues of the runtime_notice event metadata (dep_id and install_task_id\nfor a workspace dependency notice, for instance). The client renders\nactions from them instead of parsing Content.",
+                    "description": "Args are the machine-readable parameters of a notice or error block: the\nstring values of the runtime_notice event metadata (dep_id and\ninstall_task_id for a workspace dependency notice, for instance), or the\ncatalog args stored with a failure's code. The client renders text and\nactions from them instead of parsing Content.",
                     "type": "object",
                     "additionalProperties": {
                         "type": "string"
@@ -20310,6 +20879,13 @@ const docTemplate = `{
                 },
                 "content": {
                     "type": "string"
+                },
+                "diff": {
+                    "description": "Diff is a UI-only unified diff attached to the tool call at execution\ntime (edit/write tools). It never reaches the model: rows persist it\nunder the diffs metadata key — on the assistant row (lifted out of\nproviderMetadata at store time) or, for the deferred-approval path, on\nthe tool message row — never inside the tool result.",
+                    "type": "string"
+                },
+                "elapsed_time_seconds": {
+                    "type": "number"
                 },
                 "execution_location": {
                     "$ref": "#/definitions/conversation.UIExecutionLocation"
@@ -20351,6 +20927,8 @@ const docTemplate = `{
                 "tool",
                 "attachments",
                 "error",
+                "command",
+                "status",
                 "notice"
             ],
             "x-enum-varnames": [
@@ -20359,6 +20937,8 @@ const docTemplate = `{
                 "UIMessageTool",
                 "UIMessageAttachments",
                 "UIMessageError",
+                "UIMessageCommand",
+                "UIMessageStatus",
                 "UIMessageNotice"
             ]
         },
@@ -20483,6 +21063,10 @@ const docTemplate = `{
                         "system"
                     ]
                 },
+                "runtime_forkable": {
+                    "description": "RuntimeForkable means this persisted turn has a runtime fork anchor.\nSession-level runtime support and access permissions still apply.",
+                    "type": "boolean"
+                },
                 "sender_avatar_url": {
                     "type": "string"
                 },
@@ -20561,247 +21145,71 @@ const docTemplate = `{
                 }
             }
         },
-        "email.BindingResponse": {
+        "external.Controls": {
             "type": "object",
             "properties": {
-                "bot_id": {
-                    "type": "string"
+                "capabilities": {
+                    "$ref": "#/definitions/turn.RuntimeControlCapabilities"
                 },
-                "can_delete": {
-                    "type": "boolean"
-                },
-                "can_read": {
-                    "type": "boolean"
-                },
-                "can_write": {
-                    "type": "boolean"
-                },
-                "config": {
-                    "type": "object",
-                    "additionalProperties": {}
-                },
-                "created_at": {
-                    "type": "string"
-                },
-                "email_address": {
-                    "type": "string"
-                },
-                "email_provider_id": {
-                    "type": "string"
-                },
-                "id": {
-                    "type": "string"
-                },
-                "updated_at": {
-                    "type": "string"
-                }
-            }
-        },
-        "email.ConfigSchema": {
-            "type": "object",
-            "properties": {
-                "fields": {
+                "commands": {
                     "type": "array",
                     "items": {
-                        "$ref": "#/definitions/email.FieldSchema"
-                    }
-                }
-            }
-        },
-        "email.CreateBindingRequest": {
-            "type": "object",
-            "properties": {
-                "can_delete": {
-                    "type": "boolean"
-                },
-                "can_read": {
-                    "type": "boolean"
-                },
-                "can_write": {
-                    "type": "boolean"
-                },
-                "config": {
-                    "type": "object",
-                    "additionalProperties": {}
-                },
-                "email_address": {
-                    "type": "string"
-                },
-                "email_provider_id": {
-                    "type": "string"
-                }
-            }
-        },
-        "email.CreateProviderRequest": {
-            "type": "object",
-            "properties": {
-                "config": {
-                    "type": "object",
-                    "additionalProperties": {}
-                },
-                "name": {
-                    "type": "string"
-                },
-                "provider": {
-                    "type": "string"
-                }
-            }
-        },
-        "email.FieldSchema": {
-            "type": "object",
-            "properties": {
-                "description": {
-                    "type": "string"
-                },
-                "enum": {
-                    "type": "array",
-                    "items": {
-                        "type": "string"
+                        "$ref": "#/definitions/turn.RuntimeCommand"
                     }
                 },
-                "example": {},
-                "key": {
-                    "type": "string"
+                "modes": {
+                    "$ref": "#/definitions/turn.RuntimeModeState"
                 },
-                "order": {
-                    "type": "integer"
+                "plan_mode": {
+                    "$ref": "#/definitions/turn.RuntimeModeState"
                 },
-                "required": {
-                    "type": "boolean"
-                },
-                "title": {
-                    "type": "string"
-                },
-                "type": {
+                "session_id": {
                     "type": "string"
                 }
             }
         },
-        "email.OutboxItemResponse": {
+        "external.Goal": {
             "type": "object",
             "properties": {
-                "attachments": {
-                    "type": "array",
-                    "items": {}
-                },
-                "body_html": {
-                    "type": "string"
-                },
-                "body_text": {
-                    "type": "string"
-                },
-                "bot_id": {
-                    "type": "string"
-                },
-                "created_at": {
-                    "type": "string"
-                },
-                "error": {
-                    "type": "string"
-                },
-                "from": {
-                    "type": "string"
-                },
-                "id": {
-                    "type": "string"
-                },
-                "message_id": {
-                    "type": "string"
-                },
-                "provider_id": {
-                    "type": "string"
-                },
-                "sent_at": {
+                "objective": {
                     "type": "string"
                 },
                 "status": {
                     "type": "string"
                 },
-                "subject": {
-                    "type": "string"
+                "time_used_seconds": {
+                    "type": "integer"
                 },
-                "to": {
+                "token_budget": {
+                    "type": "integer"
+                },
+                "tokens_used": {
+                    "type": "integer"
+                }
+            }
+        },
+        "external.ModeState": {
+            "type": "object",
+            "properties": {
+                "apply_on_next_turn": {
+                    "description": "Direct runtimes save a preference and apply it when starting the next turn.",
+                    "type": "boolean"
+                },
+                "available_modes": {
                     "type": "array",
                     "items": {
-                        "type": "string"
+                        "$ref": "#/definitions/turn.RuntimeMode"
                     }
-                }
-            }
-        },
-        "email.ProviderMeta": {
-            "type": "object",
-            "properties": {
-                "config_schema": {
-                    "$ref": "#/definitions/email.ConfigSchema"
                 },
-                "display_name": {
+                "current_mode_id": {
                     "type": "string"
                 },
-                "provider": {
-                    "type": "string"
-                }
-            }
-        },
-        "email.ProviderResponse": {
-            "type": "object",
-            "properties": {
-                "config": {
-                    "type": "object",
-                    "additionalProperties": {}
-                },
-                "created_at": {
+                "kind": {
+                    "description": "Kind distinguishes permission presets from arbitrary agent session modes.",
                     "type": "string"
                 },
-                "id": {
-                    "type": "string"
-                },
-                "name": {
-                    "type": "string"
-                },
-                "provider": {
-                    "type": "string"
-                },
-                "updated_at": {
-                    "type": "string"
-                },
-                "user_id": {
-                    "type": "string"
-                }
-            }
-        },
-        "email.UpdateBindingRequest": {
-            "type": "object",
-            "properties": {
-                "can_delete": {
+                "supported": {
                     "type": "boolean"
-                },
-                "can_read": {
-                    "type": "boolean"
-                },
-                "can_write": {
-                    "type": "boolean"
-                },
-                "config": {
-                    "type": "object",
-                    "additionalProperties": {}
-                },
-                "email_address": {
-                    "type": "string"
-                }
-            }
-        },
-        "email.UpdateProviderRequest": {
-            "type": "object",
-            "properties": {
-                "config": {
-                    "type": "object",
-                    "additionalProperties": {}
-                },
-                "name": {
-                    "type": "string"
-                },
-                "provider": {
-                    "type": "string"
                 }
             }
         },
@@ -20845,6 +21253,17 @@ const docTemplate = `{
                     "items": {
                         "$ref": "#/definitions/external.ReasoningEffortOption"
                     }
+                },
+                "resolved_model_id": {
+                    "description": "ResolvedModelID preserves a runtime-advertised full model name for\nvalidation without duplicating its alias in the model picker.",
+                    "type": "string"
+                },
+                "unavailable_permission_modes": {
+                    "description": "IDs belong to this runtime's permission menu, not a shared preset enum.",
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
                 }
             }
         },
@@ -20862,7 +21281,44 @@ const docTemplate = `{
                 }
             }
         },
-        "externalagent.CodexDeviceLoginAuthorizeResponse": {
+        "externalagent.CodexUsageResponse": {
+            "type": "object",
+            "required": [
+                "limit_reached",
+                "windows"
+            ],
+            "properties": {
+                "limit_reached": {
+                    "type": "boolean"
+                },
+                "windows": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/externalagent.CodexUsageWindow"
+                    }
+                }
+            }
+        },
+        "externalagent.CodexUsageWindow": {
+            "type": "object",
+            "required": [
+                "used_percent",
+                "window_minutes"
+            ],
+            "properties": {
+                "resets_at": {
+                    "type": "string"
+                },
+                "used_percent": {
+                    "type": "integer"
+                },
+                "window_minutes": {
+                    "description": "WindowMinutes is 0 when the backend does not report the window length.",
+                    "type": "integer"
+                }
+            }
+        },
+        "externalagent.DeviceLoginAuthorizeResponse": {
             "type": "object",
             "required": [
                 "login_id",
@@ -20881,7 +21337,7 @@ const docTemplate = `{
                 }
             }
         },
-        "externalagent.CodexDeviceLoginPollRequest": {
+        "externalagent.DeviceLoginPollRequest": {
             "type": "object",
             "required": [
                 "login_id"
@@ -20892,7 +21348,7 @@ const docTemplate = `{
                 }
             }
         },
-        "externalagent.CodexDeviceLoginPollResponse": {
+        "externalagent.DeviceLoginPollResponse": {
             "type": "object",
             "required": [
                 "status"
@@ -21079,6 +21535,467 @@ const docTemplate = `{
                 }
             }
         },
+        "handlers.AgentAuthorizationClaimRequest": {
+            "type": "object",
+            "required": [
+                "authorization_id"
+            ],
+            "properties": {
+                "authorization_id": {
+                    "type": "string"
+                }
+            }
+        },
+        "handlers.AgentAuthorizationExchangeRequest": {
+            "type": "object",
+            "required": [
+                "code"
+            ],
+            "properties": {
+                "code": {
+                    "type": "string"
+                }
+            }
+        },
+        "handlers.AppConnectorCredentialRequest": {
+            "type": "object",
+            "required": [
+                "auth_method"
+            ],
+            "properties": {
+                "auth_method": {
+                    "type": "string"
+                },
+                "fields": {
+                    "type": "object",
+                    "additionalProperties": {
+                        "type": "string"
+                    }
+                }
+            }
+        },
+        "handlers.AppConnectorItem": {
+            "type": "object",
+            "properties": {
+                "connection_id": {
+                    "type": "string"
+                },
+                "connector": {
+                    "$ref": "#/definitions/connectors.Connector"
+                },
+                "required": {
+                    "type": "boolean"
+                },
+                "status": {
+                    "description": "Status is linked once a connection is bound, otherwise needs_auth.",
+                    "type": "string",
+                    "enum": [
+                        "linked",
+                        "needs_auth"
+                    ]
+                },
+                "type": {
+                    "type": "string"
+                }
+            }
+        },
+        "handlers.AppConnectorOAuthRequest": {
+            "type": "object",
+            "required": [
+                "auth_method"
+            ],
+            "properties": {
+                "auth_method": {
+                    "type": "string"
+                }
+            }
+        },
+        "handlers.AppDependencyItem": {
+            "type": "object",
+            "properties": {
+                "dependency": {
+                    "$ref": "#/definitions/handlers.WorkspaceDependencyItem"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "shared": {
+                    "description": "Shared is set when another installed App references the same\ndependency on this bot workspace.",
+                    "type": "boolean"
+                }
+            }
+        },
+        "handlers.AppInstallRequest": {
+            "type": "object",
+            "required": [
+                "app_id",
+                "registry_id",
+                "revision"
+            ],
+            "properties": {
+                "app_id": {
+                    "type": "string"
+                },
+                "registry_id": {
+                    "type": "string"
+                },
+                "revision": {
+                    "type": "string"
+                }
+            }
+        },
+        "handlers.AppItem": {
+            "type": "object",
+            "properties": {
+                "app_id": {
+                    "type": "string"
+                },
+                "author": {
+                    "$ref": "#/definitions/handlers.SupermarketAuthor"
+                },
+                "available_revision": {
+                    "description": "AvailableRevision and AvailableVersion name the registry's newer\nrelease after a check found one.",
+                    "type": "string"
+                },
+                "available_version": {
+                    "type": "string"
+                },
+                "category": {
+                    "type": "string"
+                },
+                "category_name": {
+                    "type": "string"
+                },
+                "connectors": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/handlers.AppConnectorItem"
+                    }
+                },
+                "dependencies": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/handlers.AppDependencyItem"
+                    }
+                },
+                "description": {
+                    "type": "string"
+                },
+                "homepage": {
+                    "type": "string"
+                },
+                "icon": {
+                    "$ref": "#/definitions/handlers.SupermarketSkillIcon"
+                },
+                "installation_id": {
+                    "description": "InstallationID is empty for a discovered App: a dependency the\nworkspace carries that no installed App references, shown through\nits canonical App.",
+                    "type": "string"
+                },
+                "installed_at": {
+                    "type": "string"
+                },
+                "last_checked_at": {
+                    "type": "string"
+                },
+                "last_error": {
+                    "description": "LastError is text recorded by earlier servers. A failure recorded now\ncarries LastErrorCode, which clients render as errors.\u003ccode\u003e.",
+                    "type": "string"
+                },
+                "last_error_code": {
+                    "type": "string"
+                },
+                "license": {
+                    "type": "string"
+                },
+                "name": {
+                    "type": "string"
+                },
+                "reason": {
+                    "type": "string",
+                    "enum": [
+                        "user",
+                        "required"
+                    ]
+                },
+                "registry_id": {
+                    "type": "string"
+                },
+                "repository": {
+                    "type": "string"
+                },
+                "revision": {
+                    "type": "string"
+                },
+                "skills": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/handlers.AppSkillItem"
+                    }
+                },
+                "status": {
+                    "description": "Status is discovered for Apps without an installation record.",
+                    "type": "string",
+                    "enum": [
+                        "installed",
+                        "partial",
+                        "installing",
+                        "updating",
+                        "removing",
+                        "failed",
+                        "discovered"
+                    ]
+                },
+                "tags": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "translations": {
+                    "type": "object",
+                    "additionalProperties": {
+                        "$ref": "#/definitions/handlers.SupermarketAppTranslation"
+                    }
+                },
+                "updated_at": {
+                    "type": "string"
+                },
+                "version": {
+                    "type": "string"
+                }
+            }
+        },
+        "handlers.AppListResponse": {
+            "type": "object",
+            "properties": {
+                "dependency_catalog_refreshing": {
+                    "type": "boolean"
+                },
+                "dependency_catalog_stale": {
+                    "type": "boolean"
+                },
+                "items": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/handlers.AppItem"
+                    }
+                },
+                "update_checks_incomplete": {
+                    "type": "boolean"
+                },
+                "workspace_state": {
+                    "type": "string",
+                    "enum": [
+                        "running",
+                        "not_running",
+                        "missing"
+                    ]
+                }
+            }
+        },
+        "handlers.AppRemovalPreviewApp": {
+            "type": "object",
+            "properties": {
+                "app_id": {
+                    "type": "string"
+                },
+                "installation_id": {
+                    "type": "string"
+                },
+                "registry_id": {
+                    "type": "string"
+                },
+                "version": {
+                    "type": "string"
+                }
+            }
+        },
+        "handlers.AppRemovalPreviewConnector": {
+            "type": "object",
+            "properties": {
+                "action": {
+                    "type": "string",
+                    "enum": [
+                        "disconnect",
+                        "keep",
+                        "none"
+                    ]
+                },
+                "connection_id": {
+                    "type": "string"
+                },
+                "reason": {
+                    "type": "string",
+                    "enum": [
+                        "shared"
+                    ]
+                },
+                "type": {
+                    "type": "string"
+                }
+            }
+        },
+        "handlers.AppRemovalPreviewDependency": {
+            "type": "object",
+            "properties": {
+                "action": {
+                    "type": "string",
+                    "enum": [
+                        "remove",
+                        "keep"
+                    ]
+                },
+                "id": {
+                    "type": "string"
+                },
+                "reason": {
+                    "type": "string",
+                    "enum": [
+                        "shared",
+                        "image",
+                        "absent",
+                        "required"
+                    ]
+                }
+            }
+        },
+        "handlers.AppRemovalPreviewResponse": {
+            "type": "object",
+            "properties": {
+                "connectors": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/handlers.AppRemovalPreviewConnector"
+                    }
+                },
+                "dependencies": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/handlers.AppRemovalPreviewDependency"
+                    }
+                },
+                "installation_id": {
+                    "type": "string"
+                },
+                "required_apps": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/handlers.AppRemovalPreviewApp"
+                    }
+                }
+            }
+        },
+        "handlers.AppSkillItem": {
+            "type": "object",
+            "properties": {
+                "description": {
+                    "type": "string"
+                },
+                "icon": {
+                    "$ref": "#/definitions/handlers.SupermarketSkillIcon"
+                },
+                "install_id": {
+                    "type": "string"
+                },
+                "name": {
+                    "type": "string"
+                },
+                "skill_id": {
+                    "type": "string"
+                }
+            }
+        },
+        "handlers.AppStreamEvent": {
+            "type": "object",
+            "properties": {
+                "args": {
+                    "type": "object",
+                    "additionalProperties": {
+                        "type": "string"
+                    }
+                },
+                "code": {
+                    "type": "string"
+                },
+                "data": {
+                    "type": "string"
+                },
+                "detail": {
+                    "type": "string"
+                },
+                "fault": {
+                    "$ref": "#/definitions/apperror.Fault"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "kind": {
+                    "type": "string",
+                    "enum": [
+                        "app",
+                        "dependency",
+                        "skills",
+                        "connector"
+                    ]
+                },
+                "message": {
+                    "type": "string"
+                },
+                "request_id": {
+                    "type": "string"
+                },
+                "status": {
+                    "type": "string"
+                },
+                "stream": {
+                    "type": "string",
+                    "enum": [
+                        "stdout",
+                        "stderr"
+                    ]
+                },
+                "type": {
+                    "type": "string",
+                    "enum": [
+                        "started",
+                        "step",
+                        "log",
+                        "step_done",
+                        "done",
+                        "error"
+                    ]
+                },
+                "version": {
+                    "type": "string"
+                }
+            }
+        },
+        "handlers.AppUpdateRequest": {
+            "type": "object",
+            "required": [
+                "app_id",
+                "registry_id"
+            ],
+            "properties": {
+                "app_id": {
+                    "type": "string"
+                },
+                "dependencies": {
+                    "description": "Dependencies are updated to their latest version.",
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "registry_id": {
+                    "type": "string"
+                },
+                "release": {
+                    "description": "Release moves the installation to the registry's current release.",
+                    "type": "boolean"
+                }
+            }
+        },
         "handlers.BatchDeleteRequest": {
             "type": "object",
             "properties": {
@@ -21158,6 +22075,9 @@ const docTemplate = `{
                 "display_name": {
                     "type": "string"
                 },
+                "owner_only": {
+                    "type": "boolean"
+                },
                 "target_spec": {
                     "$ref": "#/definitions/channel.TargetSpec"
                 },
@@ -21169,21 +22089,13 @@ const docTemplate = `{
                 }
             }
         },
-        "handlers.CommandActionError": {
-            "type": "object",
-            "properties": {
-                "code": {
-                    "type": "string"
-                },
-                "message": {
-                    "type": "string"
-                }
-            }
-        },
         "handlers.CommandActionListItem": {
             "type": "object",
             "properties": {
                 "description": {
+                    "type": "string"
+                },
+                "i18n_key": {
                     "type": "string"
                 },
                 "id": {
@@ -21200,6 +22112,7 @@ const docTemplate = `{
         "handlers.CommandActionResult": {
             "type": "object",
             "properties": {
+                "data": {},
                 "items": {
                     "type": "array",
                     "items": {
@@ -21209,7 +22122,13 @@ const docTemplate = `{
                 "kind": {
                     "type": "string"
                 },
+                "notice": {
+                    "type": "string"
+                },
                 "text": {
+                    "type": "string"
+                },
+                "text_key": {
                     "type": "string"
                 },
                 "title": {
@@ -21223,13 +22142,26 @@ const docTemplate = `{
                 "action_id": {
                     "type": "string"
                 },
+                "args": {
+                    "type": "object",
+                    "additionalProperties": {
+                        "type": "string"
+                    }
+                },
+                "code": {
+                    "description": "Code, Args, Message and Fault describe a command_error, as the error\nevent of a stream does; the client renders the code.",
+                    "type": "string"
+                },
                 "composer_scope": {
                     "type": "string"
                 },
-                "error": {
-                    "$ref": "#/definitions/handlers.CommandActionError"
+                "fault": {
+                    "$ref": "#/definitions/apperror.Fault"
                 },
                 "invocation_id": {
+                    "type": "string"
+                },
+                "message": {
                     "type": "string"
                 },
                 "result": {
@@ -21257,23 +22189,6 @@ const docTemplate = `{
                 }
             }
         },
-        "handlers.ConnectorCredentialRequest": {
-            "type": "object",
-            "properties": {
-                "auth_method": {
-                    "type": "string"
-                },
-                "connector_type": {
-                    "type": "string"
-                },
-                "fields": {
-                    "type": "object",
-                    "additionalProperties": {
-                        "type": "string"
-                    }
-                }
-            }
-        },
         "handlers.ConnectorEnabledRequest": {
             "type": "object",
             "required": [
@@ -21286,20 +22201,12 @@ const docTemplate = `{
                 }
             }
         },
-        "handlers.ConnectorOAuthRequest": {
-            "type": "object",
-            "properties": {
-                "auth_method": {
-                    "type": "string"
-                },
-                "connector_type": {
-                    "type": "string"
-                }
-            }
-        },
         "handlers.ContainerCPUMetricsResponse": {
             "type": "object",
             "properties": {
+                "cores": {
+                    "type": "integer"
+                },
                 "kernel_nanoseconds": {
                     "type": "integer"
                 },
@@ -21429,10 +22336,14 @@ const docTemplate = `{
         "handlers.ContainerStorageMetricsResponse": {
             "type": "object",
             "properties": {
+                "limit_bytes": {
+                    "type": "integer"
+                },
                 "path": {
                     "type": "string"
                 },
                 "used_bytes": {
+                    "description": "UsedBytes is omitted when only the allotment is known.",
                     "type": "integer"
                 }
             }
@@ -21559,10 +22470,8 @@ const docTemplate = `{
                     "type": "string"
                 },
                 "restore_data": {
+                    "description": "RestoreData imports the preserved /data archive into the new workspace\nonce it is running. Backends that expose snapshot mounts restore the\narchive while starting regardless of this flag; the flag matters for\nbackends that restore through the bridge.",
                     "type": "boolean"
-                },
-                "snapshotter": {
-                    "type": "string"
                 }
             }
         },
@@ -21658,32 +22567,6 @@ const docTemplate = `{
                 }
             }
         },
-        "handlers.ErrorResponse": {
-            "type": "object",
-            "properties": {
-                "args": {
-                    "type": "object",
-                    "additionalProperties": {
-                        "type": "string"
-                    }
-                },
-                "code": {
-                    "type": "string"
-                },
-                "http_status": {
-                    "type": "integer"
-                },
-                "i18n_key": {
-                    "type": "string"
-                },
-                "message": {
-                    "type": "string"
-                },
-                "reason": {
-                    "type": "string"
-                }
-            }
-        },
         "handlers.FSArchiveRequest": {
             "type": "object",
             "properties": {
@@ -21769,6 +22652,10 @@ const docTemplate = `{
             "type": "object",
             "properties": {
                 "path": {
+                    "type": "string"
+                },
+                "workspace_target_id": {
+                    "description": "WorkspaceTargetID overrides the Bot's Primary target for this request.",
                     "type": "string"
                 }
             }
@@ -21914,6 +22801,9 @@ const docTemplate = `{
                 "namespace": {
                     "type": "string"
                 },
+                "removal": {
+                    "$ref": "#/definitions/handlers.WorkspaceRemovalResponse"
+                },
                 "runtime_backend": {
                     "type": "string"
                 },
@@ -22016,105 +22906,6 @@ const docTemplate = `{
                     "items": {
                         "$ref": "#/definitions/handlers.HookEventInfo"
                     }
-                }
-            }
-        },
-        "handlers.InstallPackageRequest": {
-            "type": "object",
-            "required": [
-                "package_id",
-                "registry_id",
-                "revision"
-            ],
-            "properties": {
-                "package_id": {
-                    "type": "string"
-                },
-                "registry_id": {
-                    "type": "string"
-                },
-                "revision": {
-                    "type": "string"
-                },
-                "workspace_target_id": {
-                    "type": "string"
-                }
-            }
-        },
-        "handlers.InstallRegistryPackageResponse": {
-            "type": "object",
-            "required": [
-                "installation",
-                "ok",
-                "package_id",
-                "registry_id",
-                "revision",
-                "skills",
-                "workspace_target_id"
-            ],
-            "properties": {
-                "installation": {
-                    "$ref": "#/definitions/skillpackages.Installation"
-                },
-                "ok": {
-                    "type": "boolean"
-                },
-                "package_id": {
-                    "type": "string"
-                },
-                "registry_id": {
-                    "type": "string"
-                },
-                "revision": {
-                    "type": "string"
-                },
-                "skills": {
-                    "type": "array",
-                    "items": {
-                        "$ref": "#/definitions/handlers.InstallRegistrySkillResponse"
-                    }
-                },
-                "workspace_target_id": {
-                    "type": "string"
-                }
-            }
-        },
-        "handlers.InstallRegistrySkillResponse": {
-            "type": "object",
-            "required": [
-                "artifact_digest",
-                "files_written",
-                "install_id",
-                "ok",
-                "package_id",
-                "registry_id",
-                "skill_id",
-                "workspace_target_id"
-            ],
-            "properties": {
-                "artifact_digest": {
-                    "type": "string"
-                },
-                "files_written": {
-                    "type": "integer"
-                },
-                "install_id": {
-                    "type": "string"
-                },
-                "ok": {
-                    "type": "boolean"
-                },
-                "package_id": {
-                    "type": "string"
-                },
-                "registry_id": {
-                    "type": "string"
-                },
-                "skill_id": {
-                    "type": "string"
-                },
-                "workspace_target_id": {
-                    "type": "string"
                 }
             }
         },
@@ -22344,6 +23135,62 @@ const docTemplate = `{
                 }
             }
         },
+        "handlers.RuntimeCommandRequest": {
+            "type": "object",
+            "properties": {
+                "command": {
+                    "type": "string"
+                }
+            }
+        },
+        "handlers.RuntimeCommandResponse": {
+            "type": "object",
+            "properties": {
+                "data": {},
+                "notice": {
+                    "type": "string"
+                },
+                "text": {
+                    "type": "string"
+                }
+            }
+        },
+        "handlers.RuntimeGoalRequest": {
+            "type": "object",
+            "properties": {
+                "action": {
+                    "type": "string",
+                    "enum": [
+                        "pause",
+                        "clear"
+                    ]
+                }
+            }
+        },
+        "handlers.RuntimeGoalResponse": {
+            "type": "object",
+            "properties": {
+                "goal": {
+                    "$ref": "#/definitions/external.Goal"
+                }
+            }
+        },
+        "handlers.RuntimeModeRequest": {
+            "type": "object",
+            "properties": {
+                "mode_id": {
+                    "type": "string"
+                },
+                "mode_kind": {
+                    "description": "Omitted means permission; plan changes the independent planning mode.",
+                    "type": "string",
+                    "enum": [
+                        "permission",
+                        "plan"
+                    ]
+                }
+            }
+        },
         "handlers.SafeSkillsResponse": {
             "type": "object",
             "properties": {
@@ -22375,9 +23222,29 @@ const docTemplate = `{
                 }
             }
         },
+        "handlers.SiteIconResponse": {
+            "type": "object",
+            "properties": {
+                "dark": {
+                    "type": "string"
+                },
+                "dark_mask": {
+                    "type": "string"
+                },
+                "light": {
+                    "type": "string"
+                },
+                "light_mask": {
+                    "type": "string"
+                }
+            }
+        },
         "handlers.SkillItem": {
             "type": "object",
             "properties": {
+                "app_id": {
+                    "type": "string"
+                },
                 "content": {
                     "type": "string"
                 },
@@ -22398,9 +23265,6 @@ const docTemplate = `{
                     "additionalProperties": {}
                 },
                 "name": {
-                    "type": "string"
-                },
-                "package_id": {
                     "type": "string"
                 },
                 "raw": {
@@ -22444,7 +23308,7 @@ const docTemplate = `{
             "type": "object",
             "properties": {
                 "source_paths": {
-                    "description": "SourcePaths are SKILL.md paths reported in the skill list. Deleting by name\ncannot address registry skills, which are nested by registry and package.",
+                    "description": "SourcePaths are SKILL.md paths reported in the skill list. Deleting by name\ncannot address registry skills, which are nested by registry and app.",
                     "type": "array",
                     "items": {
                         "type": "string"
@@ -22522,6 +23386,405 @@ const docTemplate = `{
                 }
             }
         },
+        "handlers.StarterPrompt": {
+            "type": "object",
+            "required": [
+                "prompt",
+                "title"
+            ],
+            "properties": {
+                "prompt": {
+                    "type": "string"
+                },
+                "title": {
+                    "type": "string"
+                }
+            }
+        },
+        "handlers.StarterPromptsRefreshRequest": {
+            "type": "object",
+            "properties": {
+                "avoid": {
+                    "description": "Avoid lists the prompts currently shown, which the new set must not repeat.",
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "locale": {
+                    "description": "Locale is the BCP 47 language tag the suggestions are written in. Defaults to en.",
+                    "type": "string"
+                }
+            }
+        },
+        "handlers.StarterPromptsResponse": {
+            "type": "object",
+            "required": [
+                "hash",
+                "items",
+                "unchanged"
+            ],
+            "properties": {
+                "hash": {
+                    "type": "string"
+                },
+                "items": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/handlers.StarterPrompt"
+                    }
+                },
+                "unchanged": {
+                    "type": "boolean"
+                }
+            }
+        },
+        "handlers.SupermarketAppCategory": {
+            "type": "object",
+            "required": [
+                "app_count",
+                "id",
+                "name",
+                "names",
+                "order",
+                "registries"
+            ],
+            "properties": {
+                "app_count": {
+                    "type": "integer"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "name": {
+                    "type": "string"
+                },
+                "names": {
+                    "type": "object",
+                    "additionalProperties": {
+                        "type": "string"
+                    }
+                },
+                "order": {
+                    "type": "integer"
+                },
+                "registries": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/handlers.SupermarketAppCategoryRegistry"
+                    }
+                }
+            }
+        },
+        "handlers.SupermarketAppCategoryListResponse": {
+            "type": "object",
+            "required": [
+                "data"
+            ],
+            "properties": {
+                "data": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/handlers.SupermarketAppCategory"
+                    }
+                }
+            }
+        },
+        "handlers.SupermarketAppCategoryRegistry": {
+            "type": "object",
+            "required": [
+                "count",
+                "id"
+            ],
+            "properties": {
+                "count": {
+                    "type": "integer"
+                },
+                "id": {
+                    "type": "string"
+                }
+            }
+        },
+        "handlers.SupermarketAppConnector": {
+            "type": "object",
+            "required": [
+                "required",
+                "type"
+            ],
+            "properties": {
+                "required": {
+                    "type": "boolean"
+                },
+                "type": {
+                    "type": "string"
+                }
+            }
+        },
+        "handlers.SupermarketAppDescriptor": {
+            "type": "object",
+            "required": [
+                "app_id",
+                "categories",
+                "category",
+                "category_name",
+                "connector_count",
+                "connectors",
+                "dependencies",
+                "dependency_count",
+                "description",
+                "name",
+                "registry_id",
+                "revision",
+                "schema_version",
+                "skill_count",
+                "skills",
+                "tags"
+            ],
+            "properties": {
+                "app_id": {
+                    "type": "string"
+                },
+                "author": {
+                    "$ref": "#/definitions/handlers.SupermarketAuthor"
+                },
+                "categories": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/handlers.SupermarketAppSkillCategory"
+                    }
+                },
+                "category": {
+                    "type": "string"
+                },
+                "category_name": {
+                    "type": "string"
+                },
+                "connector_count": {
+                    "type": "integer"
+                },
+                "connectors": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/handlers.SupermarketAppConnector"
+                    }
+                },
+                "dependencies": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "dependency_count": {
+                    "type": "integer"
+                },
+                "description": {
+                    "type": "string"
+                },
+                "homepage": {
+                    "type": "string"
+                },
+                "icon": {
+                    "$ref": "#/definitions/handlers.SupermarketSkillIcon"
+                },
+                "license": {
+                    "type": "string"
+                },
+                "name": {
+                    "type": "string"
+                },
+                "registry_id": {
+                    "type": "string"
+                },
+                "repository": {
+                    "type": "string"
+                },
+                "revision": {
+                    "type": "string"
+                },
+                "schema_version": {
+                    "type": "string"
+                },
+                "skill_count": {
+                    "type": "integer"
+                },
+                "skills": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/handlers.SupermarketCatalogSkill"
+                    }
+                },
+                "tags": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "translations": {
+                    "type": "object",
+                    "additionalProperties": {
+                        "$ref": "#/definitions/handlers.SupermarketAppTranslation"
+                    }
+                },
+                "version": {
+                    "type": "string"
+                }
+            }
+        },
+        "handlers.SupermarketAppListResponse": {
+            "type": "object",
+            "required": [
+                "data",
+                "limit",
+                "page",
+                "total"
+            ],
+            "properties": {
+                "data": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/handlers.SupermarketAppSummary"
+                    }
+                },
+                "limit": {
+                    "type": "integer"
+                },
+                "page": {
+                    "type": "integer"
+                },
+                "total": {
+                    "type": "integer"
+                }
+            }
+        },
+        "handlers.SupermarketAppSkillCategory": {
+            "type": "object",
+            "required": [
+                "id",
+                "name",
+                "skill_count"
+            ],
+            "properties": {
+                "id": {
+                    "type": "string"
+                },
+                "name": {
+                    "type": "string"
+                },
+                "skill_count": {
+                    "type": "integer"
+                }
+            }
+        },
+        "handlers.SupermarketAppSummary": {
+            "type": "object",
+            "required": [
+                "app_id",
+                "categories",
+                "category",
+                "category_name",
+                "connector_count",
+                "connectors",
+                "dependencies",
+                "dependency_count",
+                "description",
+                "name",
+                "registry_id",
+                "schema_version",
+                "skill_count",
+                "tags"
+            ],
+            "properties": {
+                "app_id": {
+                    "type": "string"
+                },
+                "author": {
+                    "$ref": "#/definitions/handlers.SupermarketAuthor"
+                },
+                "categories": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/handlers.SupermarketAppSkillCategory"
+                    }
+                },
+                "category": {
+                    "type": "string"
+                },
+                "category_name": {
+                    "type": "string"
+                },
+                "connector_count": {
+                    "type": "integer"
+                },
+                "connectors": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/handlers.SupermarketAppConnector"
+                    }
+                },
+                "dependencies": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "dependency_count": {
+                    "type": "integer"
+                },
+                "description": {
+                    "type": "string"
+                },
+                "homepage": {
+                    "type": "string"
+                },
+                "icon": {
+                    "$ref": "#/definitions/handlers.SupermarketSkillIcon"
+                },
+                "license": {
+                    "type": "string"
+                },
+                "name": {
+                    "type": "string"
+                },
+                "registry_id": {
+                    "type": "string"
+                },
+                "repository": {
+                    "type": "string"
+                },
+                "schema_version": {
+                    "type": "string"
+                },
+                "skill_count": {
+                    "type": "integer"
+                },
+                "tags": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "translations": {
+                    "type": "object",
+                    "additionalProperties": {
+                        "$ref": "#/definitions/handlers.SupermarketAppTranslation"
+                    }
+                },
+                "version": {
+                    "type": "string"
+                }
+            }
+        },
+        "handlers.SupermarketAppTranslation": {
+            "type": "object",
+            "properties": {
+                "description": {
+                    "type": "string"
+                },
+                "name": {
+                    "type": "string"
+                }
+            }
+        },
         "handlers.SupermarketAuthor": {
             "type": "object",
             "required": [
@@ -22540,6 +23803,7 @@ const docTemplate = `{
         "handlers.SupermarketCatalogSkill": {
             "type": "object",
             "required": [
+                "app_id",
                 "artifact",
                 "author",
                 "category",
@@ -22548,7 +23812,6 @@ const docTemplate = `{
                 "files",
                 "install_id",
                 "name",
-                "package_id",
                 "registry_id",
                 "schema_version",
                 "skill_id",
@@ -22556,6 +23819,9 @@ const docTemplate = `{
                 "tags"
             ],
             "properties": {
+                "app_id": {
+                    "type": "string"
+                },
                 "artifact": {
                     "$ref": "#/definitions/handlers.SupermarketSkillArtifact"
                 },
@@ -22587,9 +23853,6 @@ const docTemplate = `{
                     "type": "string"
                 },
                 "name": {
-                    "type": "string"
-                },
-                "package_id": {
                     "type": "string"
                 },
                 "registry_id": {
@@ -22645,18 +23908,21 @@ const docTemplate = `{
             "type": "object",
             "required": [
                 "adapter",
+                "app_count",
                 "category_count",
                 "enabled",
                 "id",
                 "name",
-                "package_count",
                 "priority",
                 "skill_count",
-                "skipped_package_count"
+                "skipped_app_count"
             ],
             "properties": {
                 "adapter": {
                     "type": "string"
+                },
+                "app_count": {
+                    "type": "integer"
                 },
                 "category_count": {
                     "type": "integer"
@@ -22670,9 +23936,6 @@ const docTemplate = `{
                 "name": {
                     "type": "string"
                 },
-                "package_count": {
-                    "type": "integer"
-                },
                 "priority": {
                     "type": "integer"
                 },
@@ -22685,7 +23948,7 @@ const docTemplate = `{
                 "skill_count": {
                     "type": "integer"
                 },
-                "skipped_package_count": {
+                "skipped_app_count": {
                     "type": "integer"
                 }
             }
@@ -22743,61 +24006,6 @@ const docTemplate = `{
                 }
             }
         },
-        "handlers.SupermarketSkillCategory": {
-            "type": "object",
-            "required": [
-                "count",
-                "id",
-                "name",
-                "registries"
-            ],
-            "properties": {
-                "count": {
-                    "type": "integer"
-                },
-                "id": {
-                    "type": "string"
-                },
-                "name": {
-                    "type": "string"
-                },
-                "registries": {
-                    "type": "array",
-                    "items": {
-                        "$ref": "#/definitions/handlers.SupermarketSkillCategoryRegistry"
-                    }
-                }
-            }
-        },
-        "handlers.SupermarketSkillCategoryListResponse": {
-            "type": "object",
-            "required": [
-                "data"
-            ],
-            "properties": {
-                "data": {
-                    "type": "array",
-                    "items": {
-                        "$ref": "#/definitions/handlers.SupermarketSkillCategory"
-                    }
-                }
-            }
-        },
-        "handlers.SupermarketSkillCategoryRegistry": {
-            "type": "object",
-            "required": [
-                "count",
-                "id"
-            ],
-            "properties": {
-                "count": {
-                    "type": "integer"
-                },
-                "id": {
-                    "type": "string"
-                }
-            }
-        },
         "handlers.SupermarketSkillIcon": {
             "type": "object",
             "properties": {
@@ -22834,158 +24042,6 @@ const docTemplate = `{
                 }
             }
         },
-        "handlers.SupermarketSkillPackageCategory": {
-            "type": "object",
-            "required": [
-                "id",
-                "name",
-                "skill_count"
-            ],
-            "properties": {
-                "id": {
-                    "type": "string"
-                },
-                "name": {
-                    "type": "string"
-                },
-                "skill_count": {
-                    "type": "integer"
-                }
-            }
-        },
-        "handlers.SupermarketSkillPackageDescriptor": {
-            "type": "object",
-            "required": [
-                "categories",
-                "description",
-                "name",
-                "package_id",
-                "registry_id",
-                "revision",
-                "schema_version",
-                "skill_count",
-                "skills",
-                "tags"
-            ],
-            "properties": {
-                "categories": {
-                    "type": "array",
-                    "items": {
-                        "$ref": "#/definitions/handlers.SupermarketSkillPackageCategory"
-                    }
-                },
-                "description": {
-                    "type": "string"
-                },
-                "icon": {
-                    "$ref": "#/definitions/handlers.SupermarketSkillIcon"
-                },
-                "name": {
-                    "type": "string"
-                },
-                "package_id": {
-                    "type": "string"
-                },
-                "registry_id": {
-                    "type": "string"
-                },
-                "revision": {
-                    "type": "string"
-                },
-                "schema_version": {
-                    "type": "string"
-                },
-                "skill_count": {
-                    "type": "integer"
-                },
-                "skills": {
-                    "type": "array",
-                    "items": {
-                        "$ref": "#/definitions/handlers.SupermarketCatalogSkill"
-                    }
-                },
-                "tags": {
-                    "type": "array",
-                    "items": {
-                        "type": "string"
-                    }
-                }
-            }
-        },
-        "handlers.SupermarketSkillPackageListResponse": {
-            "type": "object",
-            "required": [
-                "data",
-                "limit",
-                "page",
-                "total"
-            ],
-            "properties": {
-                "data": {
-                    "type": "array",
-                    "items": {
-                        "$ref": "#/definitions/handlers.SupermarketSkillPackageSummary"
-                    }
-                },
-                "limit": {
-                    "type": "integer"
-                },
-                "page": {
-                    "type": "integer"
-                },
-                "total": {
-                    "type": "integer"
-                }
-            }
-        },
-        "handlers.SupermarketSkillPackageSummary": {
-            "type": "object",
-            "required": [
-                "categories",
-                "description",
-                "name",
-                "package_id",
-                "registry_id",
-                "schema_version",
-                "skill_count",
-                "tags"
-            ],
-            "properties": {
-                "categories": {
-                    "type": "array",
-                    "items": {
-                        "$ref": "#/definitions/handlers.SupermarketSkillPackageCategory"
-                    }
-                },
-                "description": {
-                    "type": "string"
-                },
-                "icon": {
-                    "$ref": "#/definitions/handlers.SupermarketSkillIcon"
-                },
-                "name": {
-                    "type": "string"
-                },
-                "package_id": {
-                    "type": "string"
-                },
-                "registry_id": {
-                    "type": "string"
-                },
-                "schema_version": {
-                    "type": "string"
-                },
-                "skill_count": {
-                    "type": "integer"
-                },
-                "tags": {
-                    "type": "array",
-                    "items": {
-                        "type": "string"
-                    }
-                }
-            }
-        },
         "handlers.SupermarketSkillSource": {
             "type": "object",
             "required": [
@@ -23015,6 +24071,9 @@ const docTemplate = `{
                     "type": "integer"
                 },
                 "created_at": {
+                    "type": "string"
+                },
+                "harness": {
                     "type": "string"
                 },
                 "id": {
@@ -23085,6 +24144,13 @@ const docTemplate = `{
                     }
                 },
                 "discuss": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/handlers.DailyTokenUsage"
+                    }
+                },
+                "memory": {
+                    "description": "Memory is usage of the memory LLM (extract / decide / compact), which\nruns outside any session.",
                     "type": "array",
                     "items": {
                         "$ref": "#/definitions/handlers.DailyTokenUsage"
@@ -23204,41 +24270,7 @@ const docTemplate = `{
         "handlers.WorkspaceDependencyCatalogItem": {
             "type": "object",
             "properties": {
-                "actions_supported": {
-                    "description": "ActionsSupported lists the actions the catalog gives the dependency,\nbefore any workspace state is considered.",
-                    "type": "array",
-                    "items": {
-                        "type": "string",
-                        "enum": [
-                            "install",
-                            "update",
-                            "reinstall",
-                            "remove",
-                            "rollback",
-                            "check_update"
-                        ]
-                    }
-                },
-                "category": {
-                    "description": "Category is agent, runtime, or tool.",
-                    "type": "string",
-                    "enum": [
-                        "agent",
-                        "runtime",
-                        "tool"
-                    ]
-                },
-                "definition_revision": {
-                    "type": "string"
-                },
                 "description": {
-                    "type": "string"
-                },
-                "has_image_baseline": {
-                    "description": "HasImageBaseline is set when the workspace image ships a copy of the\ndependency; removing a managed overlay returns to that copy.",
-                    "type": "boolean"
-                },
-                "icon": {
                     "type": "string"
                 },
                 "icon_url": {
@@ -23247,68 +24279,27 @@ const docTemplate = `{
                 "id": {
                     "type": "string"
                 },
-                "installable": {
-                    "description": "Installable is set when the catalog has an install script for the\ndependency, i.e. it can be installed into a workspace (as a managed\noverlay when the image already ships it).",
-                    "type": "boolean"
-                },
                 "name": {
                     "type": "string"
                 },
-                "platforms": {
-                    "type": "array",
-                    "items": {
-                        "$ref": "#/definitions/handlers.WorkspaceDependencyCatalogPlatform"
-                    }
-                },
-                "provides": {
-                    "description": "Provides lists the commands the dependency makes available.",
+                "requires": {
+                    "description": "Requires lists the dependency IDs installed first when missing.",
                     "type": "array",
                     "items": {
                         "type": "string"
                     }
-                },
-                "registry_id": {
-                    "type": "string"
-                },
-                "retired": {
-                    "type": "boolean"
                 },
                 "translations": {
                     "type": "object",
                     "additionalProperties": {
                         "$ref": "#/definitions/handlers.WorkspaceDependencyTranslation"
                     }
-                },
-                "version_pin": {
-                    "description": "VersionPin is the version every install produces when the manifest\nlocks one; omitted when installs follow the latest release.",
-                    "type": "string"
-                }
-            }
-        },
-        "handlers.WorkspaceDependencyCatalogPlatform": {
-            "type": "object",
-            "properties": {
-                "arch": {
-                    "type": "array",
-                    "items": {
-                        "type": "string"
-                    }
-                },
-                "libc": {
-                    "description": "Libc is empty when the libc flavour does not matter for the OS.",
-                    "type": "string"
-                },
-                "os": {
-                    "type": "string"
                 }
             }
         },
         "handlers.WorkspaceDependencyCatalogResponse": {
             "type": "object",
             "properties": {
-                "catalog_fetched_at": {
-                    "type": "string"
-                },
                 "catalog_stale": {
                     "type": "boolean"
                 },
@@ -23325,6 +24316,13 @@ const docTemplate = `{
             "properties": {
                 "definition_revision": {
                     "type": "string"
+                },
+                "prerequisite_revisions": {
+                    "description": "PrerequisiteRevisions are the definition revisions the confirmation\nshowed for the dependency's prerequisites, keyed by dependency id. When\npresent, a missing prerequisite installs only from its confirmed\nrevision; one without an entry refuses the operation with\nworkspace_dependency.prerequisites_changed. Omitted, prerequisites\nresolve when the operation starts, like an omitted definition_revision.",
+                    "type": "object",
+                    "additionalProperties": {
+                        "type": "string"
+                    }
                 },
                 "session_id": {
                     "description": "SessionID optionally routes operation progress to its originating conversation.",
@@ -23394,9 +24392,11 @@ const docTemplate = `{
                     "type": "string"
                 },
                 "last_error": {
+                    "description": "LastError is text recorded by earlier servers, including the script\noutput they used to keep. A failure recorded now carries LastErrorCode.",
                     "type": "string"
                 },
                 "last_error_code": {
+                    "description": "LastErrorCode is the catalog code of a recorded failure, which clients\nrender as errors.\u003ccode\u003e.",
                     "type": "string"
                 },
                 "latest_version": {
@@ -23433,6 +24433,13 @@ const docTemplate = `{
                 },
                 "registry_id": {
                     "type": "string"
+                },
+                "requires": {
+                    "description": "Requires lists the dependency IDs installed first when missing.",
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
                 },
                 "retired": {
                     "type": "boolean"
@@ -23475,6 +24482,10 @@ const docTemplate = `{
                 "catalog_fetched_at": {
                     "type": "string"
                 },
+                "catalog_refreshing": {
+                    "description": "CatalogRefreshing is set while the catalog is refreshed in the\nbackground; listing again shortly may show a newer catalog.",
+                    "type": "boolean"
+                },
                 "catalog_stale": {
                     "type": "boolean"
                 },
@@ -23491,13 +24502,16 @@ const docTemplate = `{
                 "platform": {
                     "$ref": "#/definitions/handlers.WorkspaceDependencyPlatform"
                 },
+                "update_checks_incomplete": {
+                    "description": "UpdateChecksIncomplete is set by check-updates when some checks did not\nfinish in time; those keep their last result.",
+                    "type": "boolean"
+                },
                 "workspace_state": {
                     "type": "string",
                     "enum": [
                         "running",
                         "not_running",
-                        "missing",
-                        "remote_offline"
+                        "missing"
                     ]
                 }
             }
@@ -23573,10 +24587,6 @@ const docTemplate = `{
                     "items": {
                         "type": "string"
                     }
-                },
-                "workspace_target_id": {
-                    "description": "WorkspaceTargetID overrides the query parameter of the same name.",
-                    "type": "string"
                 }
             }
         },
@@ -23594,8 +24604,7 @@ const docTemplate = `{
                     "enum": [
                         "running",
                         "not_running",
-                        "missing",
-                        "remote_offline"
+                        "missing"
                     ]
                 }
             }
@@ -23684,6 +24693,9 @@ const docTemplate = `{
                         "type": "string"
                     }
                 },
+                "fault": {
+                    "$ref": "#/definitions/apperror.Fault"
+                },
                 "message": {
                     "type": "string"
                 },
@@ -23722,10 +24734,32 @@ const docTemplate = `{
                 }
             }
         },
+        "handlers.WorkspaceRemovalResponse": {
+            "type": "object",
+            "properties": {
+                "preserve_data": {
+                    "type": "boolean"
+                },
+                "state": {
+                    "type": "string",
+                    "enum": [
+                        "removing",
+                        "failed"
+                    ]
+                },
+                "updated_at": {
+                    "type": "string"
+                }
+            }
+        },
         "handlers.acpRuntimeCreateRequest": {
             "type": "object",
             "properties": {
                 "acp_agent_id": {
+                    "type": "string"
+                },
+                "bot_agent_id": {
+                    "description": "BotAgentID names the Agent instance whose setup launches the runtime;\nonly a session bound to the same instance can later adopt it.",
                     "type": "string"
                 },
                 "project_path": {
@@ -23938,29 +24972,6 @@ const docTemplate = `{
                     "type": "string"
                 },
                 "type": {
-                    "type": "string"
-                }
-            }
-        },
-        "handlers.emailOAuthStatusResponse": {
-            "type": "object",
-            "properties": {
-                "configured": {
-                    "type": "boolean"
-                },
-                "email_address": {
-                    "type": "string"
-                },
-                "expired": {
-                    "type": "boolean"
-                },
-                "expires_at": {
-                    "type": "string"
-                },
-                "has_token": {
-                    "type": "boolean"
-                },
-                "provider": {
                     "type": "string"
                 }
             }
@@ -24278,6 +25289,34 @@ const docTemplate = `{
                 },
                 "state": {
                     "type": "string"
+                }
+            }
+        },
+        "handlers.sessionInvocationResponse": {
+            "type": "object",
+            "properties": {
+                "found": {
+                    "description": "Found is false when the session has no run for this invocation, which\nis an ordinary answer (never admitted, or not yet) rather than an error.",
+                    "type": "boolean"
+                },
+                "invocation_id": {
+                    "type": "string"
+                },
+                "run_id": {
+                    "type": "string"
+                },
+                "session_id": {
+                    "type": "string"
+                },
+                "state": {
+                    "description": "State is the durable run state as the ledger records it, e.g.\naccepted, running, waiting_decision, finishing, completed, aborted,\nfailed or lost.",
+                    "type": "string"
+                },
+                "turn_id": {
+                    "type": "string"
+                },
+                "turn_position": {
+                    "type": "integer"
                 }
             }
         },
@@ -24886,6 +25925,10 @@ const docTemplate = `{
                 "dimensions": {
                     "type": "integer"
                 },
+                "max_output_tokens": {
+                    "description": "MaxOutputTokens is the most output tokens the model can produce in one\nresponse; nil means unknown. When set, every turn requests an explicit\nlimit within it.",
+                    "type": "integer"
+                },
                 "reasoning_default_on": {
                     "description": "ReasoningDefaultOn reports whether omitting the thinking field leaves the\nmodel thinking. Separate from off-ability: Claude 4.6 can be turned off *and*\ndefaults to off, while Opus 5 can be turned off but defaults to on, so\nomitting the field there keeps thinking running — billed, and invisible to a\nuser who believes they turned it off. nil means unknown.",
                     "type": "boolean"
@@ -24936,11 +25979,12 @@ const docTemplate = `{
         "models.TestResponse": {
             "type": "object",
             "properties": {
+                "code": {
+                    "description": "Code is the error catalog code for why the test did not pass. It is\nempty on success and when no catalog code describes the failure.",
+                    "type": "string"
+                },
                 "latency_ms": {
                     "type": "integer"
-                },
-                "message": {
-                    "type": "string"
                 },
                 "reachable": {
                     "type": "boolean"
@@ -25204,11 +26248,12 @@ const docTemplate = `{
         "providers.TestResponse": {
             "type": "object",
             "properties": {
+                "code": {
+                    "description": "Code is the error catalog code for why the test did not pass. It is\nempty on success and when no catalog code describes the failure.",
+                    "type": "string"
+                },
                 "latency_ms": {
                     "type": "integer"
-                },
-                "message": {
-                    "type": "string"
                 },
                 "reachable": {
                     "type": "boolean"
@@ -25403,6 +26448,10 @@ const docTemplate = `{
                 "max_calls": {
                     "$ref": "#/definitions/schedule.NullableInt"
                 },
+                "max_run_seconds": {
+                    "description": "MaxRunSeconds is the execution budget (300-86400 seconds); zero uses one hour.",
+                    "type": "integer"
+                },
                 "model_id": {
                     "description": "ModelID is a native model UUID override (models.id).",
                     "type": "string"
@@ -25449,6 +26498,10 @@ const docTemplate = `{
                 "bot_agent_id": {
                     "description": "BotAgentID selects one persisted BotAgent for a new session. Empty means\nthe built-in Native runtime (or the legacy ACP fields below).",
                     "type": "string"
+                },
+                "max_run_seconds": {
+                    "description": "MaxRunSeconds is the execution budget (300-86400 seconds); zero uses one hour.",
+                    "type": "integer"
                 },
                 "model_id": {
                     "description": "ModelID is a native model UUID override (models.id).",
@@ -25501,6 +26554,20 @@ const docTemplate = `{
                 }
             }
         },
+        "schedule.ListRunSessionsResponse": {
+            "type": "object",
+            "properties": {
+                "items": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/schedule.RunSession"
+                    }
+                },
+                "next_cursor": {
+                    "type": "string"
+                }
+            }
+        },
         "schedule.Log": {
             "type": "object",
             "properties": {
@@ -25510,7 +26577,11 @@ const docTemplate = `{
                 "completed_at": {
                     "type": "string"
                 },
+                "error_code": {
+                    "type": "string"
+                },
                 "error_message": {
+                    "description": "ErrorMessage is the text an earlier server stored; new failures set\nErrorCode and leave it empty.",
                     "type": "string"
                 },
                 "id": {
@@ -25542,6 +26613,43 @@ const docTemplate = `{
                 },
                 "value": {
                     "type": "integer"
+                }
+            }
+        },
+        "schedule.RunSession": {
+            "type": "object",
+            "properties": {
+                "completed_at": {
+                    "description": "CompletedAt is null while the fire is still running.",
+                    "type": "string",
+                    "x-nullable": true
+                },
+                "error_code": {
+                    "type": "string"
+                },
+                "log_id": {
+                    "description": "LogID identifies the fire (schedule_logs.id).",
+                    "type": "string"
+                },
+                "session_id": {
+                    "description": "SessionID is empty when the fire failed before any session existed.",
+                    "type": "string"
+                },
+                "started_at": {
+                    "type": "string"
+                },
+                "status": {
+                    "description": "Status is running while the fire has not completed, then ok or error.",
+                    "type": "string",
+                    "enum": [
+                        "running",
+                        "ok",
+                        "error"
+                    ]
+                },
+                "title": {
+                    "description": "Title is the session title, empty when there is no session.",
+                    "type": "string"
                 }
             }
         },
@@ -25582,6 +26690,10 @@ const docTemplate = `{
                     "type": "string"
                 },
                 "max_calls": {
+                    "type": "integer"
+                },
+                "max_run_seconds": {
+                    "description": "MaxRunSeconds is the execution budget (300-86400 seconds); zero uses one hour.",
                     "type": "integer"
                 },
                 "model_id": {
@@ -25790,6 +26902,46 @@ const docTemplate = `{
                 }
             }
         },
+        "server.Problem": {
+            "type": "object",
+            "required": [
+                "args",
+                "code",
+                "detail",
+                "fault",
+                "status",
+                "type"
+            ],
+            "properties": {
+                "args": {
+                    "type": "object",
+                    "additionalProperties": {
+                        "type": "string"
+                    }
+                },
+                "code": {
+                    "type": "string"
+                },
+                "detail": {
+                    "type": "string"
+                },
+                "fault": {
+                    "$ref": "#/definitions/apperror.Fault"
+                },
+                "request_id": {
+                    "type": "string"
+                },
+                "status": {
+                    "type": "integer"
+                },
+                "trace_id": {
+                    "type": "string"
+                },
+                "type": {
+                    "type": "string"
+                }
+            }
+        },
         "session.Session": {
             "type": "object",
             "properties": {
@@ -25952,10 +27104,12 @@ const docTemplate = `{
                 "image_model_id": {
                     "type": "string"
                 },
-                "language": {
-                    "type": "string"
+                "memory_enabled": {
+                    "description": "MemoryEnabled reports whether the bot uses Built-in Memory. It is derived\nfrom MemoryProviderID, which stays internal to the server.",
+                    "type": "boolean"
                 },
-                "memory_provider_id": {
+                "memory_llm_model_id": {
+                    "description": "MemoryLLMModelID is the LLM behind memory extract / decide / compact.\nEmpty falls back to the chat model.",
                     "type": "string"
                 },
                 "overlay_config": {
@@ -26126,11 +27280,11 @@ const docTemplate = `{
                 "image_model_id": {
                     "type": "string"
                 },
-                "language": {
-                    "description": "Language follows the same pointer rule; \"\" normalizes to DefaultLanguage\n(\"auto\") rather than clearing the column.",
-                    "type": "string"
+                "memory_enabled": {
+                    "description": "MemoryEnabled turns Built-in Memory on or off; nil keeps the current state.",
+                    "type": "boolean"
                 },
-                "memory_provider_id": {
+                "memory_llm_model_id": {
                     "type": "string"
                 },
                 "overlay_config": {
@@ -26172,45 +27326,6 @@ const docTemplate = `{
                 }
             }
         },
-        "skillpackages.Installation": {
-            "type": "object",
-            "required": [
-                "bot_id",
-                "id",
-                "installed_at",
-                "package_id",
-                "registry_id",
-                "revision",
-                "updated_at",
-                "workspace_target_id"
-            ],
-            "properties": {
-                "bot_id": {
-                    "type": "string"
-                },
-                "id": {
-                    "type": "string"
-                },
-                "installed_at": {
-                    "type": "string"
-                },
-                "package_id": {
-                    "type": "string"
-                },
-                "registry_id": {
-                    "type": "string"
-                },
-                "revision": {
-                    "type": "string"
-                },
-                "updated_at": {
-                    "type": "string"
-                },
-                "workspace_target_id": {
-                    "type": "string"
-                }
-            }
-        },
         "skills.SafeCatalogItem": {
             "type": "object",
             "properties": {
@@ -26231,17 +27346,112 @@ const docTemplate = `{
                 }
             }
         },
-        "supermarket.UninstallPackageResponse": {
+        "turn.RuntimeCommand": {
             "type": "object",
-            "required": [
-                "installation",
-                "ok"
-            ],
             "properties": {
-                "installation": {
-                    "$ref": "#/definitions/skillpackages.Installation"
+                "completed_text": {
+                    "type": "string"
                 },
-                "ok": {
+                "description": {
+                    "type": "string"
+                },
+                "i18n_key": {
+                    "description": "I18nKey identifies host-owned copy. Native descriptions take precedence.",
+                    "type": "string"
+                },
+                "input_hint": {
+                    "type": "string"
+                },
+                "kind": {
+                    "$ref": "#/definitions/turn.RuntimeCommandKind"
+                },
+                "name": {
+                    "type": "string"
+                },
+                "running_text": {
+                    "type": "string"
+                }
+            }
+        },
+        "turn.RuntimeCommandKind": {
+            "type": "string",
+            "enum": [
+                "turn",
+                "read",
+                "operation"
+            ],
+            "x-enum-varnames": [
+                "RuntimeCommandTurn",
+                "RuntimeCommandRead",
+                "RuntimeCommandOperation"
+            ]
+        },
+        "turn.RuntimeControlCapabilities": {
+            "type": "object",
+            "properties": {
+                "compact": {
+                    "type": "boolean"
+                },
+                "fork_latest_only": {
+                    "type": "boolean"
+                },
+                "goal": {
+                    "type": "boolean"
+                },
+                "permission_modes": {
+                    "type": "boolean"
+                },
+                "plan_mode": {
+                    "type": "boolean"
+                }
+            }
+        },
+        "turn.RuntimeMode": {
+            "type": "object",
+            "properties": {
+                "description": {
+                    "type": "string"
+                },
+                "i18n_key": {
+                    "type": "string"
+                },
+                "icon": {
+                    "description": "Icon is a presentation hint; clients may fall back for unknown values.",
+                    "type": "string"
+                },
+                "id": {
+                    "type": "string"
+                },
+                "name": {
+                    "type": "string"
+                },
+                "warning": {
+                    "description": "Warning marks a runtime-declared elevated permission option.",
+                    "type": "boolean"
+                }
+            }
+        },
+        "turn.RuntimeModeState": {
+            "type": "object",
+            "properties": {
+                "apply_on_next_turn": {
+                    "description": "Direct runtimes save a preference and apply it when starting the next turn.",
+                    "type": "boolean"
+                },
+                "available_modes": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/turn.RuntimeMode"
+                    }
+                },
+                "current_mode_id": {
+                    "type": "string"
+                },
+                "kind": {
+                    "description": "Kind distinguishes permission presets from arbitrary agent session modes.",
+                    "type": "string"
+                },
+                "supported": {
                     "type": "boolean"
                 }
             }
@@ -26282,6 +27492,9 @@ const docTemplate = `{
                     "type": "string"
                 },
                 "label": {
+                    "type": "string"
+                },
+                "label_key": {
                     "type": "string"
                 }
             }
@@ -26584,6 +27797,62 @@ const docTemplate = `{
                     "type": "string"
                 },
                 "workspace_target_id": {
+                    "type": "string"
+                }
+            }
+        },
+        "workdir.DirectoriesResponse": {
+            "type": "object",
+            "properties": {
+                "directories": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/workdir.Directory"
+                    }
+                },
+                "path": {
+                    "type": "string"
+                },
+                "workspace_target_id": {
+                    "type": "string"
+                }
+            }
+        },
+        "workdir.Directory": {
+            "type": "object",
+            "properties": {
+                "name": {
+                    "type": "string"
+                },
+                "path": {
+                    "type": "string"
+                }
+            }
+        },
+        "workdir.GitBranchResponse": {
+            "type": "object",
+            "properties": {
+                "branch": {
+                    "type": "string"
+                },
+                "branches": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "busy": {
+                    "type": "boolean"
+                }
+            }
+        },
+        "workdir.SwitchGitBranchRequest": {
+            "type": "object",
+            "required": [
+                "branch"
+            ],
+            "properties": {
+                "branch": {
                     "type": "string"
                 }
             }

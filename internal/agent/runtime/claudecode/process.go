@@ -2,11 +2,12 @@ package claudecode
 
 import (
 	"context"
-	"fmt"
 	"io"
 	"strings"
+	"time"
 
 	"github.com/felinics/memoh/internal/agent/runtime/agentprocess"
+	"github.com/felinics/memoh/internal/errs"
 	"github.com/felinics/memoh/internal/workspace/bridge"
 	"github.com/felinics/memoh/internal/workspace/vpath"
 )
@@ -32,6 +33,7 @@ type cliProcess interface {
 	io.Writer
 	CloseStdin()
 	Done() <-chan struct{}
+	Err() error
 	StderrTail() string
 	Close() error
 }
@@ -43,9 +45,13 @@ func startCLI(ctx context.Context, client *bridge.Client, workDir string, args, 
 		workDir = defaultProjectPath
 	}
 	if err := client.Mkdir(ctx, configDir); err != nil {
-		return nil, fmt.Errorf("create claude config directory %s: %w", configDir, err)
+		return nil, errs.WrapDependency(err, "create claude config directory "+configDir)
 	}
-	return agentprocess.Start(ctx, client, cliCommand(launcher, args), workDir, env)
+	proc, err := agentprocess.Start(ctx, client, cliCommand(launcher, args), workDir, env)
+	if err != nil {
+		return nil, errs.WrapDependency(err, "")
+	}
+	return proc, nil
 }
 
 // cliCommand builds the bridge shell command line. The launcher path is
@@ -57,4 +63,19 @@ func cliCommand(launcher string, args []string) string {
 		return command
 	}
 	return command + " " + strings.Join(args, " ")
+}
+
+// drainCLI closes input and waits for the CLI's durable writes to finish.
+// A result event can precede transcript flush, especially after /compact.
+func drainCLI(proc cliProcess, timeout time.Duration) error {
+	proc.CloseStdin()
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+	select {
+	case <-proc.Done():
+		return errs.WrapDependency(proc.Err(), "")
+	case <-timer.C:
+		_ = proc.Close()
+		return errs.NewDependency("claude did not exit after closing stdin")
+	}
 }

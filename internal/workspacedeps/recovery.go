@@ -7,6 +7,7 @@ import (
 	"path"
 	"strings"
 
+	"github.com/felinics/memoh/internal/apperror"
 	"github.com/felinics/memoh/internal/workspacedeps/catalog"
 )
 
@@ -21,7 +22,7 @@ func (s *Service) cleanupReceipt(ctx context.Context, op *operation) {
 	cleanupCtx, cancel := finalizeContext(ctx)
 	defer cancel()
 	if err := CleanupReceipt(cleanupCtx, op.client, op.receipt); err != nil {
-		s.logger.Warn("clean completed dependency receipt", slog.String("dependency_id", op.dep.ID), slog.Any("error", err))
+		s.logger.WarnContext(ctx, "clean completed dependency receipt", slog.String("dependency_id", op.dep.ID), slog.Any("error", err))
 	}
 }
 
@@ -39,7 +40,7 @@ func (s *Service) recoverReceipt(ctx context.Context, key InstallationKey, dep c
 	if dep.ID != receipt.DependencyID || dep.ManifestDigest != receipt.ManifestDigest || dep.SourceURL != receipt.SourceURL || dep.RegistryID != receipt.RegistryID || dep.Revision != receipt.DefinitionRevision {
 		return nil, fmt.Errorf("%w: receipt publication does not match the verified definition", ErrDefinitionInvalid)
 	}
-	client, root, err := s.target(ctx, key.BotID, key.WorkspaceTargetID)
+	client, root, err := s.target(ctx, key.BotID)
 	if err != nil {
 		return nil, err
 	}
@@ -103,7 +104,7 @@ func (s *Service) markInterrupted(ctx context.Context, key InstallationKey, rec 
 		// them for explicit operator recovery, including legacy directory locks.
 		return Installation{}, ErrBusy
 	}
-	client, root, err := s.target(ctx, key.BotID, key.WorkspaceTargetID)
+	client, root, err := s.target(ctx, key.BotID)
 	if err != nil {
 		return Installation{}, err
 	}
@@ -117,6 +118,6 @@ func (s *Service) markInterrupted(ctx context.Context, key InstallationKey, rec 
 	if err := runFilesystemScript(ctx, client, home, key.DependencyID, script); err != nil {
 		return Installation{}, err
 	}
-	rec.Status, rec.LastError = StatusFailed, interruptedMessage
+	rec.Status, rec.LastError, rec.LastErrorCode = StatusFailed, "", string(apperror.CodeWorkspaceDependencyOperationInterrupted)
 	return s.store.FinishOperation(ctx, key, rec.OperationID, &rec)
 }

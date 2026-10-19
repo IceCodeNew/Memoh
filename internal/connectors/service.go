@@ -21,6 +21,7 @@ import (
 	"github.com/felinics/memoh/internal/db"
 	dbsqlc "github.com/felinics/memoh/internal/db/postgres/sqlc"
 	dbstore "github.com/felinics/memoh/internal/db/store"
+	"github.com/felinics/memoh/internal/errs"
 )
 
 var (
@@ -40,10 +41,17 @@ type Connector struct {
 	ConnectorType string `json:"connector_type"`
 	AuthMethod    string `json:"auth_method"`
 	Status        string `json:"status"`
+	// ToolDiscoveryError is set when the last attempt to load this
+	// connection's tools for the agent failed, even though the connection
+	// itself is authorized. Empty when the tools loaded or were never asked.
+	ToolDiscoveryError string `json:"tool_discovery_error,omitempty"`
 }
 
 type ListResponse struct {
 	Items []Connector `json:"items"`
+	// ToolDiscovery reports the last outcome of loading the bot's connector
+	// tools for the agent; absent until the agent has tried.
+	ToolDiscovery *ToolDiscoveryStatus `json:"tool_discovery,omitempty"`
 }
 
 // Service owns local connector bindings and the trusted Connect-It
@@ -52,6 +60,8 @@ type Service struct {
 	queries dbstore.Queries
 	client  *connectsdk.Client
 	logger  *slog.Logger
+
+	discovery toolDiscoveryStore
 }
 
 func NewService(log *slog.Logger, cfg config.Config, queries dbstore.Queries) (*Service, error) {
@@ -101,6 +111,7 @@ func (s *Service) List(ctx context.Context, botID string) ([]Connector, error) {
 		}
 		items = append(items, connector)
 	}
+	s.annotateToolDiscovery(botID, items)
 	return items, nil
 }
 
@@ -112,7 +123,13 @@ func (s *Service) Get(ctx context.Context, botID, connectionID string) (Connecto
 	if err != nil {
 		return Connector{}, err
 	}
-	return s.resolveBinding(ctx, item)
+	connector, err := s.resolveBinding(ctx, item)
+	if err != nil {
+		return Connector{}, err
+	}
+	items := []Connector{connector}
+	s.annotateToolDiscovery(botID, items)
+	return items[0], nil
 }
 
 func (s *Service) BeginOAuth(
@@ -201,6 +218,9 @@ func (s *Service) Delete(ctx context.Context, botID, connectionID string) error 
 		return ErrNotConfigured
 	}
 	item, err := s.getBinding(ctx, botID, connectionID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil
+	}
 	if err != nil {
 		return err
 	}
@@ -209,6 +229,9 @@ func (s *Service) Delete(ctx context.Context, botID, connectionID string) error 
 			return upstreamError(err)
 		}
 	}
+	// Finalize the binding, App references and App statuses in one SQL
+	// statement. If it fails, the binding survives so retry can reissue the
+	// remote delete (404 is success) and finish local cleanup.
 	return s.queries.DeleteConnector(ctx, dbsqlc.DeleteConnectorParams{
 		BotID:        item.BotID,
 		ConnectionID: item.ConnectionID,
@@ -355,10 +378,10 @@ func (s *Service) createBindingOrRollback(
 		defer cancel()
 		rollbackErr := s.client.DeleteConnection(rollbackCtx, connectionID)
 		if rollbackErr != nil && !isConnectItStatus(rollbackErr, http.StatusNotFound) {
-			s.logger.Warn(
+			s.logger.WarnContext(ctx,
 				"failed to roll back Connect-It connection after binding failed",
 				slog.String("connection_id", connectionID),
-				slog.Any("error", rollbackErr),
+				slog.Any("error", upstreamError(rollbackErr)),
 			)
 		}
 	}
@@ -477,5 +500,19 @@ func upstreamError(err error) error {
 	if err == nil {
 		return nil
 	}
-	return fmt.Errorf("%w: %w", ErrUpstreamUnavailable, err)
+	var apiErr *connectsdk.APIError
+	if errors.As(err, &apiErr) {
+		code := "upstream_error"
+		switch apiErr.Code {
+		case "oauth_client_not_configured", "validation_failed", "unauthorized", "forbidden", "not_found", "conflict", "internal":
+			code = apiErr.Code
+		}
+		err = &connectsdk.APIError{StatusCode: apiErr.StatusCode, Code: code}
+	}
+	err = fmt.Errorf("%w: %w", ErrUpstreamUnavailable, err)
+	// A 4xx answer refuses what this process sent, such as its own API token.
+	if errors.As(err, &apiErr) && apiErr.StatusCode < http.StatusInternalServerError {
+		return errs.WrapWithDepth(1, err, "call connect-it")
+	}
+	return errs.WrapDependencyWithDepth(1, err, "call connect-it")
 }

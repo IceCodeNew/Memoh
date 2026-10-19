@@ -27,10 +27,14 @@ type absorbedSegment struct {
 type absorbedRowsLoader func(context.Context, Artifact) ([]sqlc.ListUncompactedMessagesBySessionRow, error)
 
 func shouldFuseFrontier(cfg TriggerConfig, artifacts []Artifact, maxCompactTokens int) bool {
-	if !cfg.AllowFrontierFusion || len(artifacts) < 2 {
+	if !cfg.AllowFrontierFusion || len(artifacts) == 0 {
 		return false
 	}
-	return frontierSummaryTokens(artifacts) > frontierRetainBudget(cfg, maxCompactTokens)
+	tokens := frontierSummaryTokens(artifacts)
+	if cfg.TargetTokens > 0 && tokens > cfg.TargetTokens {
+		return true
+	}
+	return len(artifacts) > 1 && tokens > frontierRetainBudget(cfg, maxCompactTokens)
 }
 
 func frontierRetainBudget(cfg TriggerConfig, maxCompactTokens int) int {
@@ -176,14 +180,17 @@ func absorbedRawSegment(ctx context.Context, parent Artifact, budget int, load a
 	var raw strings.Builder
 	for _, item := range items {
 		content := strings.TrimSpace(renderCandidateEntry(item.Record))
+		if content == "" {
+			continue
+		}
 		role := strings.TrimSpace(item.Record.ModelMessage.Role)
-		if content == "" || role == "" {
+		if role == "" {
 			return absorbedSegment{}, false
 		}
 		fmt.Fprintf(&raw, "%s: %s\n", role, content)
 	}
 	segment := absorbedSegment{Source: absorbedSourceRawTranscript, Content: strings.TrimSpace(raw.String())}
-	if absorbedSegmentTokens(segment) > budget {
+	if segment.Content == "" || absorbedSegmentTokens(segment) > budget {
 		return absorbedSegment{}, false
 	}
 	return segment, true
@@ -244,8 +251,8 @@ func truncateAbsorbedText(value string, maxTokens int) string {
 	return truncationMarker
 }
 
-func summaryReplacementTokens(entries []messageEntry, parents []Artifact) int {
-	total := entriesPromptCost(entries)
+func summaryReplacementTokens(rawTokens int, parents []Artifact) int {
+	total := rawTokens
 	for _, parent := range parents {
 		total += estimateSummaryReplayTokens(parent.Summary)
 	}

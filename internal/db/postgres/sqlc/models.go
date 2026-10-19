@@ -41,6 +41,21 @@ type AcpSessionStateLine struct {
 	ContentBytes int32       `json:"content_bytes"`
 }
 
+type AgentAuthorization struct {
+	ID               pgtype.UUID        `json:"id"`
+	TeamID           pgtype.UUID        `json:"team_id"`
+	OwnerUserID      pgtype.UUID        `json:"owner_user_id"`
+	Runtime          string             `json:"runtime"`
+	AuthKind         string             `json:"auth_kind"`
+	Status           string             `json:"status"`
+	EncryptedPayload []byte             `json:"encrypted_payload"`
+	EncryptionNonce  []byte             `json:"encryption_nonce"`
+	ExpiresAt        pgtype.Timestamptz `json:"expires_at"`
+	PollAfter        pgtype.Timestamptz `json:"poll_after"`
+	ClaimedAgentID   pgtype.UUID        `json:"claimed_agent_id"`
+	CreatedAt        pgtype.Timestamptz `json:"created_at"`
+}
+
 type AgentCredential struct {
 	ID                pgtype.UUID        `json:"id"`
 	TeamID            pgtype.UUID        `json:"team_id"`
@@ -60,36 +75,10 @@ type AgentCredential struct {
 }
 
 type AgentSessionPublication struct {
-	TeamID          pgtype.UUID        `json:"team_id"`
-	SessionID       pgtype.UUID        `json:"session_id"`
-	RunID           pgtype.UUID        `json:"run_id"`
-	CheckpointReset bool               `json:"checkpoint_reset"`
-	UpdatedAt       pgtype.Timestamptz `json:"updated_at"`
-}
-
-type AgentSessionState struct {
-	TeamID              pgtype.UUID        `json:"team_id"`
-	SessionID           pgtype.UUID        `json:"session_id"`
-	ThroughRunID        pgtype.UUID        `json:"through_run_id"`
-	AgentID             string             `json:"agent_id"`
-	AgentSessionID      string             `json:"agent_session_id"`
-	Cwd                 string             `json:"cwd"`
-	TranscriptPath      string             `json:"transcript_path"`
-	RuntimeFencingToken int64              `json:"runtime_fencing_token"`
-	FileCount           int32              `json:"file_count"`
-	RecordCount         int64              `json:"record_count"`
-	FileShapes          []byte             `json:"file_shapes"`
-	CreatedAt           pgtype.Timestamptz `json:"created_at"`
-	UpdatedAt           pgtype.Timestamptz `json:"updated_at"`
-}
-
-type AgentSessionStateLine struct {
-	TeamID       pgtype.UUID `json:"team_id"`
-	SessionID    pgtype.UUID `json:"session_id"`
-	FilePath     string      `json:"file_path"`
-	LineNumber   int64       `json:"line_number"`
-	Content      string      `json:"content"`
-	ContentBytes int32       `json:"content_bytes"`
+	TeamID    pgtype.UUID        `json:"team_id"`
+	SessionID pgtype.UUID        `json:"session_id"`
+	RunID     pgtype.UUID        `json:"run_id"`
+	UpdatedAt pgtype.Timestamptz `json:"updated_at"`
 }
 
 type Bot struct {
@@ -101,6 +90,7 @@ type Bot struct {
 	Timezone                pgtype.Text        `json:"timezone"`
 	IsActive                bool               `json:"is_active"`
 	Status                  string             `json:"status"`
+	CreateRequestKey        pgtype.Text        `json:"create_request_key"`
 	Language                string             `json:"language"`
 	CommandUiLanguage       string             `json:"command_ui_language"`
 	ReasoningEffort         string             `json:"reasoning_effort"`
@@ -116,6 +106,7 @@ type Bot struct {
 	CompactionThreshold     int32              `json:"compaction_threshold"`
 	CompactionTargetPercent pgtype.Int4        `json:"compaction_target_percent"`
 	CompactionModelID       pgtype.UUID        `json:"compaction_model_id"`
+	MemoryLlmModelID        pgtype.UUID        `json:"memory_llm_model_id"`
 	ImageModelID            pgtype.UUID        `json:"image_model_id"`
 	DiscussProbeModelID     pgtype.UUID        `json:"discuss_probe_model_id"`
 	TtsModelID              pgtype.UUID        `json:"tts_model_id"`
@@ -172,6 +163,45 @@ type BotAgent struct {
 	AgentCredentialID pgtype.UUID        `json:"agent_credential_id"`
 }
 
+type BotAppConnectorRef struct {
+	ID             pgtype.UUID        `json:"id"`
+	TeamID         pgtype.UUID        `json:"team_id"`
+	InstallationID pgtype.UUID        `json:"installation_id"`
+	ConnectorType  string             `json:"connector_type"`
+	ConnectionID   string             `json:"connection_id"`
+	Required       bool               `json:"required"`
+	CreatedAt      pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt      pgtype.Timestamptz `json:"updated_at"`
+}
+
+type BotAppDependencyRef struct {
+	ID             pgtype.UUID        `json:"id"`
+	TeamID         pgtype.UUID        `json:"team_id"`
+	InstallationID pgtype.UUID        `json:"installation_id"`
+	DependencyID   string             `json:"dependency_id"`
+	CreatedAt      pgtype.Timestamptz `json:"created_at"`
+}
+
+type BotAppInstallation struct {
+	ID                pgtype.UUID        `json:"id"`
+	TeamID            pgtype.UUID        `json:"team_id"`
+	BotID             pgtype.UUID        `json:"bot_id"`
+	RegistryID        string             `json:"registry_id"`
+	AppID             string             `json:"app_id"`
+	Revision          string             `json:"revision"`
+	Version           string             `json:"version"`
+	Status            string             `json:"status"`
+	Reason            string             `json:"reason"`
+	AvailableRevision string             `json:"available_revision"`
+	AvailableVersion  string             `json:"available_version"`
+	LastCheckedAt     pgtype.Timestamptz `json:"last_checked_at"`
+	LastError         string             `json:"last_error"`
+	LastErrorCode     string             `json:"last_error_code"`
+	Release           []byte             `json:"release"`
+	InstalledAt       pgtype.Timestamptz `json:"installed_at"`
+	UpdatedAt         pgtype.Timestamptz `json:"updated_at"`
+}
+
 type BotChannelAdmin struct {
 	ID                pgtype.UUID        `json:"id"`
 	BotID             pgtype.UUID        `json:"bot_id"`
@@ -219,7 +249,6 @@ type BotDependencyInstallation struct {
 	ID                 pgtype.UUID        `json:"id"`
 	TeamID             pgtype.UUID        `json:"team_id"`
 	BotID              pgtype.UUID        `json:"bot_id"`
-	WorkspaceTargetID  string             `json:"workspace_target_id"`
 	DependencyID       string             `json:"dependency_id"`
 	Source             string             `json:"source"`
 	Status             string             `json:"status"`
@@ -227,6 +256,7 @@ type BotDependencyInstallation struct {
 	LatestVersion      string             `json:"latest_version"`
 	LastCheckedAt      pgtype.Timestamptz `json:"last_checked_at"`
 	LastError          string             `json:"last_error"`
+	LastErrorCode      string             `json:"last_error_code"`
 	ManifestDigest     string             `json:"manifest_digest"`
 	SourceUrl          string             `json:"source_url"`
 	RegistryID         string             `json:"registry_id"`
@@ -234,20 +264,6 @@ type BotDependencyInstallation struct {
 	OperationID        string             `json:"operation_id"`
 	CreatedAt          pgtype.Timestamptz `json:"created_at"`
 	UpdatedAt          pgtype.Timestamptz `json:"updated_at"`
-}
-
-type BotEmailBinding struct {
-	ID              pgtype.UUID        `json:"id"`
-	BotID           pgtype.UUID        `json:"bot_id"`
-	EmailProviderID pgtype.UUID        `json:"email_provider_id"`
-	EmailAddress    string             `json:"email_address"`
-	CanRead         bool               `json:"can_read"`
-	CanWrite        bool               `json:"can_write"`
-	CanDelete       bool               `json:"can_delete"`
-	Config          []byte             `json:"config"`
-	CreatedAt       pgtype.Timestamptz `json:"created_at"`
-	UpdatedAt       pgtype.Timestamptz `json:"updated_at"`
-	TeamID          pgtype.UUID        `json:"team_id"`
 }
 
 type BotHistoryMessage struct {
@@ -319,6 +335,16 @@ type BotHistoryMessageCompact struct {
 	TeamID          pgtype.UUID        `json:"team_id"`
 }
 
+type BotMemoryUsage struct {
+	ID        pgtype.UUID        `json:"id"`
+	TeamID    pgtype.UUID        `json:"team_id"`
+	BotID     pgtype.UUID        `json:"bot_id"`
+	ModelID   pgtype.UUID        `json:"model_id"`
+	Operation string             `json:"operation"`
+	Usage     []byte             `json:"usage"`
+	CreatedAt pgtype.Timestamptz `json:"created_at"`
+}
+
 type BotRemoteRuntimeBinding struct {
 	ID                 pgtype.UUID        `json:"id"`
 	BotID              pgtype.UUID        `json:"bot_id"`
@@ -386,18 +412,6 @@ type BotSessionEvent struct {
 	TeamID                  pgtype.UUID        `json:"team_id"`
 }
 
-type BotSkillPackageInstallation struct {
-	ID                pgtype.UUID        `json:"id"`
-	TeamID            pgtype.UUID        `json:"team_id"`
-	BotID             pgtype.UUID        `json:"bot_id"`
-	WorkspaceTargetID string             `json:"workspace_target_id"`
-	RegistryID        string             `json:"registry_id"`
-	PackageID         string             `json:"package_id"`
-	Revision          string             `json:"revision"`
-	InstalledAt       pgtype.Timestamptz `json:"installed_at"`
-	UpdatedAt         pgtype.Timestamptz `json:"updated_at"`
-}
-
 type BotStorageBinding struct {
 	ID                pgtype.UUID        `json:"id"`
 	BotID             pgtype.UUID        `json:"bot_id"`
@@ -457,6 +471,28 @@ type BotWorkdir struct {
 	ArchivedAt      pgtype.Timestamptz `json:"archived_at"`
 	CreatedAt       pgtype.Timestamptz `json:"created_at"`
 	UpdatedAt       pgtype.Timestamptz `json:"updated_at"`
+}
+
+type BotWorkspace struct {
+	BotID              pgtype.UUID        `json:"bot_id"`
+	TeamID             pgtype.UUID        `json:"team_id"`
+	DesiredState       string             `json:"desired_state"`
+	DesiredGeneration  int64              `json:"desired_generation"`
+	Image              string             `json:"image"`
+	PreserveData       bool               `json:"preserve_data"`
+	ObservedState      string             `json:"observed_state"`
+	ObservedGeneration int64              `json:"observed_generation"`
+	EverReady          bool               `json:"ever_ready"`
+	LastError          string             `json:"last_error"`
+	LastErrorCode      string             `json:"last_error_code"`
+	LastErrorPhase     string             `json:"last_error_phase"`
+	Attempts           int32              `json:"attempts"`
+	NextAttemptAt      pgtype.Timestamptz `json:"next_attempt_at"`
+	LeaseOwner         string             `json:"lease_owner"`
+	LeaseUntil         pgtype.Timestamptz `json:"lease_until"`
+	Version            int64              `json:"version"`
+	CreatedAt          pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt          pgtype.Timestamptz `json:"updated_at"`
 }
 
 type BotWorkspaceResourceLimit struct {
@@ -539,49 +575,6 @@ type ContextLifecycle struct {
 	Snapshot           []byte             `json:"snapshot"`
 	SelectionDecisions []byte             `json:"selection_decisions"`
 	CreatedAt          pgtype.Timestamptz `json:"created_at"`
-}
-
-type EmailOauthToken struct {
-	ID              pgtype.UUID        `json:"id"`
-	EmailProviderID pgtype.UUID        `json:"email_provider_id"`
-	EmailAddress    string             `json:"email_address"`
-	AccessToken     string             `json:"access_token"`
-	RefreshToken    string             `json:"refresh_token"`
-	ExpiresAt       pgtype.Timestamptz `json:"expires_at"`
-	Scope           string             `json:"scope"`
-	State           string             `json:"state"`
-	CreatedAt       pgtype.Timestamptz `json:"created_at"`
-	UpdatedAt       pgtype.Timestamptz `json:"updated_at"`
-	TeamID          pgtype.UUID        `json:"team_id"`
-}
-
-type EmailOutbox struct {
-	ID          pgtype.UUID        `json:"id"`
-	ProviderID  pgtype.UUID        `json:"provider_id"`
-	BotID       pgtype.UUID        `json:"bot_id"`
-	MessageID   string             `json:"message_id"`
-	FromAddress string             `json:"from_address"`
-	ToAddresses []byte             `json:"to_addresses"`
-	Subject     string             `json:"subject"`
-	BodyText    string             `json:"body_text"`
-	BodyHtml    string             `json:"body_html"`
-	Attachments []byte             `json:"attachments"`
-	Status      string             `json:"status"`
-	Error       string             `json:"error"`
-	SentAt      pgtype.Timestamptz `json:"sent_at"`
-	CreatedAt   pgtype.Timestamptz `json:"created_at"`
-	TeamID      pgtype.UUID        `json:"team_id"`
-}
-
-type EmailProvider struct {
-	ID        pgtype.UUID        `json:"id"`
-	UserID    pgtype.UUID        `json:"user_id"`
-	Name      string             `json:"name"`
-	Provider  string             `json:"provider"`
-	Config    []byte             `json:"config"`
-	CreatedAt pgtype.Timestamptz `json:"created_at"`
-	UpdatedAt pgtype.Timestamptz `json:"updated_at"`
-	TeamID    pgtype.UUID        `json:"team_id"`
 }
 
 type FetchProvider struct {
@@ -762,6 +755,7 @@ type ProviderOauthToken struct {
 }
 
 type Schedule struct {
+	MaxRunSeconds   int32              `json:"max_run_seconds"`
 	ID              pgtype.UUID        `json:"id"`
 	Name            string             `json:"name"`
 	Description     string             `json:"description"`
@@ -793,6 +787,7 @@ type ScheduleLog struct {
 	Status       string             `json:"status"`
 	ResultText   string             `json:"result_text"`
 	ErrorMessage string             `json:"error_message"`
+	ErrorCode    string             `json:"error_code"`
 	Usage        []byte             `json:"usage"`
 	ModelID      pgtype.UUID        `json:"model_id"`
 	StartedAt    pgtype.Timestamptz `json:"started_at"`

@@ -11,6 +11,7 @@ import (
 	"github.com/felinics/memoh/internal/agent/runtime/external"
 	"github.com/felinics/memoh/internal/agent/runtime/toolmount"
 	"github.com/felinics/memoh/internal/agent/sessionmode"
+	"github.com/felinics/memoh/internal/errs"
 	"github.com/felinics/memoh/internal/mcp"
 	"github.com/felinics/memoh/internal/runtimefence"
 	"github.com/felinics/memoh/internal/workspace/bridge"
@@ -32,7 +33,7 @@ const MemohToolTimeoutMillis = 900_000
 func (d *Driver) mountTurnTools(ctx context.Context, client *bridge.Client, workspaceInfo bridge.WorkspaceInfo, input external.PromptInput) (string, *toolmount.Mount, error) {
 	baseURL := toolmount.ResolveBaseURL(workspaceInfo, input.ToolHTTPURL)
 	if baseURL == "" {
-		return "", nil, fmt.Errorf("resolve Memoh tool gateway URL for %s workspace", workspaceInfo.Backend)
+		return "", nil, errs.New(fmt.Sprintf("resolve Memoh tool gateway URL for %s workspace", workspaceInfo.Backend))
 	}
 	session := turnToolSession(ctx, input)
 	mount, err := toolmount.Serve(ctx, client, baseURL, d.toolGateway, func() mcp.ToolSessionContext {
@@ -54,24 +55,23 @@ func (d *Driver) mountTurnTools(ctx context.Context, client *bridge.Client, work
 // comes from the prompt input and the turn context, never from HTTP requests.
 func turnToolSession(ctx context.Context, input external.PromptInput) mcp.ToolSessionContext {
 	session := mcp.ToolSessionContext{
-		BotID:                     input.BotID,
-		ChatID:                    firstNonEmpty(input.ChatID, input.BotID),
-		SessionID:                 input.ThreadID,
-		RunID:                     input.RunID,
-		SessionType:               firstNonEmpty(input.SessionMode, sessionmode.Chat),
-		RouteID:                   input.RouteID,
-		CurrentPlatform:           input.CurrentPlatform,
-		ReplyTarget:               input.ReplyTarget,
-		ConversationType:          input.ConversationType,
-		ChannelIdentityID:         input.ChannelIdentityID,
-		SessionToken:              input.SessionToken,
-		CanRequestUserInput:       input.CanRequestUserInput,
-		CanListUserInput:          true,
-		RuntimeActive:             true,
-		RequireActiveRun:          true,
-		SupportsImageInput:        true,
-		ContextBudgetMaxTokens:    input.ContextBudgetMaxTokens,
-		ContextToolExchangePolicy: input.ContextToolExchangePolicy,
+		BotID:                  input.BotID,
+		ChatID:                 firstNonEmpty(input.ChatID, input.BotID),
+		SessionID:              input.ThreadID,
+		RunID:                  input.RunID,
+		SessionType:            firstNonEmpty(input.SessionMode, sessionmode.Chat),
+		RouteID:                input.RouteID,
+		CurrentPlatform:        input.CurrentPlatform,
+		ReplyTarget:            input.ReplyTarget,
+		ConversationType:       input.ConversationType,
+		ChannelIdentityID:      input.ChannelIdentityID,
+		SessionToken:           input.SessionToken,
+		CanRequestUserInput:    input.CanRequestUserInput,
+		CanListUserInput:       true,
+		RuntimeActive:          true,
+		RequireActiveRun:       true,
+		SupportsImageInput:     true,
+		ContextBudgetMaxTokens: input.ContextBudgetMaxTokens,
 	}
 	if fence, ok := runtimefence.FromContext(ctx); ok {
 		session.RuntimeFence = fence

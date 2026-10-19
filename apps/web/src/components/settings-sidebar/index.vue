@@ -38,47 +38,54 @@
         </NavItem>
       </SidebarHeader>
 
-      <SidebarContent>
-        <!-- One block per nav group; the group list itself lives in navGroups.
+      <SidebarContent class="overflow-hidden">
+        <ScrollArea
+          class="sidebar-scroll h-full [&_[data-slot=scroll-area-viewport]]:pr-0"
+          :scroll-hide-delay="300"
+        >
+          <div class="flex flex-col gap-2 pb-4">
+            <!-- One block per nav group; the group list itself lives in navGroups.
              The first group carries no label: in fullWidth (mobile list home)
              the header is hidden, so it owns the whole gap below the top-bar
              hairline — 16px, matching its own left inset. On desktop the
              header's pb-3 already carries the rhythm and pt-1 suffices. -->
-        <SidebarGroup
-          v-for="(group, idx) in navGroups"
-          :key="group.key"
-          class="px-[16px] pb-0"
-          :class="idx === 0 ? (fullWidth ? 'pt-4' : 'pt-1') : 'pt-4'"
-        >
-          <SidebarGroupLabel
-            v-if="group.label"
-            size="compact"
-          >
-            {{ group.label }}
-          </SidebarGroupLabel>
-          <SidebarGroupContent :class="group.label && 'pt-0'">
-            <SidebarMenu class="gap-1">
-              <SidebarMenuItem
-                v-for="item in group.items"
-                :key="item.name"
+            <SidebarGroup
+              v-for="(group, idx) in navGroups"
+              :key="group.key"
+              class="px-[16px] pb-0"
+              :class="idx === 0 ? (fullWidth ? 'pt-4' : 'pt-1') : 'pt-4'"
+            >
+              <SidebarGroupLabel
+                v-if="group.label"
+                size="compact"
               >
-                <NavItem
-                  :active="isItemActive(item.name)"
-                  :aria-current="isItemActive(item.name) ? 'page' : undefined"
-                  @click="navigate(item.name)"
-                >
-                  <component
-                    :is="item.icon"
-                    :stroke-width="1.75"
-                    class="size-4 shrink-0"
-                    :class="item.flipX && '-scale-x-100'"
-                  />
-                  <span>{{ item.title }}</span>
-                </NavItem>
-              </SidebarMenuItem>
-            </SidebarMenu>
-          </SidebarGroupContent>
-        </SidebarGroup>
+                {{ group.label }}
+              </SidebarGroupLabel>
+              <SidebarGroupContent :class="group.label && 'pt-0'">
+                <SidebarMenu class="gap-1">
+                  <SidebarMenuItem
+                    v-for="item in group.items"
+                    :key="item.name"
+                  >
+                    <NavItem
+                      :active="isItemVisuallyActive(item.name)"
+                      :aria-current="isItemActive(item.name) ? 'page' : undefined"
+                      @click="navigate(item.name)"
+                    >
+                      <component
+                        :is="item.icon"
+                        :stroke-width="1.75"
+                        class="size-4 shrink-0"
+                        :class="item.flipX && '-scale-x-100'"
+                      />
+                      <span>{{ item.title }}</span>
+                    </NavItem>
+                  </SidebarMenuItem>
+                </SidebarMenu>
+              </SidebarGroupContent>
+            </SidebarGroup>
+          </div>
+        </ScrollArea>
       </SidebarContent>
 
       <!-- Width resize handle (web desktop only). Drag to resize the sidebar;
@@ -100,33 +107,28 @@
 </template>
 
 <script setup lang="ts">
+import { ComputerIcon, ShortcutIcon } from '@memohai/icon/ui'
 import { computed, inject, onBeforeUnmount, ref, type Component } from 'vue'
 import { useLocalStorage } from '@vueuse/core'
 import { storeToRefs } from 'pinia'
 import { useRouter, useRoute } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 import {
-  AudioLines,
+  Blocks,
   Box,
-  ChartNoAxesColumn,
   ChevronLeft,
   CircleUserRound,
-  Database,
-  Globe,
+  Gauge,
   Info,
-  Keyboard,
-  Laptop,
-  Mail,
   MousePointer2,
-  Store,
-  Users,
-  Video,
+  UsersRound,
 } from 'lucide-vue-next'
 import AppearanceIcon from './appearance-icon.vue'
 import { NavItem } from '@felinic/ui'
 import { useBackToChatRoute } from '@/composables/useBackToChat'
 import { useUserStore } from '@/store/user'
 import {
+  ScrollArea,
   Sidebar,
   SidebarContent,
   SidebarGroup,
@@ -137,6 +139,7 @@ import {
   SidebarMenuItem,
 } from '@felinic/ui'
 import { DesktopShellKey } from '@/lib/desktop-shell'
+import '@/styles/sidebar-scroll.css'
 
 const props = withDefaults(defineProps<{
   hideHeader?: boolean
@@ -211,8 +214,22 @@ const { userInfo } = storeToRefs(userStore)
 
 const backToChatRoute = useBackToChatRoute()
 
+// Instant selection feedback: the router only navigates once the target page's
+// chunk arrives (lazy routes), which leaves the OLD item reading active while
+// the click hangs. Move the highlight to the clicked item immediately; the real
+// route takes over when push settles. aria-current stays on the real route —
+// pending is visual only.
+const pendingNav = ref<string | null>(null)
+
 function navigate(name: string): void {
-  router.push({ name } as Parameters<typeof router.push>[0]).catch(() => {})
+  pendingNav.value = name
+  router.push({ name } as Parameters<typeof router.push>[0])
+    .then(() => {
+      if (pendingNav.value === name) pendingNav.value = null
+    })
+    .catch(() => {
+      if (pendingNav.value === name) pendingNav.value = null
+    })
 }
 
 function isItemActive(name: string): boolean {
@@ -222,7 +239,14 @@ function isItemActive(name: string): boolean {
   if (name === 'supermarket') {
     return route.path.startsWith('/settings/supermarket')
   }
+  // The provider family's four scopes all live ON the 'providers' route
+  // (?tab=), so the plain name check below already covers every scope.
   return route.name === name
+}
+
+function isItemVisuallyActive(name: string): boolean {
+  if (pendingNav.value) return pendingNav.value === name
+  return isItemActive(name)
 }
 
 type NavItem = { title: string; name: string; icon: Component; flipX?: boolean; adminOnly?: boolean }
@@ -235,49 +259,35 @@ function filterItems(items: NavItem[]): NavItem[] {
   })
 }
 
-// Four groups, ordered by what the user came here to do: the things they own
-// (bots, computers, the market they install from), the service providers those
-// things draw on, the org-level view (who is in it, what it consumes), and
-// their own preferences. `providers`/`memory` sit with search/voice/video/email
-// because all six are the same page: a provider gallery you configure once and
-// then pick from inside a bot — splitting them across groups only hid that.
-// Groups that end up empty after filtering drop out entirely.
+// Bots lead, followed by what they run on (providers, computers) and app
+// discovery, all without a group label: two resource items are too few to
+// earn a heading of their own. Team administration and personal settings
+// follow; empty groups are hidden after filtering.
 const navGroups = computed<NavGroup[]>(() => [
   {
     key: 'workspace',
     items: [
       { title: t('sidebar.bots'), name: 'bots', icon: MousePointer2, flipX: true },
-      { title: t('sidebar.runtimes'), name: 'runtimes', icon: Laptop },
-      { title: t('sidebar.supermarket'), name: 'supermarket', icon: Store },
-    ],
-  },
-  {
-    key: 'capabilities',
-    label: t('sidebar.group.capabilities'),
-    items: [
       { title: t('sidebar.providers'), name: 'providers', icon: Box },
-      { title: t('sidebar.memory'), name: 'memory', icon: Database },
-      { title: t('sidebar.webSearch'), name: 'web-search', icon: Globe },
-      { title: t('sidebar.voice'), name: 'voice', icon: AudioLines },
-      { title: t('sidebar.video'), name: 'video', icon: Video },
-      { title: t('sidebar.email'), name: 'email', icon: Mail },
+      { title: t('sidebar.runtimes'), name: 'runtimes', icon: ComputerIcon },
+      { title: t('sidebar.supermarket'), name: 'supermarket', icon: Blocks },
     ],
   },
   {
     key: 'team',
     label: t('sidebar.group.team'),
     items: [
-      { title: t('sidebar.people'), name: 'people', icon: Users, adminOnly: true },
-      { title: t('sidebar.usage'), name: 'usage', icon: ChartNoAxesColumn },
+      { title: t('sidebar.people'), name: 'people', icon: UsersRound, adminOnly: true },
+      { title: t('sidebar.usage'), name: 'usage', icon: Gauge },
     ],
   },
   {
-    key: 'preferences',
-    label: t('sidebar.group.preferences'),
+    key: 'personal',
+    label: t('sidebar.group.personal'),
     items: [
-      { title: t('sidebar.appearance'), name: 'appearance', icon: AppearanceIcon },
-      { title: t('sidebar.keyboard'), name: 'keyboard', icon: Keyboard },
       { title: t('sidebar.profile'), name: 'profile', icon: CircleUserRound },
+      { title: t('sidebar.appearance'), name: 'appearance', icon: AppearanceIcon },
+      { title: t('sidebar.keyboard'), name: 'keyboard', icon: ShortcutIcon },
       { title: t('sidebar.about'), name: 'about', icon: Info },
     ],
   },

@@ -33,7 +33,7 @@
             </div>
           </SelectValue>
         </SelectTrigger>
-        <SelectContent>
+        <SelectContent align="end">
           <SelectItem :value="MEMOH_AGENT_VALUE">
             <div class="flex min-w-0 items-center gap-2">
               <img
@@ -92,14 +92,15 @@
 </template>
 
 <script setup lang="ts">
+import { EXTERNAL_AGENT_DEFAULT_PROJECT_MODE, EXTERNAL_AGENT_DEFAULT_PROJECT_PATH, normalizeAgentID } from '@/utils/external-agent'
 import { computed, watch } from 'vue'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue, SettingsRow, SettingsSection, Switch } from '@felinic/ui'
 import { useI18n } from 'vue-i18n'
 import ModelSelect from './model-select.vue'
 import { reconcileStoredEffort } from './reasoning-effort'
 import type { AcpprofilePublicProfile, BotagentsBotAgent, SettingsSettings, ModelsGetResponse, ProvidersGetResponse } from '@memohai/sdk'
-import { ACP_DEFAULT_PROJECT_MODE, ACP_DEFAULT_PROJECT_PATH, findMissingRequiredManagedField, isACPAgentEnabled, normalizeACPAgentID, readACPAgentConfig } from '@/utils/acp'
-import { BOT_AGENT_RUNTIME_CLAUDE_CODE, BOT_AGENT_RUNTIME_CODEX, botAgentIcon, botAgentName, botAgentProvider, isDirectBotAgentConfigured, normalizeBotAgentRuntime } from '@/utils/bot-agent'
+import { isACPAgentConfigured } from '@/utils/acp'
+import { botAgentIcon, botAgentName, botAgentProvider, isDirectBotAgentConfigured, isDirectBotAgentRuntime, normalizeBotAgentRuntime } from '@/utils/bot-agent'
 
 type InteractionSettingsForm = SettingsSettings & {
   chat_runtime: string
@@ -114,7 +115,6 @@ const props = defineProps<{
   models: ModelsGetResponse[]
   providers: ProvidersGetResponse[]
   botAgents: BotagentsBotAgent[]
-  botMetadata?: Record<string, unknown>
   acpProfiles: AcpprofilePublicProfile[]
 }>()
 
@@ -127,10 +127,8 @@ function isAgentConfigured(agent: BotagentsBotAgent): boolean {
   const directConfigured = isDirectBotAgentConfigured(agent)
   if (directConfigured !== null) return directConfigured
   const provider = botAgentProvider(agent)
-  const profile = props.acpProfiles.find(item => normalizeACPAgentID(item.id) === provider)
-  if (!profile || !isACPAgentEnabled(props.botMetadata, provider)) return false
-  const config = readACPAgentConfig(props.botMetadata, provider)
-  return !config.setupModeSet || findMissingRequiredManagedField(profile, config.managed, config.setupMode) === null
+  const profile = props.acpProfiles.find(item => normalizeAgentID(item.id) === provider)
+  return isACPAgentConfigured(agent, profile)
 }
 
 const selectableAgents = computed(() => props.botAgents.filter(agent =>
@@ -164,9 +162,9 @@ function agentOptionValue(agentID: unknown): string {
 
 function ensureDefaultACPProject() {
   // eslint-disable-next-line vue/no-mutating-props
-  props.form.chat_acp_project_path = props.form.chat_acp_project_path || ACP_DEFAULT_PROJECT_PATH
+  props.form.chat_acp_project_path = props.form.chat_acp_project_path || EXTERNAL_AGENT_DEFAULT_PROJECT_PATH
   // eslint-disable-next-line vue/no-mutating-props
-  props.form.chat_acp_project_mode = props.form.chat_acp_project_mode || ACP_DEFAULT_PROJECT_MODE
+  props.form.chat_acp_project_mode = props.form.chat_acp_project_mode || EXTERNAL_AGENT_DEFAULT_PROJECT_MODE
 }
 
 function setDefaultBotAgent(agent: BotagentsBotAgent) {
@@ -195,7 +193,7 @@ function setDefaultAgent(value: string) {
 
   setDefaultBotAgent(agent)
   const runtime = normalizeBotAgentRuntime(agent.runtime)
-  const direct = runtime === BOT_AGENT_RUNTIME_CODEX || runtime === BOT_AGENT_RUNTIME_CLAUDE_CODE
+  const direct = isDirectBotAgentRuntime(runtime)
   // eslint-disable-next-line vue/no-mutating-props
   props.form.chat_runtime = direct ? runtime : 'acp_agent'
   if (direct) {

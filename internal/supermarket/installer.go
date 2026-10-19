@@ -2,20 +2,18 @@ package supermarket
 
 import (
 	"context"
-	"errors"
 	"log/slog"
-	"net/http"
 	"sort"
 	"strings"
 	"sync"
 
-	"github.com/felinics/memoh/internal/skillpackages"
+	"github.com/felinics/memoh/internal/errs"
 	"github.com/felinics/memoh/internal/workspace"
 )
 
-const maxConcurrentPackagePreparations = 2
+const maxConcurrentAppPreparations = 2
 
-var packagePreparationTokens = make(chan struct{}, maxConcurrentPackagePreparations)
+var appPreparationTokens = make(chan struct{}, maxConcurrentAppPreparations)
 
 type resourceLock struct {
 	token chan struct{}
@@ -27,36 +25,23 @@ var installationResourceLocks = struct {
 	items map[string]*resourceLock
 }{items: make(map[string]*resourceLock)}
 
+// WorkspaceResolver is the slice of *workspace.Manager the installer needs.
+type WorkspaceResolver interface {
+	ResolveWorkspaceTarget(ctx context.Context, botID, targetID string) (workspace.ResolvedWorkspaceTarget, error)
+}
+
+// Installer materializes the Skills of an App release into a workspace.
+// It owns no installation records: the apps service records what it
+// installed and commits or rolls back the workspace change accordingly.
 type Installer struct {
 	client     *Client
-	packages   *skillpackages.Service
-	workspaces *workspace.Manager
+	workspaces WorkspaceResolver
 	logger     *slog.Logger
 }
 
-func NewInstaller(client *Client, packages *skillpackages.Service, workspaces *workspace.Manager, logger *slog.Logger) *Installer {
-	return &Installer{
-		client: client, packages: packages, workspaces: workspaces, logger: logger,
-	}
+func NewInstaller(client *Client, workspaces WorkspaceResolver, logger *slog.Logger) *Installer {
+	return &Installer{client: client, workspaces: workspaces, logger: logger}
 }
-
-type StatusError struct {
-	Status  int
-	Message string
-	Err     error
-}
-
-func (e *StatusError) Error() string {
-	if e.Message != "" {
-		return e.Message
-	}
-	if e.Err != nil {
-		return e.Err.Error()
-	}
-	return http.StatusText(e.Status)
-}
-
-func (e *StatusError) Unwrap() error { return e.Err }
 
 type WorkspaceTargetError struct{ Err error }
 
@@ -65,17 +50,20 @@ func (e *WorkspaceTargetError) Unwrap() error { return e.Err }
 
 func (i *Installer) acquirePreparation(ctx context.Context) (func(), error) {
 	if i == nil {
-		return nil, errors.New("supermarket installer is not configured")
+		return nil, errs.New("supermarket installer is not configured")
 	}
 	select {
-	case packagePreparationTokens <- struct{}{}:
-		return func() { <-packagePreparationTokens }, nil
+	case appPreparationTokens <- struct{}{}:
+		return func() { <-appPreparationTokens }, nil
 	case <-ctx.Done():
 		return nil, ctx.Err()
 	}
 }
 
-func acquireInstallationResources(ctx context.Context, keys ...string) (func(), error) {
+// AcquireInstallationResources serializes callers on the given keys. Keys are
+// taken in sorted order so two callers holding overlapping sets cannot
+// deadlock. The returned function releases every key once.
+func AcquireInstallationResources(ctx context.Context, keys ...string) (func(), error) {
 	keys = uniqueSortedStrings(keys)
 	releases := make([]func(), 0, len(keys))
 	for _, key := range keys {
@@ -151,6 +139,8 @@ func uniqueSortedStrings(values []string) []string {
 	return result
 }
 
-func packageInstallationLockKey(botID, targetID, registryID, packageID string) string {
-	return strings.Join([]string{"package", botID, targetID, registryID, packageID}, "\x00")
+// AppInstallationLockKey names the resource one App installation on
+// one bot's isolated workspace occupies.
+func AppInstallationLockKey(botID, registryID, appID string) string {
+	return strings.Join([]string{"app", botID, registryID, appID}, "\x00")
 }

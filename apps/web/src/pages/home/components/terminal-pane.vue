@@ -1,5 +1,5 @@
 <template>
-  <div class="absolute inset-0 flex flex-col bg-[var(--terminal-background)]">
+  <div class="absolute inset-0 flex flex-col bg-surface-editor">
     <div
       ref="wrapperRef"
       class="flex-1 relative min-h-0 terminal-wrapper"
@@ -11,14 +11,15 @@
     </div>
     <div
       v-if="status === 'disconnected'"
-      class="shrink-0 flex items-center justify-end gap-2 px-3 py-1.5 text-xs text-muted-foreground border-t border-border bg-background"
+      class="absolute right-3 top-2 z-(--z-raised) rounded-md bg-surface-editor"
     >
-      <span>{{ t('bots.terminal.status.disconnected') }}</span>
       <Button
-        size="sm"
         variant="outline"
+        size="sm"
+        :title="t('bots.terminal.status.disconnected')"
         @click="reconnect"
       >
+        <RefreshCw />
         {{ t('bots.terminal.reconnect') }}
       </Button>
     </div>
@@ -32,12 +33,17 @@ import { Terminal, type ILink } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import { SerializeAddon } from '@xterm/addon-serialize'
 import { Button } from '@felinic/ui'
+import { RefreshCw } from 'lucide-vue-next'
 import {
   readTerminalSnapshot,
   terminalCacheKey,
   writeTerminalSnapshot,
 } from '@/composables/useTerminalCache'
 import { sdkAuthQuery, sdkWebSocketUrl } from '@/lib/api-client'
+import { findKeyboardShortcut } from '@/lib/browser-keyboard-shortcuts'
+import { detectPlatform } from '@/lib/keyboard-bindings'
+import { selectActiveKeyboardBindings } from '@/lib/keyboard-context'
+import { useKeyboardShortcutsStore } from '@/store/keyboard-shortcuts'
 import { useSettingsStore } from '@/store/settings'
 import { useWorkspaceTabsStore } from '@/store/workspace-tabs'
 import { LOCALHOST_URL_REGEX, tryParseLocalhostHref } from '@/utils/localhost-link'
@@ -54,6 +60,8 @@ const props = withDefaults(defineProps<{
 const { t } = useI18n()
 const settingsStore = useSettingsStore()
 const tabsStore = useWorkspaceTabsStore()
+const shortcutsStore = useKeyboardShortcutsStore()
+const platform = detectPlatform()
 
 function cssVar(name: string): string {
   if (typeof document === 'undefined') return ''
@@ -62,7 +70,7 @@ function cssVar(name: string): string {
 
 function resolveTerminalTheme() {
   return {
-    background: cssVar('--terminal-background') || 'black',
+    background: cssVar('--surface-editor') || 'black',
     foreground: cssVar('--terminal-foreground') || 'white',
     cursor: cssVar('--terminal-cursor') || 'white',
     selectionBackground: cssVar('--terminal-selection') || 'gray',
@@ -216,6 +224,10 @@ onMounted(() => {
   term.loadAddon(fa)
   term.loadAddon(sa)
   term.open(containerRef.value)
+  // Navigation shortcuts leave the terminal so focus can get out of it. Every
+  // other key goes to the terminal first; only keys it does not send to the
+  // shell (Ctrl+Shift+digit, Command combos on macOS) reach the workbench.
+  term.attachCustomKeyEventHandler(event => !findKeyboardShortcut(event, selectActiveKeyboardBindings(shortcutsStore.effectiveBindings), platform)?.escapesTerminal)
 
   // Make container-local URLs in command output clickable: clicking opens the
   // workspace browser panel (falling back to an OS tab when it is unavailable),

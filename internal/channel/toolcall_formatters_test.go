@@ -86,7 +86,7 @@ func TestFormatAskUserRendersQuestionsWithoutMetadata(t *testing.T) {
 						"text": "Pick one",
 						"kind": "single_select",
 						"options": []any{
-							map[string]any{"id": "q1.o1", "label": "Alpha", "description": "First choice"},
+							map[string]any{"id": "q1.o1", "label": "elicitation.done", "label_key": "elicitation.done", "description": "First choice"},
 							map[string]any{"id": "q1.o2", "label": "Beta"},
 						},
 					},
@@ -100,7 +100,7 @@ func TestFormatAskUserRendersQuestionsWithoutMetadata(t *testing.T) {
 		t.Fatalf("presentation = %#v", p)
 	}
 	rendered := RenderToolCallMessage(p)
-	for _, want := range []string{"Pick one", "1) Alpha - First choice", "2) Beta", "Reply with an option number or its text.", "skip"} {
+	for _, want := range []string{"Pick one", "1) Done - First choice", "2) Beta", "Reply with an option number or its text.", "skip"} {
 		if !strings.Contains(rendered, want) {
 			t.Fatalf("rendered output missing %q:\n%s", want, rendered)
 		}
@@ -261,29 +261,6 @@ func TestFormatSendCarriesTargetAndBody(t *testing.T) {
 		t.Fatalf("expected body text, got %+v", p.Body)
 	}
 	if !strings.Contains(p.Footer, "message_id=msg_456") {
-		t.Fatalf("unexpected footer: %q", p.Footer)
-	}
-}
-
-func TestFormatSendEmailCarriesSubject(t *testing.T) {
-	t.Parallel()
-
-	tc := &StreamToolCall{
-		Name: "send_email",
-		Input: map[string]any{
-			"to":      "alice@example.com",
-			"subject": "Meeting notes",
-		},
-		Result: map[string]any{"status": "sent", "message_id": "mid1"},
-	}
-	p := BuildToolCallEnd(tc)
-	if p.Header != "→ alice@example.com" {
-		t.Fatalf("unexpected header: %q", p.Header)
-	}
-	if !hasTextBlock(p.Body, "Subject: Meeting notes") {
-		t.Fatalf("expected subject block, got %+v", p.Body)
-	}
-	if !strings.Contains(p.Footer, "status=sent") || !strings.Contains(p.Footer, "message_id=mid1") {
 		t.Fatalf("unexpected footer: %q", p.Footer)
 	}
 }

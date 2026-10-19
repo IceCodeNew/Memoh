@@ -15,21 +15,22 @@ const completeScheduleLog = `-- name: CompleteScheduleLog :one
 UPDATE schedule_logs
 SET status = $2,
     result_text = $3,
-    error_message = $4,
+    error_message = '',
+    error_code = $4,
     usage = $5,
     model_id = $6,
     completed_at = now()
 WHERE team_id = public.memoh_current_team_id() AND id = $1
-RETURNING id, schedule_id, bot_id, session_id, status, result_text, error_message, usage, model_id, started_at, completed_at, team_id
+RETURNING id, schedule_id, bot_id, session_id, status, result_text, error_message, error_code, usage, model_id, started_at, completed_at, team_id
 `
 
 type CompleteScheduleLogParams struct {
-	ID           pgtype.UUID `json:"id"`
-	Status       string      `json:"status"`
-	ResultText   string      `json:"result_text"`
-	ErrorMessage string      `json:"error_message"`
-	Usage        []byte      `json:"usage"`
-	ModelID      pgtype.UUID `json:"model_id"`
+	ID         pgtype.UUID `json:"id"`
+	Status     string      `json:"status"`
+	ResultText string      `json:"result_text"`
+	ErrorCode  string      `json:"error_code"`
+	Usage      []byte      `json:"usage"`
+	ModelID    pgtype.UUID `json:"model_id"`
 }
 
 func (q *Queries) CompleteScheduleLog(ctx context.Context, arg CompleteScheduleLogParams) (ScheduleLog, error) {
@@ -37,7 +38,7 @@ func (q *Queries) CompleteScheduleLog(ctx context.Context, arg CompleteScheduleL
 		arg.ID,
 		arg.Status,
 		arg.ResultText,
-		arg.ErrorMessage,
+		arg.ErrorCode,
 		arg.Usage,
 		arg.ModelID,
 	)
@@ -50,6 +51,7 @@ func (q *Queries) CompleteScheduleLog(ctx context.Context, arg CompleteScheduleL
 		&i.Status,
 		&i.ResultText,
 		&i.ErrorMessage,
+		&i.ErrorCode,
 		&i.Usage,
 		&i.ModelID,
 		&i.StartedAt,
@@ -84,7 +86,7 @@ func (q *Queries) CountScheduleLogsBySchedule(ctx context.Context, scheduleID pg
 const createScheduleLog = `-- name: CreateScheduleLog :one
 INSERT INTO schedule_logs (schedule_id, bot_id, session_id, started_at)
 VALUES ($1, $2, $3::uuid, now())
-RETURNING id, schedule_id, bot_id, session_id, status, result_text, error_message, usage, started_at, completed_at
+RETURNING id, schedule_id, bot_id, session_id, status, result_text, error_message, error_code, usage, started_at, completed_at
 `
 
 type CreateScheduleLogParams struct {
@@ -101,6 +103,7 @@ type CreateScheduleLogRow struct {
 	Status       string             `json:"status"`
 	ResultText   string             `json:"result_text"`
 	ErrorMessage string             `json:"error_message"`
+	ErrorCode    string             `json:"error_code"`
 	Usage        []byte             `json:"usage"`
 	StartedAt    pgtype.Timestamptz `json:"started_at"`
 	CompletedAt  pgtype.Timestamptz `json:"completed_at"`
@@ -117,6 +120,7 @@ func (q *Queries) CreateScheduleLog(ctx context.Context, arg CreateScheduleLogPa
 		&i.Status,
 		&i.ResultText,
 		&i.ErrorMessage,
+		&i.ErrorCode,
 		&i.Usage,
 		&i.StartedAt,
 		&i.CompletedAt,
@@ -143,7 +147,7 @@ func (q *Queries) DeleteScheduleLogsBySchedule(ctx context.Context, scheduleID p
 }
 
 const listScheduleLogsByBot = `-- name: ListScheduleLogsByBot :many
-SELECT id, schedule_id, bot_id, session_id, status, result_text, error_message, usage, started_at, completed_at
+SELECT id, schedule_id, bot_id, session_id, status, result_text, error_message, error_code, usage, started_at, completed_at
 FROM schedule_logs
 WHERE team_id = public.memoh_current_team_id() AND bot_id = $1
 ORDER BY started_at DESC
@@ -164,6 +168,7 @@ type ListScheduleLogsByBotRow struct {
 	Status       string             `json:"status"`
 	ResultText   string             `json:"result_text"`
 	ErrorMessage string             `json:"error_message"`
+	ErrorCode    string             `json:"error_code"`
 	Usage        []byte             `json:"usage"`
 	StartedAt    pgtype.Timestamptz `json:"started_at"`
 	CompletedAt  pgtype.Timestamptz `json:"completed_at"`
@@ -186,6 +191,7 @@ func (q *Queries) ListScheduleLogsByBot(ctx context.Context, arg ListScheduleLog
 			&i.Status,
 			&i.ResultText,
 			&i.ErrorMessage,
+			&i.ErrorCode,
 			&i.Usage,
 			&i.StartedAt,
 			&i.CompletedAt,
@@ -201,7 +207,7 @@ func (q *Queries) ListScheduleLogsByBot(ctx context.Context, arg ListScheduleLog
 }
 
 const listScheduleLogsBySchedule = `-- name: ListScheduleLogsBySchedule :many
-SELECT id, schedule_id, bot_id, session_id, status, result_text, error_message, usage, started_at, completed_at
+SELECT id, schedule_id, bot_id, session_id, status, result_text, error_message, error_code, usage, started_at, completed_at
 FROM schedule_logs
 WHERE team_id = public.memoh_current_team_id() AND schedule_id = $1
 ORDER BY started_at DESC
@@ -222,6 +228,7 @@ type ListScheduleLogsByScheduleRow struct {
 	Status       string             `json:"status"`
 	ResultText   string             `json:"result_text"`
 	ErrorMessage string             `json:"error_message"`
+	ErrorCode    string             `json:"error_code"`
 	Usage        []byte             `json:"usage"`
 	StartedAt    pgtype.Timestamptz `json:"started_at"`
 	CompletedAt  pgtype.Timestamptz `json:"completed_at"`
@@ -244,9 +251,85 @@ func (q *Queries) ListScheduleLogsBySchedule(ctx context.Context, arg ListSchedu
 			&i.Status,
 			&i.ResultText,
 			&i.ErrorMessage,
+			&i.ErrorCode,
 			&i.Usage,
 			&i.StartedAt,
 			&i.CompletedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listScheduleRunSessions = `-- name: ListScheduleRunSessions :many
+SELECT
+  l.id, l.session_id, l.status, l.error_code, l.started_at, l.completed_at,
+  COALESCE(s.title, '')::text AS session_title
+FROM schedule_logs l
+LEFT JOIN bot_sessions s ON s.id = l.session_id AND s.deleted_at IS NULL
+WHERE l.team_id = public.memoh_current_team_id()
+  AND l.schedule_id = $1
+  AND (s.id IS NOT NULL OR (l.session_id IS NULL AND l.status = 'error'))
+  AND (
+    NOT $2::bool
+    OR (l.started_at, l.id) < ($3::timestamptz, $4::uuid)
+  )
+ORDER BY l.started_at DESC, l.id DESC
+LIMIT $5::int
+`
+
+type ListScheduleRunSessionsParams struct {
+	ScheduleID      pgtype.UUID        `json:"schedule_id"`
+	UseCursor       bool               `json:"use_cursor"`
+	CursorStartedAt pgtype.Timestamptz `json:"cursor_started_at"`
+	CursorID        pgtype.UUID        `json:"cursor_id"`
+	LimitCount      int32              `json:"limit_count"`
+}
+
+type ListScheduleRunSessionsRow struct {
+	ID           pgtype.UUID        `json:"id"`
+	SessionID    pgtype.UUID        `json:"session_id"`
+	Status       string             `json:"status"`
+	ErrorCode    string             `json:"error_code"`
+	StartedAt    pgtype.Timestamptz `json:"started_at"`
+	CompletedAt  pgtype.Timestamptz `json:"completed_at"`
+	SessionTitle string             `json:"session_title"`
+}
+
+// One row per fire of a schedule with the title of the session it ran in,
+// newest first. A fire whose session was soft-deleted is dropped by the join;
+// a hard-deleted session nulls session_id (ON DELETE SET NULL), so a NULL
+// session on a successful fire also means "deleted" and is dropped. A failed
+// fire with no session never got one and is kept so the failure stays visible.
+// The keyset cursor is (started_at, id) of the last row of the previous page.
+func (q *Queries) ListScheduleRunSessions(ctx context.Context, arg ListScheduleRunSessionsParams) ([]ListScheduleRunSessionsRow, error) {
+	rows, err := q.db.Query(ctx, listScheduleRunSessions,
+		arg.ScheduleID,
+		arg.UseCursor,
+		arg.CursorStartedAt,
+		arg.CursorID,
+		arg.LimitCount,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListScheduleRunSessionsRow
+	for rows.Next() {
+		var i ListScheduleRunSessionsRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.SessionID,
+			&i.Status,
+			&i.ErrorCode,
+			&i.StartedAt,
+			&i.CompletedAt,
+			&i.SessionTitle,
 		); err != nil {
 			return nil, err
 		}

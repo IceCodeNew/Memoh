@@ -1,102 +1,62 @@
+---
 name: Feature Request
-description: Suggest a new feature or enhancement
+description: Suggest a feature or improvement
 title: "[Feature]: "
-labels: ["feat"]
+labels:
+- feat
 body:
-  - type: markdown
-    attributes:
-      value: |
-        Thanks for suggesting a feature! Please describe your idea so we can evaluate and discuss it.
-
-  - type: textarea
-    id: description
-    attributes:
-      label: Feature Description
-      description: A clear and concise description of the feature you'd like to see.
-      placeholder: Describe the feature...
-    validations:
-      required: true
-
-  - type: textarea
-    id: motivation
-    attributes:
-      label: Motivation
-      description: Why do you want this feature? What problem does it solve?
-      placeholder: Explain the use case or problem...
-    validations:
-      required: true
-
-  - type: textarea
-    id: proposed-solution
-    attributes:
-      label: Proposed Solution
-      description: If you have an idea of how this could be implemented, describe it here.
-    validations:
-      required: false
-
-  - type: dropdown
-    id: area
-    attributes:
-      label: Area
-      description: Which part of Memoh does this feature request affect most?
-      options:
-        - Agent / Chat
-        - Memory
-        - Providers / Models
-        - Containers / Workspace
-        - Channels
-        - Email
-        - MCP / Tools
-        - Web UI
-        - Desktop App / CLI
-        - Documentation
-        - Other
-    validations:
-      required: false
-
-  - type: dropdown
-    id: channel
-    attributes:
-      label: Channel
-      description: If this feature is channel-specific, which channel is it for?
-      options:
-        - Not channel-specific
-        - Telegram
-        - Discord
-        - Feishu (Lark)
-        - DingTalk
-        - QQ
-        - Matrix
-        - Misskey
-        - Slack
-        - WeCom
-        - WeChat
-        - WeChat Official Account
-        - Email
-        - Web
-        - Other
-    validations:
-      required: false
-
-  - type: textarea
-    id: alternatives
-    attributes:
-      label: Alternatives Considered
-      description: Have you considered any alternative solutions or workarounds?
-    validations:
-      required: false
-
-  - type: textarea
-    id: additional
-    attributes:
-      label: Additional Context
-      description: Add any other context, mockups, or references about the feature request here.
-    validations:
-      required: false
-
-  - type: checkboxes
-    id: pr
-    attributes:
-      label: Contributing
-      options:
-        - label: I would like to submit a pull request to implement this feature
+- type: dropdown
+  id: author
+  attributes:
+    label: Author
+    description: Declare whether this contribution was written by a human or an agent.
+    options:
+    - Human
+    - Agent
+  validations:
+    required: true
+- type: dropdown
+  id: type
+  attributes:
+    label: Type
+    options:
+    - feat
+  validations:
+    required: true
+- type: textarea
+  id: description
+  attributes:
+    label: Feature Description
+  validations:
+    required: true
+- type: textarea
+  id: motivation
+  attributes:
+    label: Use Case and Motivation
+  validations:
+    required: true
+- type: textarea
+  id: solution
+  attributes:
+    label: Proposed Solution
+  validations:
+    required: false
+- type: textarea
+  id: alternatives
+  attributes:
+    label: Alternatives Considered
+  validations:
+    required: false
+- type: textarea
+  id: screenshots
+  attributes:
+    label: Screenshots / Recordings
+    description: Drag or paste screenshots here. Agents should attach screenshots or explain why they are unavailable or not applicable, with alternative verification.
+  validations:
+    required: false
+- type: textarea
+  id: additional
+  attributes:
+    label: Additional Context
+  validations:
+    required: false

@@ -1,6 +1,10 @@
 package wechatoa
 
-import "testing"
+import (
+	"context"
+	"strings"
+	"testing"
+)
 
 func TestNormalizeConfig_DefaultSafe(t *testing.T) {
 	out, err := normalizeConfig(map[string]any{
@@ -62,5 +66,17 @@ func TestNormalizeConfig_HTTPProxy(t *testing.T) {
 	}
 	if out["httpProxyUrl"] != proxyURL {
 		t.Fatalf("unexpected httpProxyUrl: %v", out["httpProxyUrl"])
+	}
+}
+
+func TestDiscoverSelfRejectsInvalidEncodingAESKey(t *testing.T) {
+	_, _, err := NewWeChatOAAdapter(nil).DiscoverSelf(context.Background(), map[string]any{
+		"appId":          "wx123",
+		"appSecret":      "secret",
+		"token":          "token",
+		"encodingAESKey": "invalid",
+	})
+	if err == nil || !strings.Contains(err.Error(), "encodingAESKey") {
+		t.Fatalf("DiscoverSelf error = %v", err)
 	}
 }

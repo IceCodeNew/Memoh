@@ -39,6 +39,25 @@ export interface ChatViewEntry {
   pairEffort: Ref<string>
   pairSource: Ref<ChatWorkspaceTargetSelectionSource>
   lastAccess: number
+  // Set when the session may have changed while this view was hidden (a
+  // session_touched activity event, or a coverage gap in the activity stream).
+  // Revisit revalidation masks the cached transcript while this is set; a
+  // successful refresh clears it. Events cannot arrive for a view that does
+  // not exist yet, so entries start unmarked.
+  staleWhileHidden: boolean
+  // Bumped on every stale mark. A refresh clears the flag only when no mark
+  // arrived after that refresh began: its fetched history may predate a
+  // mid-refresh touch (the commit can wait on the runtime snapshot while
+  // another client writes) and cannot vouch for it.
+  staleMarkVersion: number
+  // Set when this client just created the session the view shows: a draft
+  // carrying its first-send turns was promoted into it (in-band creation), or
+  // a first send created it over REST (External Agent). Everything the
+  // session holds so far is on screen, so the first history load must not
+  // mask it behind loadingMessages: that would blank the just-sent turn and
+  // flash a skeleton. The first loadInitialMessages consumes it; later loads
+  // follow the ordinary cache-trust rules.
+  clientBorn: boolean
 }
 
 interface ChatViewRegistryDeps extends Omit<TranscriptDeps, 'currentBotId' | 'sessionId'> {
@@ -99,6 +118,7 @@ export function createChatViewRegistry(deps: ChatViewRegistryDeps) {
   const cacheLimit = Math.max(0, deps.cacheLimit ?? CHAT_SESSION_VIEW_CACHE_LIMIT)
   const views = new Map<string, ChatViewEntry>()
   const panelKeys = new Map<string, string>()
+  const coveredBots = new Set<string>()
   let accessClock = 0
 
   function touch(view: ChatViewEntry) {
@@ -124,6 +144,7 @@ export function createChatViewRegistry(deps: ChatViewRegistryDeps) {
       fetchMessages: deps.fetchMessages,
       locateMessage: deps.locateMessage,
       isTurnLive: deps.isTurnLive,
+      historyRefreshToken: () => view.staleMarkVersion,
     })
     const view: ChatViewEntry = {
       key: chatViewKey({ botId, sessionId, viewId }),
@@ -143,9 +164,17 @@ export function createChatViewRegistry(deps: ChatViewRegistryDeps) {
       pairEffort: ref(''),
       pairSource: ref('unset'),
       lastAccess: 0,
+      staleWhileHidden: false,
+      staleMarkVersion: 0,
+      clientBorn: false,
     }
-    transcript.setRefreshAppliedHook((targetSessionId, latestTimestamp) => {
+    transcript.setRefreshAppliedHook((targetSessionId, latestTimestamp, refreshToken) => {
       view.initialized = true
+      // A mark that landed mid-refresh is not covered by the history this
+      // refresh fetched — keep the flag so the next revisit still masks.
+      if (refreshToken === undefined || refreshToken === view.staleMarkVersion) {
+        view.staleWhileHidden = false
+      }
       deps.onRefreshApplied?.(view, targetSessionId, latestTimestamp)
     })
     views.set(view.key, view)
@@ -279,6 +308,46 @@ export function createChatViewRegistry(deps: ChatViewRegistryDeps) {
     return deactivated
   }
 
+  // The flag is only consulted at activation, so marking a visible view is
+  // inert — but it must still be marked: coverage can end while it is
+  // visible (e.g. the bot's activity stream stops on a bot switch), after
+  // which it hides and would otherwise revisit with an untrusted cache.
+  function markSessionStale(botId: string, sessionId: string) {
+    const view = views.get(chatSessionViewKey(botId, sessionId))
+    if (view) {
+      view.staleWhileHidden = true
+      view.staleMarkVersion += 1
+    }
+  }
+
+  // The activity stream is the only staleness signal; any gap in it (buffer
+  // drop, reconnect, bot switch) makes every view of that bot unknowable,
+  // so they all become conservative.
+  function markAllSessionsStale(botId: string) {
+    const prefix = `session:${normalize(botId)}:`
+    for (const view of views.values()) {
+      if (view.key.startsWith(prefix)) {
+        view.staleWhileHidden = true
+        view.staleMarkVersion += 1
+      }
+    }
+  }
+
+  function isActivityStreamCovered(botId: string): boolean {
+    return coveredBots.has(normalize(botId))
+  }
+
+  function setActivityStreamCoverage(botId: string, covered: boolean) {
+    const bid = normalize(botId)
+    if (!bid || covered === coveredBots.has(bid)) return
+    if (covered) coveredBots.add(bid)
+    else coveredBots.delete(bid)
+    // Mark both edges. History refreshed during an outage may already be
+    // outdated when coverage returns; the ready frame does not replay the
+    // changes that were missed before this subscription was established.
+    markAllSessionsStale(bid)
+  }
+
   function promoteDraft(botId: string, viewId: string, sessionId: string): ChatViewEntry {
     const bid = normalize(botId)
     const vid = normalize(viewId)
@@ -291,9 +360,11 @@ export function createChatViewRegistry(deps: ChatViewRegistryDeps) {
     const existing = views.get(sessionKey)
     if (existing && existing !== draft) {
       const knownTurns = new Set(existing.transcript.messages)
-      existing.transcript.appendToView(
-        ...draft.transcript.messages.filter(turn => !knownTurns.has(turn)),
-      )
+      const carried = draft.transcript.messages.filter(turn => !knownTurns.has(turn))
+      existing.transcript.appendToView(...carried)
+      // Only a session view that has never loaded history can be vouched for
+      // by the draft's turns alone.
+      if (!existing.initialized && carried.length > 0) existing.clientBorn = true
       existing.initialized ||= draft.initialized
       if (draft.workspaceTargetSelectionSource.value !== 'unset') {
         existing.workspaceTargetId.value = draft.workspaceTargetId.value
@@ -329,6 +400,7 @@ export function createChatViewRegistry(deps: ChatViewRegistryDeps) {
     // existing turns into a session-bound controller instead.
     const replacement = createView({ botId: bid, sessionId: sid, viewId: vid })
     replacement.transcript.appendToView(...draft.transcript.messages)
+    replacement.clientBorn = draft.transcript.messages.length > 0
     replacement.initialized = draft.initialized
     replacement.workspaceTargetId.value = draft.workspaceTargetId.value
     replacement.workspaceTargetSnapshot.value = draft.workspaceTargetSnapshot.value
@@ -358,6 +430,7 @@ export function createChatViewRegistry(deps: ChatViewRegistryDeps) {
 
   function resetBot(botId: string) {
     const bid = normalize(botId)
+    coveredBots.delete(bid)
     for (const view of [...views.values()]) {
       if (view.botId === bid) evict(view)
     }
@@ -366,6 +439,7 @@ export function createChatViewRegistry(deps: ChatViewRegistryDeps) {
   function resetAll() {
     for (const view of [...views.values()]) evict(view)
     panelKeys.clear()
+    coveredBots.clear()
   }
 
   function entries(): ChatViewEntry[] {
@@ -383,6 +457,10 @@ export function createChatViewRegistry(deps: ChatViewRegistryDeps) {
     unbindPanel,
     promoteDraft,
     removeSession,
+    markSessionStale,
+    markAllSessionsStale,
+    isActivityStreamCovered,
+    setActivityStreamCoverage,
     prune,
     resetBot,
     resetAll,

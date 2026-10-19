@@ -43,9 +43,11 @@
               </div>
 
               <!-- A session with a live run but no messages yet (a subagent
-                   that has not produced output) reads as starting, not empty. -->
+                   that has not produced output) reads as starting, not empty.
+                   A first send waiting on welcome already shows its spinner
+                   on the send button. -->
               <div
-                v-if="messages.length === 0 && !loadingChats && !loadingMessages && streaming"
+                v-if="messages.length === 0 && !loadingChats && !loadingMessages && streaming && !isWelcome"
                 class="flex items-center justify-center min-h-75"
               >
                 <Spinner class="size-3.5" />
@@ -62,6 +64,33 @@
                 <p class="text-muted-foreground text-xs">
                   {{ $t('chat.emptySystemSession') }}
                 </p>
+              </div>
+
+              <!-- Cold-open placeholder while a session's first page is on the
+                   wire — Arkloop's ChatSkeleton shape, re-derived on Memoh
+                   geometry: chat text is 16px at --chat-leading 1.48 ≈ 24px
+                   line pitch, so a real one-line user bubble is py-3 + 24px =
+                   48px tall and ~10 CJK chars + px-4 ≈ 192px wide; each reply
+                   bar (12px + 12px gap) occupies one text line's 24px pitch.
+                   The shared Skeleton primitive owns the loading motion and
+                   base tone; only the width stagger is kept from the old
+                   hand-rolled version. -->
+              <div
+                v-if="skeletonVisible"
+                class="flex flex-col gap-6"
+                aria-hidden="true"
+              >
+                <div class="flex justify-end">
+                  <Skeleton class="h-12 w-48 rounded-2xl" />
+                </div>
+                <div class="flex flex-col gap-3">
+                  <Skeleton
+                    v-for="w in CHAT_SKELETON_BAR_WIDTHS"
+                    :key="w"
+                    class="h-3 rounded"
+                    :style="{ width: w }"
+                  />
+                </div>
               </div>
 
               <!-- One persistent container per turn, keyed by the turn's
@@ -112,7 +141,9 @@
                         :on-retry-message="handleRetryMessage"
                         :can-retry-latest-assistant="isRetryableTurn(msg)"
                         :can-edit-latest-user="isEditableTurn(msg)"
-                        :can-fork-assistant="canForkAssistant"
+                        :can-fork-assistant="isForkableTurn(msg)"
+                        :inline-actions="isDirectBotAgentRuntime(activeChatTarget.runtimeType)"
+                        :goal-runtime="activeChatTarget.runtimeType"
                         :is-scrolling="isScrolling"
                         :is-last-message="msg.id === lastMessageId"
                         @active="onMessageActive"
@@ -169,6 +200,17 @@
         :turn-id="pendingForkTurnId"
       />
 
+      <!-- Asked before a usage example or App "Try it" replaces unsent text. -->
+      <ConfirmDeleteDialog
+        :open="replaceDraftConfirm.open.value"
+        :title="$t('chatExamples.replaceDraft.title')"
+        :description="$t('chatExamples.replaceDraft.description')"
+        :cancel-label="$t('common.cancel')"
+        :confirm-label="$t('chatExamples.replaceDraft.confirm')"
+        @update:open="replaceDraftConfirm.setOpen"
+        @confirm="replaceDraftConfirm.answer(true)"
+      />
+
       <!-- The composer is a single instance reused in both layouts: pinned to
            the bottom once a conversation exists, or lifted to the vertical
            centre (with a greeting above it) while the chat is still empty, so a
@@ -184,8 +226,8 @@
         class="pointer-events-none absolute z-(--z-panel)"
         :class="[
           isWelcome
-            ? 'inset-0 flex flex-col items-center justify-start pt-[28dvh]'
-            : 'inset-x-0 bottom-0 pt-2 pb-7',
+            ? 'inset-0 flex flex-col items-center justify-start'
+            : 'inset-x-0 bottom-0 pt-2',
           { invisible: composerPlacementPending },
         ]"
         :style="composerLiftPx > 0 ? { bottom: `${composerLiftPx}px` } : undefined"
@@ -205,10 +247,39 @@
           :style="{ height: dockMaskHeight }"
         />
         <!-- welcome: top-anchored column — the greeting and the composer's top
-             edge stay pinned at the shared viewport anchor, so a growing composer
-             (text or attachments) only extends downward and never pushes the
-             greeting up; normal: display:contents removes this from layout. -->
-        <div :class="isWelcome ? 'flex w-full flex-col items-center gap-8 md:-translate-x-3' : 'contents'">
+             edge stay pinned at the spacer's pane-relative anchor, so a growing
+             composer (text or attachments) only extends downward and never
+             pushes the greeting up; normal: display:contents removes this from
+             layout. The welcome arm is ALSO the size container the height-keyed
+             degradation tiers query (style.css, [data-welcome-column]): flex-1
+             min-h-0 makes its height track the space actually left to it, and
+             container-type:size lets descendants read that height — without
+             min-h-0 the box would stay content-sized and the queries would
+             measure the content, never the pane. -->
+        <div
+          :class="isWelcome
+            ? 'flex w-full flex-1 min-h-0 flex-col items-center gap-8 md:-translate-x-3 [container-type:size] [container-name:welcome-col]'
+            : 'contents'"
+          :data-welcome-column="isWelcome ? '' : undefined"
+        >
+          <!-- Anchor spacer: together with the wrapper's gap-8 it parks the
+               greeting's top edge at 28% of the column's height (= the
+               pane's), capped at 16rem, collapsible to 0. It is the FIRST
+               thing that yields when the pane gets short — the greeting +
+               composer rise to the top before anything clips; the degradation
+               tiers (style.css) take over below that. Must not become a
+               vh/dvh padding again: viewport units ignore the pane's own
+               height, and in short panes (vertical splits) the offset alone
+               can push the composer past the group's overflow-hidden edge,
+               where the next pane's tab strip reads as covering it. No floor
+               either: a minimum offset would push content out of a tiny
+               pane. (h- + default shrink, not flex-none + basis: the flex
+               shorthand would reset flex-basis to auto.) -->
+          <div
+            v-if="isWelcome"
+            aria-hidden="true"
+            class="h-[clamp(0rem,calc(28%_-_2rem),16rem)] w-px"
+          />
           <div
             v-if="isWelcome"
             class="mx-auto w-full max-w-[44rem] px-4 text-left sm:px-6 lg:px-10"
@@ -301,6 +372,7 @@
                         v-for="action in visibleSlashQuickActions"
                         :key="action.id"
                         :value="action.label"
+                        :disabled="action.id === 'goal' && !!goalExecutionBlockedReason"
                         @select="selectSlashQuickAction(action)"
                       >
                         <component
@@ -308,23 +380,23 @@
                           class="size-4 shrink-0 text-muted-foreground"
                         />
                         <span class="min-w-0 flex-1">
-                          <span class="block truncate text-control">{{ action.label }}</span>
+                          <span class="block truncate text-control">{{ action.id === 'plan' ? $t('chat.planMode.commandLabel') : action.id === 'goal' ? $t('chat.goal.label') : action.label }}</span>
                           <span class="block truncate text-caption text-muted-foreground">{{ action.description }}</span>
                         </span>
                       </CommandItem>
                     </CommandGroup>
                     <CommandSeparator
-                      v-if="visibleSlashQuickActions.length && (visibleACPAgentCommands.length || visibleSlashSkills.length)"
+                      v-if="visibleSlashQuickActions.length && (visibleRuntimeAgentCommands.length || visibleSlashSkills.length)"
                     />
                     <CommandGroup
-                      v-if="visibleACPAgentCommands.length"
+                      v-if="visibleRuntimeAgentCommands.length"
                       :heading="$t('chat.slash.agentCommands')"
                     >
                       <CommandItem
-                        v-for="command in visibleACPAgentCommands"
+                        v-for="command in visibleRuntimeAgentCommands"
                         :key="command.name"
                         :value="`/${command.name}`"
-                        @select="selectACPAgentCommand(command)"
+                        @select="selectRuntimeCommand(command)"
                       >
                         <span class="min-w-0 flex-1">
                           <span class="block truncate text-control">/{{ command.name }}</span>
@@ -339,7 +411,7 @@
                         </span>
                       </CommandItem>
                     </CommandGroup>
-                    <CommandSeparator v-if="visibleACPAgentCommands.length && visibleSlashSkills.length" />
+                    <CommandSeparator v-if="visibleRuntimeAgentCommands.length && visibleSlashSkills.length" />
                     <CommandGroup
                       v-if="visibleSlashSkills.length"
                       :heading="$t('chat.slash.skills')"
@@ -380,13 +452,30 @@
               ref="dockEl"
               :approvals="pendingApprovals"
               :command-panel="composerCommandPanel"
-              :error-message="composerError"
+              :error-message="composerPanelError"
               :pending-user-input="pendingUserInput"
-              :compacting="isCompactingSession"
+              :usage-notice="composerUsageNotice"
               @select-command-item="selectCommandResultItem"
               @dismiss-command="clearCurrentCommandEvent"
+              @dismiss-usage="dismissCodexUsageNotice"
+              @dismiss-error="dismissComposerPanelError"
               @reveal-composer="handleDockRevealComposer"
             >
+              <CodexGoalBar
+                v-if="runtimeControls.goal.value || visibleRuntimeGoalError"
+                :key="runtimeModeScope"
+                class="mx-3 mb-2"
+                :goal="runtimeControls.goal.value"
+                :error="visibleRuntimeGoalError"
+                :disabled="goalControlsDisabled"
+                :resume-disabled="goalResumeDisabled"
+                :resume-disabled-reason="goalExecutionBlockedReason"
+                :streaming="streaming"
+                @pause="controlGoal('pause')"
+                @clear="controlGoal('clear')"
+                @resume="controlGoal('resume')"
+                @dismiss-error="dismissedRuntimeGoalError = runtimeGoalError"
+              />
               <!-- The composer is ALWAYS a two-row card (textarea on top,
                    controls below) — no pill↔multiline morph: a fixed rounded-2xl
                    box, so its shape never depends on the content and nothing
@@ -394,7 +483,7 @@
                    Docked (non-welcome) state compresses and quiets: no min
                    height + tighter padding (p-2.5) + a shorter textarea row
                    (min-h-10) pull the two rows together — the centered welcome
-                   card keeps the full presence (min-h-28, p-3); docked it sits
+                   card keeps the full presence (min-h-28, wider --composer-pad); docked it sits
                    under the conversation and should read lighter, with the edge
                    softened to --border-soft (.chat-composer-docked, style.css).
                    Mobile radius is DERIVED from the control circles inside:
@@ -407,9 +496,9 @@
                 ref="composerEl"
                 data-slot="input-group"
                 role="group"
-                class="chat-composer-edge relative flex w-full flex-wrap content-between items-end gap-1 rounded-2xl bg-surface-composer cursor-text max-md:rounded-3xl max-md:p-2.5"
+                class="chat-composer-edge @container/composer relative flex w-full flex-wrap content-between items-end gap-1 rounded-2xl bg-surface-composer cursor-text p-(--composer-pad) max-md:rounded-3xl"
                 :class="[
-                  isWelcome ? 'min-h-28 p-3' : 'p-2.5 chat-composer-docked',
+                  isWelcome ? 'min-h-28' : 'chat-composer-docked',
                   voiceInputState !== 'idle' ? 'chat-composer-voice' : '',
                 ]"
                 @click="handleComposerClick"
@@ -544,19 +633,34 @@
                   ref="textareaEl"
                   v-model="inputText"
                   rows="1"
-                  :placeholder="composerPlaceholder"
-                  :disabled="!currentBotId || activeChatReadOnly || loadingMessages"
-                  class="order-none max-h-52 w-full basis-full field-sizing-content resize-none break-words bg-transparent pl-2 pr-1 pt-2 pb-1.5 text-base leading-[var(--chat-leading)] text-foreground outline-none placeholder:text-[var(--field-placeholder)] disabled:cursor-not-allowed"
-                  :class="isWelcome ? 'min-h-12' : 'min-h-10'"
+                  :placeholder="composerPreviewShown ? '' : composerPlaceholder"
+                  :disabled="!currentBotId || activeChatReadOnly || loadingMessages || firstSendAwaiting"
+                  class="order-none max-h-52 w-full basis-full field-sizing-content resize-none break-words bg-transparent pl-2 pr-1 pt-2 pb-1.5 text-base leading-[var(--chat-leading)] outline-none placeholder:text-[var(--field-placeholder)] disabled:cursor-not-allowed"
+                  :class="[isWelcome ? 'min-h-12' : 'min-h-10', composerPreviewShown ? 'text-transparent' : 'text-foreground']"
                   @keydown="handleComposerKeydown"
                   @paste="handlePaste"
                 />
+                <!-- The suggestion preview: laid exactly over the textarea's
+                     text box (same padding, size and leading), so it wraps line
+                     for line like the text it becomes. Out of flow, so the
+                     composer never resizes while a row is hovered. -->
+                <div
+                  v-if="composerPreviewShown && composerPreviewBox"
+                  :key="composerPreview?.text"
+                  data-composer-preview
+                  :data-landing="composerPreview?.landing || undefined"
+                  aria-hidden="true"
+                  class="pointer-events-none absolute line-clamp-2 break-words pl-2 pr-1 pt-2 text-base leading-[var(--chat-leading)] max-md:line-clamp-1"
+                  :style="composerPreviewBox"
+                >
+                  {{ composerPreview?.text }}
+                </div>
 
                 <!-- max-md size bumps on the composer controls (the ＋ and voice
                      buttons, the model trigger, and the send ring below) grow the
                      tap targets to the 44px touch floor on phones; desktop keeps
                      the compact size. -->
-                <DropdownMenu v-model:open="agentPopoverOpen">
+                <DropdownMenu>
                   <DropdownMenuTrigger as-child>
                     <Button
                       type="button"
@@ -564,17 +668,13 @@
                       size="icon-sm"
                       shape="circle"
                       :disabled="!currentBotId || activeChatReadOnly || composerConfigPending || voiceInputState !== 'idle'"
+                      :class="runtimeModeChanging && !!currentBotId && !activeChatReadOnly && !composerAgentConfigPending && voiceInputState === 'idle' ? 'disabled:opacity-100' : undefined"
                       :title="$t('chat.composerActions')"
-                      class="order-1 self-end text-muted-foreground max-md:size-11"
+                      tone="muted"
+                      class="order-1 self-end max-md:size-11"
                       :aria-label="$t('chat.composerActions')"
                     >
-                      <Spinner
-                        v-if="agentChanging"
-                        class="size-4 max-md:size-5"
-                      />
-                      <Plus
-                        v-else
-                        :stroke-width="1.5"
+                      <AddIcon
                         class="size-4 max-md:size-5"
                       />
                     </Button>
@@ -582,158 +682,45 @@
                   <DropdownMenuContent
                     class="w-56"
                     align="start"
-                    side="top"
+                    :side="isWelcome ? 'bottom' : 'top'"
                   >
-                    <!-- The agent runtime is fixed once a session has any turns,
-                       so the switcher only appears while the session is still
-                       empty. Showing it disabled in an active chat just dangles
-                       a choice that can't be made. -->
-                    <template v-if="canChangeAgent && enabledBotAgents.length">
-                      <DropdownMenuLabel>{{ $t('chat.agent') }}</DropdownMenuLabel>
-                      <DropdownMenuItem @select="selectMemohAgent">
-                        <img
-                          src="/logo.svg"
-                          alt=""
-                          class="size-4 shrink-0"
-                        >
-                        <span class="min-w-0 flex-1 truncate">{{ $t('chat.agentMemoh') }}</span>
-                        <Check
-                          v-if="!activeIsExternalAgent"
-                          class="ml-auto"
-                        />
-                      </DropdownMenuItem>
-                      <DropdownMenuItem
-                        v-for="agent in enabledBotAgents"
-                        :key="agent.id"
-                        @select="selectBotAgent(agent)"
-                      >
-                        <component
-                          :is="botAgentIcon(agent, true)"
-                          class="size-4 shrink-0"
-                        />
-                        <span class="min-w-0 flex-1 truncate">{{ botAgentName(agent) }}</span>
-                        <Check
-                          v-if="activeBotAgentID === agent.id"
-                          class="ml-auto"
-                        />
-                      </DropdownMenuItem>
-                    </template>
-                    <!-- Folder binding. A draft picks where it lands here, the
-                       same choice the sidebar's per-folder ＋ makes, so a new
-                       chat isn't stuck folderless just because it was started
-                       from the composer. Once the session exists the binding
-                       pins its workspace target for life, so the picker gives
-                       way to a read-only entry. -->
-                    <template v-if="composerFolderPickable">
-                      <DropdownMenuSeparator v-if="canChangeAgent && enabledBotAgents.length" />
-                      <DropdownMenuLabel>{{ $t('chat.folder') }}</DropdownMenuLabel>
-                      <DropdownMenuItem @select="clearWorkingFolder">
-                        <X class="size-4 shrink-0" />
-                        <span class="min-w-0 flex-1 truncate">{{ $t('chat.folderDetachDraft') }}</span>
-                        <Check
-                          v-if="!draftWorkingFolder"
-                          class="ml-auto"
-                        />
-                      </DropdownMenuItem>
-                      <DropdownMenuItem
-                        v-for="folder in selectableFolders"
-                        :key="folder.id"
-                        @select="selectWorkingFolder(folder)"
-                      >
-                        <FolderOpen class="size-4 shrink-0" />
-                        <span class="min-w-0 flex-1 truncate">{{ folder.name }}</span>
-                        <Check
-                          v-if="draftWorkingFolder?.id === folder.id"
-                          class="ml-auto"
-                        />
-                      </DropdownMenuItem>
-                    </template>
-                    <template v-else-if="composerFolderLocked">
-                      <DropdownMenuSeparator v-if="canChangeAgent && enabledBotAgents.length" />
-                      <DropdownMenuLabel>{{ $t('chat.folder') }}</DropdownMenuLabel>
-                      <DropdownMenuItem disabled>
-                        <FolderOpen class="size-4 shrink-0" />
-                        <span class="min-w-0 flex-1 truncate">{{ composerFolderName }}</span>
-                        <Check class="ml-auto" />
-                      </DropdownMenuItem>
-                      <DropdownMenuItem
-                        v-if="!activeSession"
-                        @select="clearWorkingFolder"
-                      >
-                        <X class="size-4 shrink-0" />
-                        <span class="min-w-0 flex-1 truncate">{{ $t('chat.folderDetachDraft') }}</span>
-                      </DropdownMenuItem>
-                    </template>
-                    <DropdownMenuSeparator v-if="(canChangeAgent && enabledBotAgents.length) || showComposerFolderSection" />
                     <DropdownMenuItem
                       :disabled="!currentBotId || activeChatReadOnly || streaming || loadingMessages"
                       @select="fileInput?.click()"
                     >
-                      <Paperclip />
+                      <UploadIcon />
                       <span class="min-w-0 flex-1 truncate">{{ $t('chat.attachFiles') }}</span>
                     </DropdownMenuItem>
+                    <ComposerConnectorsMenu
+                      :bot-id="currentBotId || ''"
+                      :bot-name="currentBot?.name || currentBotId || ''"
+                    />
                   </DropdownMenuContent>
                 </DropdownMenu>
 
-                <!-- Destination selector: a peer of the ＋ menu in the
-                     controls row. Selection only; ACL lives elsewhere. -->
-                <ComposerContinueOn
-                  v-if="showComputersMenu"
-                  :targets="workspaceTargets"
-                  :selected-target-id="selectedWorkspaceTargetId"
-                  :selected-missing="selectedWorkspaceTargetMissing"
-                  :selected-snapshot-name="workspaceTargetSelection.snapshot?.name ?? ''"
-                  :locked="computerSwitchLocked"
-                  :initial-loading="workspaceTargetsInitialLoading"
-                  :load-failed="workspaceTargetsLoadFailed"
-                  :bot-id="currentBotId ?? ''"
-                  :bot-name="currentBot?.display_name || currentBot?.name || ''"
-                  @select="selectWorkspaceTarget"
-                  @menu-open="refetchWorkspaceTargets"
-                />
-
-                <!-- The controls row owns the remaining width and right-aligns,
-                     so a long model name truncates instead of overflowing.
-                     min-h-9 during voice: the session ring (size-9) is the row's
-                     tallest child and v-if's off while recording; without the pin
-                     the row shrinks 36→32 and the welcome card's content-between
-                     drops the freed 4px between the rows — the voice buttons
-                     visibly sink. Coupled to the ring's size-9 by design. -->
-                <div
-                  class="order-3 flex min-w-0 flex-1 items-center justify-end gap-2 self-end"
-                  :class="showSessionInfoRing && voiceInputState !== 'idle' ? 'min-h-9' : undefined"
-                >
-                  <!-- shrink-0 keeps the model name the one that truncates.
-                       Native and ACP turns persist a context lifecycle; direct
-                       runtimes own their own context, so the ring stays off. -->
-                  <SessionInfoRing
-                    v-if="showSessionInfoRing && voiceInputState === 'idle'"
-                    class="shrink-0"
-                    :visible="isVisible"
-                    :override-model-id="overrideModelId"
-                    :fallback-context-window="sessionFallbackContextWindow"
-                  />
-                  <Popover
+                <!-- The model selector truncates within the input controls row. -->
+                <div class="order-3 flex min-w-0 flex-1 basis-48 items-center justify-end gap-1 self-end">
+                  <DropdownMenu
                     v-if="(!activeUsesExternalAgentComposer || activeUsesACPRuntime || activeUsesDirectRuntime) && voiceInputState === 'idle'"
                     v-model:open="modelPopoverOpen"
+                    :modal="false"
                   >
-                    <PopoverTrigger as-child>
+                    <DropdownMenuTrigger as-child>
                       <Button
                         type="button"
                         variant="ghost"
                         size="sm"
                         shape="circle"
                         :disabled="!currentBotId || activeChatReadOnly || composerConfigPending"
+                        :class="runtimeModeChanging && !!currentBotId && !activeChatReadOnly && !composerAgentConfigPending ? 'disabled:opacity-100' : undefined"
                         class="composer-pill-press min-w-0 shrink max-md:h-11"
                         :style="{ maxWidth: `${modelTriggerMaxWidth}px` }"
+                        :title="modelTriggerLabel"
+                        :aria-label="modelTriggerLabel"
                       >
                         <!-- One transformable wrapper for the press squish —
                              same contract as composer-continue-on's pill. -->
                         <span class="composer-pill-content inline-flex min-w-0 items-center gap-2">
-                          <Spinner
-                            v-if="composerSpinnerVisible"
-                            class="size-3.5 shrink-0"
-                          />
                           <span class="min-w-0 truncate text-label text-composer-control-label">{{ modelTriggerLabel }}</span>
                           <ChevronDown
                             class="size-3.5 shrink-0 text-muted-foreground"
@@ -741,111 +728,34 @@
                           />
                         </span>
                       </Button>
-                    </PopoverTrigger>
-                    <!-- `menu` makes this host transparent: the inner
-                         menuChromeClass div already owns the border/shadow/
-                         radius, so a chromed host would draw a doubled edge
-                         (same pattern as model-select.vue). -->
-                    <PopoverContent
-                      menu
-                      class="w-80 max-w-[calc(100vw-2rem)] overflow-hidden p-0"
+                    </DropdownMenuTrigger>
+                    <DropdownMenuContent
+                      class="w-72 max-w-[calc(100vw-2rem)]"
+                      position-strategy="absolute"
                       align="end"
                       side="top"
-                      :side-offset="4"
+                      :collision-padding="8"
                     >
-                      <!-- The chrome wrapper covers BOTH branches: with the
-                           host transparent (`menu`), a bare loading row would
-                           float on the chat UI with no surface at all. -->
-                      <div :class="menuChromeClass">
-                        <InlineLoadingRow
-                          v-if="composerModelsLoading"
-                          class="px-2 py-3"
-                        >
-                          {{ $t('common.loading') }}
-                        </InlineLoadingRow>
-                        <div
-                          v-else-if="directModelCatalogError"
-                          class="space-y-3 p-3"
-                        >
-                          <p class="text-body text-muted-foreground">
-                            {{ directModelCatalogError }}
-                          </p>
-                          <Button
-                            v-if="directRuntimeAuthRequired"
-                            variant="outline"
-                            size="sm"
-                            class="w-full"
-                            @click="openDirectAgentSettings"
-                          >
-                            {{ $t('bots.agent.openSettings') }}
-                          </Button>
-                          <Button
-                            v-else
-                            variant="outline"
-                            size="sm"
-                            class="w-full"
-                            @click="retryDirectModelCatalog"
-                          >
-                            {{ $t('common.retry') }}
-                          </Button>
-                        </div>
-                        <template v-else>
-                          <div
-                            v-if="activeUsesACPRuntime && !activeIsPendingExternalAgent && acpModes.length"
-                            class="border-b border-border p-3"
-                          >
-                            <div class="mb-2 text-label text-foreground">
-                              {{ $t('chat.sessionMode') }}
-                            </div>
-                            <Select
-                              :model-value="currentACPModeId"
-                              :disabled="activeChatReadOnly || streaming || acpConfigChanging"
-                              @update:model-value="onACPModeSelected"
-                            >
-                              <SelectTrigger class="w-full">
-                                <SelectValue :placeholder="$t('chat.sessionModePlaceholder')" />
-                              </SelectTrigger>
-                              <SelectContent>
-                                <SelectItem
-                                  v-for="mode in acpModes"
-                                  :key="mode.id"
-                                  :value="mode.id"
-                                >
-                                  <div class="min-w-0">
-                                    <div class="truncate">
-                                      {{ mode.name?.trim() || mode.id }}
-                                    </div>
-                                    <div
-                                      v-if="mode.description?.trim()"
-                                      class="text-caption text-muted-foreground"
-                                    >
-                                      {{ mode.description }}
-                                    </div>
-                                  </div>
-                                </SelectItem>
-                              </SelectContent>
-                            </Select>
-                            <p class="mt-2 rounded-md border border-warning-border bg-warning-soft p-2 text-caption text-warning-foreground">
-                              {{ $t('chat.sessionModeCaution') }}
-                            </p>
-                          </div>
-                          <ModelOptions
-                            :model-value="overrideModelId"
-                            :reasoning-effort="overrideReasoningEffort"
-                            :reasoning-options="composerReasoningOptions"
-                            :models="composerModels"
-                            :providers="composerModelProviders"
-                            :none-label="activeUsesDirectRuntime && composerDefaultModelId && composerDefaultModelId !== 'default' ? composerDefaultModelLabel : undefined"
-                            model-type="chat"
-                            :open="modelPopoverOpen"
-                            :show-reasoning="!activeUsesDirectRuntime || !!composerReasoningOptions?.length"
-                            @update:model-value="onComposerModelValueSelected"
-                            @update:reasoning-effort="onComposerReasoningEffortSelected"
-                          />
-                        </template>
-                      </div>
-                    </PopoverContent>
-                  </Popover>
+                      <ComposerModelMenu
+                        :model-value="composerModelId"
+                        :model-label="selectedModelLabel || $t('chat.modelDefault')"
+                        :default-model-id="composerDefaultModelId"
+                        :reasoning-effort="composerReasoningEffort"
+                        :reasoning-options="composerReasoningOptions"
+                        :models="composerModels"
+                        :providers="composerModelProviders"
+                        :none-label="activeUsesDirectRuntime && composerDefaultModelId && composerDefaultModelId !== 'default' ? composerDefaultModelLabel : undefined"
+                        :show-reasoning="!activeUsesDirectRuntime || !!composerReasoningOptions?.length"
+                        :loading="composerModelsLoading"
+                        :error="modelCatalogMenuError"
+                        :auth-required="directRuntimeAuthRequired"
+                        @update:model-value="onComposerModelValueSelected"
+                        @update:reasoning-effort="onComposerReasoningEffortSelected"
+                        @retry="retryDirectModelCatalog"
+                        @settings="openAgentSettings(false)"
+                      />
+                    </DropdownMenuContent>
+                  </DropdownMenu>
 
                   <!-- While voice owns the composer the trailing slot holds
                        the voice pair instead of mic/send: ✗ cancels (also
@@ -911,10 +821,52 @@
                          loadingMessages). Split onto two elements, the two
                          opacity systems compound instead of fight: hidden
                          stays hidden, while a VISIBLE disabled button still
-                         dims as designed. -->
+                         dims as designed. The mic itself is only shelved
+                         (voiceInputEnabled, see script): its wrapper stays
+                         here, v-if'd out of the tree, until the default
+                         transcription model lands. -->
+                    <!-- Inactive stand-in while voice input is shelved: the
+                         send circle's grayed self — the same primary fill the
+                         mic wore, dimmed by the design system's disabled
+                         opacity-40, carrying the send glyph so activation
+                         reads as the SAME button waking up (it scales down
+                         while brand send springs in on the original
+                         cross-fade timing). `disabled` is safe here BECAUSE
+                         visibility lives on the wrapper: the button's own
+                         dimming never fights the fade. Delete it when
+                         voiceInputEnabled flips on. -->
                     <div
-                      class="absolute inset-0 transition-[opacity,scale] duration-[188ms] ease motion-reduce:transition-none"
-                      :class="micVisible ? 'scale-100 opacity-100' : 'pointer-events-none scale-70 opacity-0'"
+                      v-if="!voiceInputEnabled"
+                      class="absolute inset-0 transition-[opacity,scale] duration-[188ms] ease-[ease] motion-reduce:transition-none"
+                      :class="inactiveSlotVisible ? 'scale-100 opacity-100' : 'pointer-events-none scale-70 opacity-0'"
+                    >
+                      <Button
+                        type="button"
+                        variant="primary"
+                        shape="circle"
+                        disabled
+                        aria-hidden="true"
+                        class="size-full"
+                      >
+                        <svg
+                          viewBox="0 0 24 24"
+                          fill="none"
+                          stroke="currentColor"
+                          stroke-width="2.5"
+                          stroke-linecap="round"
+                          stroke-linejoin="round"
+                          class="size-[18px] max-md:size-5"
+                          aria-hidden="true"
+                        >
+                          <path d="M12 19 V5.75" />
+                          <path d="M6.5 10.5 L12 5 L17.5 10.5" />
+                        </svg>
+                      </Button>
+                    </div>
+                    <div
+                      v-if="voiceInputEnabled"
+                      class="absolute inset-0 transition-[opacity,scale] duration-[188ms] ease-[ease] motion-reduce:transition-none"
+                      :class="inactiveSlotVisible ? 'scale-100 opacity-100' : 'pointer-events-none scale-70 opacity-0'"
                     >
                       <Button
                         type="button"
@@ -967,7 +919,10 @@
                         type="button"
                         variant="brand"
                         shape="circle"
-                        :disabled="streaming ? false : (!showSend || !currentBotId || activeChatReadOnly || loadingMessages || composerConfigPending || composerHasNoModel)"
+                        :disabled="streaming ? false : (!showSend || !currentBotId || activeChatReadOnly || loadingMessages || composerConfigPending || composerHasNoModel || goalSubmissionBlocked || !!runtimeModeUnavailableReason)"
+                        :title="goalSubmissionBlocked ? goalExecutionBlockedReason : undefined"
+                        :class="runtimeModeChanging && !streaming && showSend && !!currentBotId && !activeChatReadOnly && !loadingMessages && !composerAgentConfigPending && !composerHasNoModel ? 'disabled:opacity-100' : undefined"
+                        :aria-busy="firstSendAwaiting || undefined"
                         :aria-label="streaming && showSend ? $t(composerQueueCommand?.mode === 'steer' ? 'chat.queue.enqueueSteer' : 'chat.queue.enqueueFollowUp') : (streaming ? 'Stop generating response' : 'Send message')"
                         class="size-full"
                         @click="handleSendButton"
@@ -976,24 +931,18 @@
                           class="grid size-[18px] max-md:size-5 shrink-0 place-items-center"
                           aria-hidden="true"
                         >
-                          <svg
-                            viewBox="0 0 24 24"
-                            fill="none"
-                            stroke="currentColor"
-                            stroke-width="2.5"
-                            stroke-linecap="round"
-                            stroke-linejoin="round"
+                          <!-- The arrow, which bends into the busy ring while a
+                               first send waits for the server. -->
+                          <SendMorphIcon
+                            :busy="firstSendAwaiting"
                             class="col-start-1 row-start-1 size-[18px] max-md:size-5 transition-opacity duration-200 ease-out motion-reduce:transition-none"
-                            :class="streaming ? 'opacity-0' : 'opacity-100'"
-                          >
-                            <path d="M12 19 V5.75" />
-                            <path d="M6.5 10.5 L12 5 L17.5 10.5" />
-                          </svg>
+                            :class="streaming && !firstSendAwaiting ? 'opacity-0' : 'opacity-100'"
+                          />
                           <svg
                             viewBox="0 0 24 24"
                             fill="currentColor"
                             class="col-start-1 row-start-1 size-4 max-md:size-4.5 transition-opacity duration-200 ease-out motion-reduce:transition-none"
-                            :class="streaming ? 'opacity-100' : 'opacity-0'"
+                            :class="streaming && !firstSendAwaiting ? 'opacity-100' : 'opacity-0'"
                           >
                             <rect
                               x="4"
@@ -1009,8 +958,298 @@
                   </div>
                 </div>
               </div>
+              <!-- Session controls sit outside the input surface as bare text
+                 triggers — no chrome at rest, the label itself shifts
+                 muted→foreground on hover (Button variant="quiet"). Order:
+                 Computer → Folder (+ branch) → Agent → Permission →
+                 mode pills, with the context-pressure ring pinned right.
+                 Keep this row's height while recording so the dock stays
+                 stable. -->
+              <div
+                data-composer-context-row
+                class="flex min-w-0 items-center gap-1 px-2"
+                :class="isWelcome
+                  ? 'mt-1 min-h-10 max-md:min-h-12'
+                  : 'min-h-10.5 max-md:min-h-13.5'"
+              >
+                <!-- Labels shrink first; extra active controls remain reachable by scrolling. -->
+                <div class="flex min-w-0 flex-1 items-center gap-1 overflow-x-auto">
+                  <ComposerContinueOn
+                    v-if="showComputersMenu && voiceInputState === 'idle'"
+                    trigger="text"
+                    :targets="workspaceTargets"
+                    :selected-target-id="composerComputerTargetId"
+                    :selected-missing="composerComputerTargetMissing"
+                    :selected-snapshot-name="composerComputerSnapshotName"
+                    :locked="computerSwitchLocked"
+                    :bound-to-folder="composerFolderLocked"
+                    :initial-loading="workspaceTargetsInitialLoading"
+                    :load-failed="workspaceTargetsLoadFailed"
+                    :bot-id="currentBotId ?? ''"
+                    :bot-name="currentBot?.display_name || currentBot?.name || ''"
+                    @select="selectWorkspaceTarget"
+                    @menu-open="refetchWorkspaceTargets"
+                  />
+
+                  <ComposerFolderMenu
+                    v-if="voiceInputState === 'idle' && (composerFolderPickable || composerFolderLocked || activeUsesDirectRuntime)"
+                    :bot-id="currentBotId || ''"
+                    :project="runtimeProject"
+                    :projects="selectableFolders"
+                    :editable="draftSetupEditable"
+                    :locked="computerSwitchLocked || composerConfigPending || !canWorkspaceRead"
+                    :visible="isVisible && canWorkspaceRead"
+                    :streaming="streaming"
+                    :git-branches="activeUsesDirectRuntime"
+                    :pickable="composerFolderPickable"
+                    :locked-folder="composerFolderLocked"
+                    :folder-name="composerFolderName"
+                    :can-execute="hasBotPermission(currentBot?.current_user_permissions, 'workspace_exec')"
+                    @select="selectWorkingFolder"
+                    @clear="clearWorkingFolder"
+                  />
+
+                  <DropdownMenu
+                    v-if="!hasRenderedSession && (enabledBotAgents.length || canAddAgent) && voiceInputState === 'idle'"
+                    v-model:open="agentPopoverOpen"
+                  >
+                    <DropdownMenuTrigger as-child>
+                      <Button
+                        type="button"
+                        variant="quiet"
+                        size="sm"
+                        :disabled="!canChangeAgent"
+                        :class="runtimeModeChanging ? 'disabled:opacity-100' : undefined"
+                        :title="composerAgentName"
+                        :aria-label="$t('chat.agent') + ': ' + composerAgentName"
+                        class="min-w-14 shrink max-w-60 gap-1.5 px-1.5 font-normal max-md:h-11"
+                      >
+                        <component
+                          :is="composerAgentIcon"
+                          class="size-3.5 shrink-0"
+                          aria-hidden="true"
+                        />
+                        <span class="truncate text-label">{{ composerAgentName }}</span>
+                        <ChevronDown class="size-3 shrink-0 opacity-70" />
+                      </Button>
+                    </DropdownMenuTrigger>
+                    <DropdownMenuContent
+                      align="start"
+                      side="bottom"
+                      :side-offset="0"
+                      class="w-56"
+                    >
+                      <DropdownMenuLabel>{{ $t('chat.agent') }}</DropdownMenuLabel>
+                      <DropdownMenuItem
+                        @mouseenter="hoveredAgentChoice = 'memoh'"
+                        @mouseleave="hoveredAgentChoice = ''"
+                        @select="selectMemohAgent"
+                      >
+                        <component
+                          :is="!activeUsesExternalAgentComposer || hoveredAgentChoice === 'memoh' ? MemohColor : MemohIcon"
+                          class="size-4 shrink-0 text-muted-foreground"
+                          aria-hidden="true"
+                        />
+                        <span class="min-w-0 flex-1 truncate">{{ $t('chat.agentMemoh') }}</span>
+                        <Check
+                          v-if="!activeUsesExternalAgentComposer"
+                          class="ml-auto"
+                        />
+                      </DropdownMenuItem>
+                      <DropdownMenuItem
+                        v-for="agent in enabledBotAgents"
+                        :key="agent.id"
+                        @mouseenter="hoveredAgentChoice = agent.id || ''"
+                        @mouseleave="hoveredAgentChoice = ''"
+                        @select="selectBotAgent(agent)"
+                      >
+                        <component
+                          :is="botAgentIcon(agent, activeBotAgentID === agent.id || hoveredAgentChoice === agent.id)"
+                          class="size-4 shrink-0 text-muted-foreground"
+                        />
+                        <span class="min-w-0 flex-1 truncate">{{ botAgentName(agent) }}</span>
+                        <Check
+                          v-if="activeBotAgentID === agent.id"
+                          class="ml-auto"
+                        />
+                      </DropdownMenuItem>
+                      <template v-if="canAddAgent">
+                        <DropdownMenuSeparator />
+                        <DropdownMenuItem @select="openAgentSettings(true)">
+                          <AddIcon />
+                          {{ $t('bots.agent.add') }}
+                        </DropdownMenuItem>
+                      </template>
+                    </DropdownMenuContent>
+                  </DropdownMenu>
+                  <span
+                    v-else-if="hasRenderedSession && voiceInputState === 'idle'"
+                    class="inline-flex h-8 min-w-0 max-w-60 items-center gap-1.5 px-1.5 text-label font-normal text-muted-foreground max-md:h-11"
+                    :title="composerAgentName"
+                    :aria-label="$t('chat.agent') + ': ' + composerAgentName"
+                  >
+                    <component
+                      :is="composerAgentIcon"
+                      class="size-3.5 shrink-0"
+                      aria-hidden="true"
+                    />
+                    <span class="truncate">{{ composerAgentName }}</span>
+                  </span>
+
+                  <DropdownMenu v-if="runtimeModes.length && voiceInputState === 'idle'">
+                    <DropdownMenuTrigger as-child>
+                      <Button
+                        variant="quiet"
+                        size="sm"
+                        :disabled="runtimeModeDisabled"
+                        :class="runtimeModeChanging ? 'disabled:opacity-100' : undefined"
+                        class="min-w-14 shrink max-w-48 gap-1.5 px-1.5 font-normal max-md:h-11"
+                        :title="currentRuntimeMode?.name || currentRuntimeModeId"
+                        :aria-label="runtimeModeLabel + ': ' + (currentRuntimeMode?.name || currentRuntimeModeId)"
+                      >
+                        <RuntimeModeIcon
+                          :icon="currentRuntimeMode?.icon"
+                          :warning="currentRuntimeMode?.warning"
+                          class="size-3.5"
+                        />
+                        <span
+                          class="truncate text-label"
+                          :class="currentRuntimeMode?.warning ? 'text-warning-foreground' : undefined"
+                        >{{ currentRuntimeMode?.name || currentRuntimeModeId }}</span>
+                        <ChevronDown class="size-3 shrink-0 opacity-70" />
+                      </Button>
+                    </DropdownMenuTrigger>
+                    <DropdownMenuContent
+                      align="start"
+                      side="bottom"
+                      :side-offset="0"
+                      :collision-padding="16"
+                      class="w-80 max-w-[calc(100vw-2rem)] sm:w-md"
+                    >
+                      <DropdownMenuLabel class="text-label font-normal">
+                        {{ runtimeModeLabel }}
+                        <span
+                          v-if="runtimeControlSnapshot?.modes?.apply_on_next_turn"
+                          class="block whitespace-normal text-caption font-normal text-muted-foreground"
+                        >{{ $t('chat.runtimeModeNextTurn') }}</span>
+                      </DropdownMenuLabel>
+                      <DropdownMenuItem
+                        v-for="mode in runtimeModes"
+                        :key="mode.id"
+                        class="py-1 max-md:py-1.5"
+                        :disabled="runtimeModeDisabled || unavailableRuntimeModes.includes(mode.id ?? '')"
+                        @select="onRuntimeModeSelected(mode.id)"
+                      >
+                        <RuntimeModeIcon
+                          :icon="mode.icon"
+                          :warning="mode.warning"
+                        />
+                        <span
+                          class="min-w-0 flex-1"
+                          :class="mode.warning ? 'text-warning-foreground' : undefined"
+                        >
+                          <span class="block text-label">{{ mode.name || mode.id }}</span>
+                          <span
+                            v-if="mode.description"
+                            class="block whitespace-normal text-body"
+                            :class="mode.warning ? 'text-warning-foreground' : 'text-muted-foreground'"
+                          >{{ unavailableRuntimeModes.includes(mode.id ?? '') ? $t('chat.runtimeModeModelUnavailable') : mode.description }}</span>
+                        </span>
+                        <Check v-if="mode.id === currentRuntimeModeId" />
+                      </DropdownMenuItem>
+                      <template v-if="planModeSupported || goalCommandAvailable">
+                        <DropdownMenuSeparator />
+                        <DropdownMenuItem
+                          v-if="planModeSupported"
+                          :disabled="runtimeModeDisabled"
+                          @select="togglePlanMode"
+                        >
+                          <Lightbulb />
+                          <span class="min-w-0 flex-1 truncate">{{ $t(planModeEnabled ? 'chat.planMode.disable' : 'chat.planMode.enable') }}</span>
+                          <Check v-if="planModeEnabled" />
+                        </DropdownMenuItem>
+                        <DropdownMenuItem
+                          v-if="goalCommandAvailable"
+                          :disabled="runtimeModeDisabled || !!goalExecutionBlockedReason"
+                          :title="goalExecutionBlockedReason"
+                          @select="goalDraftScope = goalDraftEnabled ? '' : runtimeModeScope"
+                        >
+                          <Target />
+                          <span class="min-w-0 flex-1 truncate">{{ $t(goalDraftEnabled ? 'chat.goal.cancelDraft' : 'chat.goal.description') }}</span>
+                          <Check v-if="goalDraftEnabled" />
+                        </DropdownMenuItem>
+                      </template>
+                    </DropdownMenuContent>
+                  </DropdownMenu>
+
+                  <Button
+                    v-if="planModeEnabled && voiceInputState === 'idle'"
+                    variant="quiet"
+                    size="sm"
+                    class="shrink-0 gap-1.5 px-1.5 font-normal max-md:h-11"
+                    :disabled="runtimeModeDisabled"
+                    :aria-label="$t('chat.planMode.disable')"
+                    :title="$t('chat.planMode.disable')"
+                    @click="togglePlanMode"
+                  >
+                    <Lightbulb class="size-3.5" />
+                    <span class="text-label">{{ $t('chat.planMode.label') }}</span>
+                    <X
+                      class="size-3"
+                      aria-hidden="true"
+                    />
+                  </Button>
+                  <Button
+                    v-if="goalDraftEnabled && voiceInputState === 'idle'"
+                    variant="quiet"
+                    size="sm"
+                    class="shrink-0 gap-1.5 px-1.5 font-normal max-md:h-11"
+                    :disabled="runtimeModeDisabled"
+                    :aria-label="$t('chat.goal.cancelDraft')"
+                    :title="$t('chat.goal.cancelDraft')"
+                    @click="goalDraftScope = ''"
+                  >
+                    <Target class="size-3.5" />
+                    <span class="text-label">{{ $t('chat.goal.label') }}</span>
+                    <X
+                      class="size-3"
+                      aria-hidden="true"
+                    />
+                  </Button>
+                </div>
+
+                <!-- Brings back the hidden welcome suggestions. It lives on this
+                     row so it lines up with the other session controls, in
+                     the slot the context ring takes once a chat starts. -->
+                <Button
+                  v-if="isWelcome && welcomeDismissed && voiceInputState === 'idle'"
+                  type="button"
+                  variant="quiet"
+                  size="sm"
+                  class="ml-auto shrink-0 gap-1.5 px-1.5 font-normal max-md:h-11"
+                  @click="welcomeDismissed = false"
+                >
+                  <Lightbulb class="size-3.5 shrink-0" />
+                  <span class="text-label">{{ $t('chatExamples.tryThese') }}</span>
+                </Button>
+                <SessionInfoRing
+                  v-if="showSessionInfoRing && voiceInputState === 'idle'"
+                  class="ml-auto shrink-0"
+                  :visible="isVisible"
+                  :override-model-id="overrideModelId"
+                  :fallback-context-window="sessionFallbackContextWindow"
+                />
+              </div>
             </ComposerDock>
           </div>
+          <!-- Usage examples under the welcome composer; they yield first
+               when the pane is short (style.css welcome tiers). -->
+          <ChatExampleSuggestions
+            v-if="isWelcome && currentBotId"
+            v-model:preview="composerPreview"
+            :bot-id="currentBotId"
+            :composer-replaceable="composerReplaceable"
+          />
         </div>
       </div>
     </template>
@@ -1030,31 +1269,36 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onBeforeUnmount, useTemplateRef, watch, onWatcherCleanup, nextTick, onActivated, onDeactivated, type Ref } from 'vue'
+import { Memoh as MemohIcon, MemohColor } from '@memohai/icon'
+import { AddIcon, UploadIcon } from '@memohai/icon/ui'
+
+import { EXTERNAL_AGENT_DEFAULT_PROJECT_MODE, EXTERNAL_AGENT_DEFAULT_PROJECT_PATH, normalizeAgentID } from '@/utils/external-agent'
+import { ref, reactive, computed, onBeforeUnmount, useTemplateRef, watch, onWatcherCleanup, nextTick, onActivated, onDeactivated } from 'vue'
 import {
   ImagePlus,
-  Paperclip,
-  Plus,
   ChevronDown,
   ArrowDown,
   Check,
-  FolderOpen,
   Sparkles,
   X,
   HelpCircle,
   List,
-  Minimize2,
   Package,
   SquarePen,
   ShieldCheck,
+  Lightbulb,
+  Target,
 } from 'lucide-vue-next'
-import { Button, Command, CommandGroup, CommandItem, CommandKeyBridge, CommandList, CommandSeparator, Dialog, DialogContent, DialogHeader, DialogTitle, DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger, InlineLoadingRow, PanePlaceholder, Popover, PopoverContent, PopoverTrigger, ScrollArea, Select, SelectContent, SelectItem, SelectTrigger, SelectValue, Spinner, menuChromeClass, toast } from '@felinic/ui'
+import { Button, Command, CommandGroup, CommandItem, CommandKeyBridge, CommandList, CommandSeparator, ConfirmDeleteDialog, Dialog, DialogContent, DialogHeader, DialogTitle, DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger, PanePlaceholder, ScrollArea, Skeleton, Spinner, toast } from '@felinic/ui'
 import { useChatStore, type ExternalAgentSessionInput, type ChatMessage, type ChatWorkspaceTargetSnapshot, type SendMessageResult } from '@/store/chat-list'
 import { useWorkdirsStore } from '@/store/workdirs'
 import type { BotWorkdir } from '@/composables/api/useWorkdirs'
 import { useWorkspaceTabsStore } from '@/store/workspace-tabs'
 import { storeToRefs } from 'pinia'
-import { useElementSize, useIntersectionObserver } from '@vueuse/core'
+import { useElementSize, useIntersectionObserver, useLocalStorage } from '@vueuse/core'
+import { useRuntimeControls } from '@/composables/useRuntimeControls'
+import { useCodexUsage } from '@/composables/useCodexUsage'
+import { codexUsageNotice, codexUsageNoticeKey, codexUsageResetTime, codexUsageWindowLabel } from '@/utils/codex-usage'
 import { useQuery } from '@pinia/colada'
 import { getAcpProfiles, getBotsByBotIdAgents, getBotsByBotIdSettings, getBotsByBotIdWorkspaceTargets, postTranscriptionModelsByIdTest } from '@memohai/sdk'
 import type { AcpprofilePublicProfile, BotagentsBotAgent, WorkspaceWorkspaceTarget } from '@memohai/sdk'
@@ -1066,11 +1310,17 @@ import { registerChatFileDropTarget } from '../composables/chat-file-drop-target
 import { readDroppedFiles } from '@/utils/dropped-files'
 import MessageItem from './message-item.vue'
 import ComposerContinueOn from './composer-continue-on.vue'
+import ComposerConnectorsMenu from './composer-connectors-menu.vue'
+import RuntimeModeIcon from './runtime-mode-icon.vue'
+import ComposerFolderMenu from './composer-folder-menu.vue'
+import CodexGoalBar from './codex-goal-bar.vue'
 import ChatAttachmentCard from './chat-attachment-card.vue'
 import { useChatScroll } from '../composables/useChatScroll'
 import { useComposerPlacementMotion } from '../composables/useComposerPlacementMotion'
 import { useQueueTurnAnchors } from '../composables/useQueueTurnAnchors'
-import { isRuntimeContinuationUserTurn, isRuntimeSteerTurnId } from '@/store/chat/types'
+import { isRuntimeContinuationUserTurn, isRuntimeSteerUserTurn } from '@/store/chat/types'
+import { resolveCommandErrorMessage } from '@/store/chat/messages'
+import { isAgentRuntimeType } from '@/store/chat-list.utils'
 import BgTaskPill from './bg-task-pill.vue'
 import ForkSourceDivider from './fork-source-divider.vue'
 import ChatForkDialog from './chat-fork-dialog.vue'
@@ -1082,38 +1332,44 @@ import { provideBgTaskBeacons } from '../composables/useBgTaskBeacons'
 import MediaGalleryLightbox from './media-gallery-lightbox.vue'
 import SessionInfoRing from './session-info-ring.vue'
 import { useSessionInfo } from '../composables/useSessionInfo'
-import ModelOptions from '@/pages/bots/components/model-options.vue'
-import { EFFORT_LABELS, REASONING_EFFORT_DISABLE, reconcileStoredEffort } from '@/pages/bots/components/reasoning-effort'
+import ComposerModelMenu from './composer-model-menu.vue'
+import { EFFORT_LABELS, REASONING_EFFORT_DISABLE, displayedEffort, reconcileStoredEffort } from '@/pages/bots/components/reasoning-effort'
 import { useMediaGallery } from '../composables/useMediaGallery'
 import { ATTACHMENT_ANIM_MS, attachmentToFile, fileToAttachment, useComposerAttachments } from '../composables/useComposerAttachments'
 import { useComposerDrafts } from '../composables/useComposerDrafts'
+import ChatExampleSuggestions from './chat-example-suggestions.vue'
+import { useChatExamplesUi } from '@/components/chat-examples/use-chat-examples-ui'
+import { useComposerPrefillConsumer } from '../composables/useComposerPrefillConsumer'
+import { useComposerPreviewBox, type ComposerPreview } from '../composables/useComposerPreview'
+import { useAsyncConfirm } from '@/composables/useAsyncConfirm'
 import { useUnfocusedComposerInput } from '../composables/useUnfocusedComposerInput'
+import { useComposerKeyboardFocus } from '../composables/useComposerKeyboardFocus'
 import { useComposerPair } from '../composables/useComposerPair'
 import { COMPOSER_MASK_BELOW_PX, useComposerLayout } from '../composables/useComposerLayout'
 import { provideChatViewTarget } from '../composables/useChatViewContext'
 import { provideConnectorLogos } from '../composables/useConnectorLogos'
-import { enqueueSteerQueue, enqueueFollowUpQueue, fetchSafeSkillCatalog, fetchSession, type ChatAttachment, type CommandActionError, type CommandActionListItem, type RequestedSkillSelection, type UIUserInput } from '@/composables/api/useChat'
+import { enqueueSteerQueue, enqueueFollowUpQueue, fetchSafeSkillCatalog, fetchSession, type ChatAttachment, type CommandActionListItem, type CommandEventResponse, type RequestedSkillSelection, type UIUserInput } from '@/composables/api/useChat'
 import { parseSessionQueueCommand, SessionQueueSubmissionGate } from './session-queue-submission'
+import { localizeRuntimeControls, localizeRuntimeCommandResult } from '@/utils/runtime-control-presentation'
 import { commandResultPresentation, isCommandResultItemVisible, resolveCommandResultSelection } from './slash-command-result'
-import { captureChatPaneSendContext, clearComposerPairDraft, composerHasNoModel as hasNoComposerModel, matchesChatPaneSendContext, pinnedSubagentModelId as resolvePinnedSubagentModelId, shouldRefreshACPComposerConfig, welcomeSendConsumedDraft } from './chat-pane-send'
+import SendMorphIcon from './send-morph-icon.vue'
+import { captureChatPaneSendContext, clearComposerPairDraft, composerRestoreForSendResult, composerHasNoModel as hasNoComposerModel, matchesChatPaneSendContext, pinnedSubagentModelId as resolvePinnedSubagentModelId, shouldRefreshACPComposerConfig, welcomeSendConsumedDraft } from './chat-pane-send'
 import { onAuthSessionCleared } from '@/lib/auth-session'
 import { useACPRuntime } from '@/composables/useACPRuntime'
 import { useAgentModelCatalog } from '@/composables/useAgentModelCatalog'
-import { useIsMobile } from '@/composables/useIsMobile'
 import { useVirtualKeyboard } from '@/composables/useVirtualKeyboard'
-import { ACP_DEFAULT_PROJECT_MODE, ACP_DEFAULT_PROJECT_PATH, findMissingRequiredManagedField, normalizeACPAgentID, readACPAgentConfig } from '@/utils/acp'
-import { BOT_AGENT_RUNTIME_ACP, BOT_AGENT_RUNTIME_CLAUDE_CODE, BOT_AGENT_RUNTIME_CODEX, botAgentIcon, botAgentName, botAgentProvider, isDirectBotAgentConfigured, normalizeBotAgentRuntime } from '@/utils/bot-agent'
-import { isApiErrorCode, resolveApiErrorMessage } from '@/utils/api-error'
+import { isACPAgentConfigured } from '@/utils/acp'
+import { BOT_AGENT_RUNTIME_ACP, BOT_AGENT_RUNTIME_CODEX, botAgentIcon, botAgentName, botAgentProvider, isDirectBotAgentConfigured, isDirectBotAgentRuntime, normalizeBotAgentRuntime } from '@/utils/bot-agent'
+import { UserFacingError, isApiErrorCode, parseMemohError, resolveApiErrorMessage } from '@/utils/api-error'
 import { hasBotPermission } from '@/utils/bot-permissions'
 import { workspaceTargetAvailable } from '@/utils/workspace-target'
 import { findLatestPendingChatDecision } from './chat-pending-decision'
 import {
-  acpSlashCommandComposerText,
+  runtimeCommandComposerText,
   composerLocalQuickActionID,
-  isBoundACPRuntimeForTarget,
-  visibleACPSlashCommands,
-  type ACPAvailableCommand,
-} from '@/utils/acp-slash-commands'
+  visibleRuntimeCommands,
+  type RuntimeCommand,
+} from '@/utils/runtime-slash-commands'
 
 const props = withDefaults(defineProps<{
   // Stable dockview panel id (e.g. `chat:3`). Used for per-tab composer drafts and
@@ -1131,7 +1387,8 @@ const props = withDefaults(defineProps<{
   active: true,
 })
 
-const { t } = useI18n()
+const { t, te, locale } = useI18n()
+const runtimeText = (key: string, fallback: string) => te(key) || te(key, 'en') ? t(key) : fallback
 const router = useRouter()
 const chatStore = useChatStore()
 const workspaceTabs = useWorkspaceTabsStore()
@@ -1157,6 +1414,10 @@ const forkDialogOpen = ref(false)
 const pendingForkTurnId = ref('')
 const modelPopoverOpen = ref(false)
 const agentPopoverOpen = ref(false)
+const hoveredAgentChoice = ref('')
+watch(agentPopoverOpen, (open) => {
+  if (!open) hoveredAgentChoice.value = ''
+})
 const agentChanging = ref(false)
 const acpConfigChangeScope = ref('')
 
@@ -1168,6 +1429,7 @@ const {
 } = storeToRefs(chatStore)
 
 const isActive = computed(() => props.active !== false)
+const { welcomeDismissed } = useChatExamplesUi()
 const isVisible = computed(() => props.visible !== false)
 const paneTarget = computed(() => ({
   botId: currentBotId.value?.trim() ?? '',
@@ -1181,6 +1443,18 @@ provideConnectorLogos(paneTarget)
 const paneView = computed(() => chatStore.chatView(paneTarget.value))
 const messages = computed(() => paneView.value.transcript.visibleMessages.value)
 const loadingMessages = computed(() => paneView.value.transcript.loadingMessages.value)
+// Delayed skeleton reveal: local/fast loads finish within a few frames, and
+// flashing the placeholder for a frame or two reads as a glitch. Mount it
+// only when loading actually outlives the delay.
+const skeletonVisible = ref(false)
+watch(() => messages.value.length === 0 && loadingMessages.value, (pending, _prev, onCleanup) => {
+  if (!pending) {
+    skeletonVisible.value = false
+    return
+  }
+  const timer = setTimeout(() => { skeletonVisible.value = true }, CHAT_SKELETON_REVEAL_DELAY_MS)
+  onCleanup(() => clearTimeout(timer))
+}, { immediate: true })
 const loadingOlder = computed(() => paneView.value.transcript.loadingOlder.value)
 const hasMoreOlder = computed(() => paneView.value.transcript.hasMoreOlder.value)
 const streaming = computed(() => chatStore.isChatViewStreaming(paneTarget.value))
@@ -1202,25 +1476,6 @@ const overrideReasoningEffort = computed({
   set: (value: string) => { paneView.value.pairEffort.value = value },
 })
 
-// Show the composer loading spinner only when the load outlasts a fast
-// round-trip: sub-3s catalog loads must not flash a spinner on every pane
-// switch (user feedback, 2026-09-02). The popover's own loading row stays
-// immediate — there the user is actively waiting on an open menu.
-function useDelayedTrue(source: Ref<boolean>, delayMs: number): Ref<boolean> {
-  const visible = ref(false)
-  let timer: ReturnType<typeof setTimeout> | undefined
-  watch(source, (value) => {
-    if (value) {
-      timer ??= setTimeout(() => { visible.value = true }, delayMs)
-      return
-    }
-    if (timer) { clearTimeout(timer); timer = undefined }
-    visible.value = false
-  }, { immediate: true })
-  onBeforeUnmount(() => { if (timer) clearTimeout(timer) })
-  return visible
-}
-
 // Session creation briefly changes several pieces of the direct-runtime
 // identity. That is one draft being promoted, not a switch to another chat.
 let directDraftPromotionPending = false
@@ -1235,17 +1490,32 @@ const startupSendFailure = computed(() => chatStore.startupSendFailureFor(
 const hasRenderedSession = computed(() =>
   !!(paneTarget.value.sessionId || activeChatTarget.value.sessionId || '').trim(),
 )
+// The first message sent from this pane's draft, from Enter until it is an
+// ordinary session (or failed). The store owns the phase; the pane only reads
+// it. It is keyed by the pane's view id, so it outlives the draft -> session
+// repoint.
+const firstSendEntry = computed(() => chatStore.firstSendFor(paneTarget.value))
+// From Enter on a draft until the server confirms the send. The pane stays on
+// welcome with the input in a locked composer. draftSendStarting covers the
+// part before the store has registered the send (attachment encoding, an
+// External Agent's REST session creation).
+const draftSendStarting = ref(false)
+const firstSendAwaiting = computed(() =>
+  draftSendStarting.value || (!!firstSendEntry.value && !firstSendEntry.value.revealed))
+// A draft whose first message is in flight is committed to its setup (the
+// folder travels with that message), even before a session id exists.
+const draftSetupEditable = computed(() => !hasRenderedSession.value && !firstSendEntry.value && !draftSendStarting.value)
 
 // A fresh, writable chat opens with the composer centred and a greeting above
 // it. Read-only sessions (system / synced channel threads) hide the composer
-// entirely, so they never reach this state.
-const isWelcome = computed(() =>
-  !!currentBotId.value
-  && !hasRenderedSession.value
-  && !activeChatReadOnly.value
-  && !loadingChats.value
-  && messages.value.length === 0,
-)
+// entirely, so they never reach this state. A first send stays on welcome
+// until the server confirms it; from then on the pane is a chat even before
+// a turn has rendered (a skill activation appends none of its own).
+const isWelcome = computed(() => {
+  if (!currentBotId.value || activeChatReadOnly.value || loadingChats.value) return false
+  if (firstSendEntry.value?.revealed) return false
+  return !hasRenderedSession.value && messages.value.length === 0
+})
 
 // During boot, "a draft that stays a draft" and "a draft about to be
 // repointed to the most recent session" are indistinguishable until
@@ -1258,7 +1528,10 @@ const isWelcome = computed(() =>
 // from the first frame, so this gate never engages on session routes.
 const composerPlacementPending = computed(() => loadingChats.value && !hasRenderedSession.value)
 const composerPlacementEl = useTemplateRef<HTMLElement>('composerPlacementEl')
-useComposerPlacementMotion(composerPlacementEl, isWelcome)
+// Only a first send moves the composer, out of welcome when the server
+// confirms it, together with the turns appearing. Any other flip is
+// navigation, and the composer just lands with the rest of the pane.
+useComposerPlacementMotion(composerPlacementEl, isWelcome, () => !!firstSendEntry.value?.revealed)
 
 // Rotate the greeting per fresh chat so the entry point feels alive rather than
 // a fixed banner; the pick stays stable while a single welcome screen is shown
@@ -1268,6 +1541,13 @@ const WELCOME_GREETING_KEYS = [
   'chat.welcome.g5', 'chat.welcome.g6', 'chat.welcome.g7', 'chat.welcome.g8',
   'chat.welcome.g9', 'chat.welcome.g10', 'chat.welcome.g11', 'chat.welcome.g12',
 ] as const
+
+// Arkloop ChatSkeleton's width sequence, verbatim — percentages of the column,
+// so they scale with Memoh's layout; heights/pitches above are derived from
+// Memoh's own chat metrics, not copied.
+const CHAT_SKELETON_BAR_WIDTHS = ['85%', '65%', '90%', '55%', '75%', '60%', '80%', '50%', '70%', '40%'] as const
+// Loading shorter than this never shows the placeholder at all.
+const CHAT_SKELETON_REVEAL_DELAY_MS = 200
 function pickWelcomeGreetingIndex() {
   return Math.floor(Math.random() * WELCOME_GREETING_KEYS.length)
 }
@@ -1280,7 +1560,9 @@ const welcomeGreeting = computed(() => {
   return t(WELCOME_GREETING_KEYS[welcomeGreetingIndex.value] ?? WELCOME_GREETING_KEYS[0])
 })
 watch([isWelcome, currentBotId, () => activeSession.value?.id], ([welcome]) => {
-  if (welcome) welcomeGreetingIndex.value = pickWelcomeGreetingIndex()
+  // A first send that failed before confirmation never left this welcome, so
+  // the greeting stays: its failure is still on screen with the input.
+  if (welcome && !startupSendFailure.value) welcomeGreetingIndex.value = pickWelcomeGreetingIndex()
 })
 
 const pendingDecision = computed(() => findLatestPendingChatDecision(messages.value))
@@ -1294,14 +1576,28 @@ const { items: pendingApprovals } = usePendingApprovals(messages)
 
 const hasPendingToolApproval = computed(() => pendingApprovals.value.length > 0)
 
+// A direct runtime's turn says itself whether it can anchor a fork
+// (runtimeForkable, below): only turns whose runtime recorded an anchor can.
 const canForkAssistant = computed(() =>
   !streaming.value
   && !loadingMessages.value
   && !activeChatReadOnly.value
   && activeChatCanFork.value
   && (activeChatTarget.value.runtimeType === 'model'
-    || activeChatTarget.value.runtimeType === BOT_AGENT_RUNTIME_CODEX),
+    || isDirectBotAgentRuntime(activeChatTarget.value.runtimeType)),
 )
+
+// A freshly committed turn can arrive before older history rows are refetched.
+// Keep the latest-only policy effective across that live transition as well.
+const latestRuntimeForkTurn = computed(() => messages.value.findLast(message =>
+  message.role === 'assistant' && message.runtimeForkable === true,
+))
+function isForkableTurn(message: ChatMessage): boolean {
+  return canForkAssistant.value && message.role === 'assistant'
+    && (activeChatTarget.value.runtimeType === 'model' || message.runtimeForkable === true)
+    && (!runtimeControls.controls.value?.capabilities?.fork_latest_only
+      || message === latestRuntimeForkTurn.value)
+}
 
 // Retry/edit rewrite persisted history and replay it, which only runtimes
 // whose context Memoh itself assembles can honor.
@@ -1404,6 +1700,7 @@ const {
     return data
   },
   enabled: () => !!currentBotId.value && canWorkspaceRead.value,
+  refetchOnMount: 'always',
   refetchOnWindowFocus: true,
 })
 
@@ -1442,7 +1739,6 @@ interface ForkSourceMeta {
 }
 
 const acpProfiles = computed<AcpprofilePublicProfile[]>(() => acpProfileData.value?.items ?? [])
-const currentBotMetadata = computed(() => currentBot.value?.metadata as Record<string, unknown> | undefined)
 const botAgents = computed<BotagentsBotAgent[]>(() => botAgentData.value?.items ?? [])
 const enabledBotAgents = computed(() => botAgents.value.filter(agent => agent.enabled !== false && !!agent.id))
 
@@ -1479,7 +1775,7 @@ const activeUsesExternalAgentComposer = computed(() => activeIsPendingExternalAg
 // ---- workdir binding ----
 // A session bound to a bot workdir (or a draft under the bot's working
 // folder) has its workspace target pinned by that binding: the computer
-// switcher is replaced by a read-only folder entry, and sends carry no
+// label reflects the folder target, and sends carry no
 // explicit workspace_target_id — the backend derives it from the binding.
 const workdirsStore = useWorkdirsStore()
 watch(() => currentBotId.value, (botId) => {
@@ -1495,6 +1791,16 @@ const draftWorkingFolder = computed(() => {
   if (activeUsesExternalAgentComposer.value && workdir.target_kind === 'remote') return null
   return workdir
 })
+// Direct runtimes display their folder binding in the context row. Only drafts
+// may change it; existing sessions keep their creation-time directory.
+const runtimeProject = computed<BotWorkdir | null>(() => {
+  if (!activeSessionWorkdirId.value) return draftWorkingFolder.value
+  return workdirsStore.workdirById(currentBotId.value, activeSessionWorkdirId.value) ?? {
+    id: activeSessionWorkdirId.value,
+    name: t('chat.folderUnavailable'),
+    path: String(activeSessionMetadata.value.project_path ?? ''),
+  }
+})
 const composerFolderLocked = computed(() => (
   !!activeSessionWorkdirId.value || !!draftWorkingFolder.value
 ))
@@ -1505,7 +1811,7 @@ const composerFolderName = computed(() => {
   }
   return draftWorkingFolder.value?.name?.trim() || t('chat.folderUnavailable')
 })
-// Folders a draft may bind to. ACP runs only in the native workspace, so a
+// Folders a draft may bind to. External agents run only in the native workspace, so a
 // remote folder is left out rather than offered as a choice that binds nothing.
 const selectableFolders = computed(() => {
   const folders = workdirsStore.workdirsFor(currentBotId.value).filter(folder => !folder.archived && !!folder.id)
@@ -1515,13 +1821,14 @@ const selectableFolders = computed(() => {
 // The picker only makes sense before the session exists; an empty folder list
 // falls through to the locked entry (or to nothing at all).
 const composerFolderPickable = computed(() => !activeSession.value && selectableFolders.value.length > 0)
-const showComposerFolderSection = computed(() => composerFolderPickable.value || composerFolderLocked.value)
 
 function selectWorkingFolder(folder: BotWorkdir) {
+  if (activeSession.value) return
   workdirsStore.setWorkingWorkdir(currentBotId.value, folder.id ?? null)
 }
 
 function clearWorkingFolder() {
+  if (activeSession.value) return
   workdirsStore.setWorkingWorkdir(currentBotId.value, null)
 }
 
@@ -1536,7 +1843,6 @@ const showComputersMenu = computed(() => (
   !activeIsExternalAgent.value
   && !activeIsPendingExternalAgent.value
   && canWorkspaceRead.value
-  && !composerFolderLocked.value
 ))
 const computerSwitchLocked = computed(() => (
   streaming.value
@@ -1558,6 +1864,20 @@ const selectedWorkspaceTargetMissing = computed(() => (
   && !selectedWorkspaceTarget.value
   && !workspaceTargetsInitialLoading.value
 ))
+
+// A folder owns its target. Display that target without overwriting the free
+// draft selection, so clearing the folder restores the previous computer.
+const composerComputerTargetId = computed(() => composerFolderLocked.value
+  ? runtimeProject.value?.workspace_target_id?.trim() || ''
+  : selectedWorkspaceTargetId.value)
+const composerComputerTargetMissing = computed(() => composerFolderLocked.value
+  ? !workspaceTargetsInitialLoading.value && !workspaceTargets.value.some(target => target.target_id === composerComputerTargetId.value)
+  : selectedWorkspaceTargetMissing.value)
+const composerComputerSnapshotName = computed(() => {
+  if (!composerFolderLocked.value) return workspaceTargetSelection.value.snapshot?.name ?? ''
+  const snapshot = workspaceTargetFromSessionMetadata(activeSessionMetadata.value)
+  return snapshot?.target_id === composerComputerTargetId.value ? snapshot.name ?? '' : ''
+})
 
 function snapshotForWorkspaceTarget(target: ValidWorkspaceTarget): ChatWorkspaceTargetSnapshot {
   return {
@@ -1586,7 +1906,7 @@ function workspaceTargetFromSessionMetadata(metadata: Record<string, unknown>): 
 }
 
 function selectWorkspaceTarget(target: ValidWorkspaceTarget) {
-  if (computerSwitchLocked.value || !workspaceTargetAvailable(target)) return
+  if (composerFolderLocked.value || computerSwitchLocked.value || !workspaceTargetAvailable(target)) return
   chatStore.setWorkspaceTargetSelection(
     paneTarget.value,
     target.target_id,
@@ -1637,12 +1957,25 @@ const activeUsesACPRuntime = computed(() => (
 const activeDirectRuntime = computed(() => {
   if (!activeUsesExternalAgentComposer.value) return ''
   const runtime = activeChatTarget.value.runtimeType
-  if (runtime === BOT_AGENT_RUNTIME_CODEX || runtime === BOT_AGENT_RUNTIME_CLAUDE_CODE) return runtime
-  return ''
+  return isDirectBotAgentRuntime(runtime) ? runtime : ''
 })
 const activeUsesDirectRuntime = computed(() => activeDirectRuntime.value !== '')
-const showSessionInfoRing = computed(() => !activeUsesExternalAgentComposer.value || activeUsesACPRuntime.value)
-const activeACPAgentId = computed(() => normalizeACPAgentID(activeSessionMetadata.value.acp_agent_id))
+// For external agents Memoh only sees the part of the context it injects, so
+// a reading built from that would understate the real window; they get no
+// entry until a runtime reports its own current context usage.
+const showSessionInfoRing = computed(() => !isWelcome.value && !!activeSession.value && !activeUsesExternalAgentComposer.value)
+const activeACPAgentId = computed(() => normalizeAgentID(activeSessionMetadata.value.acp_agent_id))
+const composerAgent = computed(() => {
+  if (!activeUsesExternalAgentComposer.value) return null
+  return botAgents.value.find(agent => agent.id === activeBotAgentID.value) ?? {
+    runtime: activeDirectRuntime.value || BOT_AGENT_RUNTIME_ACP,
+    metadata: { provider: activeDirectRuntime.value || activeACPAgentId.value },
+  }
+})
+const composerAgentIcon = computed(() => composerAgent.value ? botAgentIcon(composerAgent.value) : MemohIcon)
+const composerAgentName = computed(() => composerAgent.value
+  ? botAgentName(composerAgent.value)
+  : t('chat.agentMemoh'))
 const activeACPProjectPath = computed(() => String(activeSessionMetadata.value.project_path ?? '').trim())
 const activeACPProjectMode = computed(() => String(activeSessionMetadata.value.acp_project_mode ?? '').trim())
 const acpOperationScope = computed(() => JSON.stringify([
@@ -1693,7 +2026,7 @@ const queueRefreshKey = computed(() => {
   for (let index = messages.value.length - 1; index >= 0; index -= 1) {
     const message = messages.value[index]!
     if (message.role !== 'user') continue
-    if (isRuntimeSteerTurnId(message.turnId) || isRuntimeContinuationUserTurn(message)) {
+    if (isRuntimeSteerUserTurn(message) || isRuntimeContinuationUserTurn(message)) {
       latestQueueTurn = `${message.id}\u0000${message.turnId ?? ''}`
       break
     }
@@ -1775,23 +2108,23 @@ const slashQuickActions = computed(() => [
     description: t('chat.slash.newDescription'),
     icon: SquarePen,
   },
-  ...((boundLiveACPRuntime.value || activeIsPendingExternalAgent.value)
-    && acpModes.value.length > 0
+  ...((runtimeModes.value.length > 0 || (activeIsPendingExternalAgent.value && acpModes.value.length > 0))
     ? [{
         id: 'permission',
         label: '/permission',
-        description: t('chat.slash.permissionDescription'),
+        description: runtimeModeLabel.value,
         icon: ShieldCheck,
       }]
     : []),
-  ...(canCompactViaSlash.value
+  ...(goalCommandAvailable.value
+    ? [{ id: 'goal', label: '/goal', description: goalExecutionBlockedReason.value || t('chat.goal.description'), icon: Target }]
+    : []),
+  ...(planModeSupported.value
     ? [{
-        id: 'compact',
-        label: '/compact',
-        description: sessionContextPercentKnown.value
-          ? t('chat.slash.compactDescription', { percent: Math.round(sessionContextPercent.value) })
-          : t('chat.slash.compactDescriptionNoStats'),
-        icon: Minimize2,
+        id: 'plan',
+        label: '/plan',
+        description: t(planModeEnabled.value ? 'chat.planMode.disable' : 'chat.planMode.enable'),
+        icon: Lightbulb,
       }]
     : []),
   ...(!activeIsExternalAgent.value && !activeIsPendingExternalAgent.value
@@ -1832,31 +2165,149 @@ const visibleSlashQuickActions = computed(() =>
 const visibleSlashSkills = computed(() =>
   safeSkills.value.filter(skill => slashMatches(skill.name, skill.description ?? '')),
 )
-const composerACPAvailableCommands = computed(() => (
-  activeUsesACPRuntime.value && (boundLiveACPRuntime.value || activeIsPendingExternalAgent.value)
-    ? acpAvailableCommands.value
-    : []
+const runtimeControls = useRuntimeControls({
+  botId: currentBotId,
+  sessionId: computed(() => paneTarget.value.sessionId),
+  visible: computed(() => isVisible.value && activeUsesExternalAgentComposer.value),
+  draftAgentId: computed(() => activeIsPendingExternalAgent.value && !activeUsesACPRuntime.value ? activeBotAgentID.value : ''),
+})
+// Only a ChatGPT sign-in has usage windows; an API-key Codex Agent is billed per token.
+const codexUsageAgentId = computed(() => {
+  if (activeDirectRuntime.value !== BOT_AGENT_RUNTIME_CODEX) return ''
+  const agent = botAgents.value.find(item => item.id === activeBotAgentID.value)
+  return agent?.metadata?.auth === 'chatgpt' && agent.agent_credential_id ? agent.id ?? '' : ''
+})
+const codexUsage = useCodexUsage({
+  botId: computed(() => currentBotId.value ?? ''),
+  botAgentId: codexUsageAgentId,
+  enabled: () => isVisible.value,
+})
+watch(streaming, (now, was) => {
+  if (was && !now && codexUsageAgentId.value && isVisible.value) void codexUsage.refetch()
+})
+// Dismissal holds until the window resets: a new reset time is a new key.
+const dismissedCodexUsageNotices = useLocalStorage<Record<string, string>>('memoh:codex-usage-dismissed', {})
+const codexUsageNoticeState = computed(() => {
+  const notice = codexUsageNotice(codexUsage.data.value)
+  return notice ? { notice, key: codexUsageNoticeKey(codexUsageAgentId.value, notice) } : null
+})
+const composerUsageNotice = computed(() => {
+  const state = codexUsageNoticeState.value
+  if (!state) return null
+  const { exhausted, window } = state.notice
+  if (!exhausted && dismissedCodexUsageNotices.value[codexUsageAgentId.value] === state.key) return null
+  const params = {
+    window: codexUsageWindowLabel(window.window_minutes, t),
+    percent: window.used_percent,
+    time: window.resets_at ? codexUsageResetTime(window.resets_at, locale.value) : '',
+  }
+  const message = exhausted
+    ? t(window.resets_at ? 'chat.codexUsage.exhausted' : 'chat.codexUsage.exhaustedNoReset', params)
+    : t(window.resets_at ? 'chat.codexUsage.warning' : 'chat.codexUsage.warningNoReset', params)
+  return { exhausted, message }
+})
+function dismissCodexUsageNotice() {
+  const state = codexUsageNoticeState.value
+  if (!state || !codexUsageAgentId.value) return
+  dismissedCodexUsageNotices.value = { ...dismissedCodexUsageNotices.value, [codexUsageAgentId.value]: state.key }
+}
+const rawRuntimeControlSnapshot = computed(() => activeIsPendingExternalAgent.value && activeUsesACPRuntime.value ? pendingRuntimeControls.value : runtimeControls.controls.value)
+const runtimeControlSnapshot = computed(() => localizeRuntimeControls(rawRuntimeControlSnapshot.value, runtimeText))
+const composerRuntimeCommands = computed(() =>
+  activeIsPendingExternalAgent.value && !activeUsesACPRuntime.value ? [] : runtimeControlSnapshot.value?.commands ?? [],
+)
+const runtimeModes = computed(() => runtimeControlSnapshot.value?.modes?.available_modes ?? [])
+const runtimeModeLabel = computed(() => t(runtimeControlSnapshot.value?.modes?.kind === 'permission' ? 'chat.permissionMode' : 'chat.sessionMode'))
+const currentRuntimeModeId = computed(() =>
+  chatStore.pendingExternalAgentStateFor(paneTarget.value)?.input.permissionMode
+  || runtimeControlSnapshot.value?.modes?.current_mode_id
+  || '',
+)
+const runtimeGoalError = computed(() => runtimeControls.goalError.value
+  ? resolveApiErrorMessage(runtimeControls.goalError.value, t('errors.runtime_control.failed'))
+  : '')
+const goalSupported = computed(() => runtimeControlSnapshot.value?.capabilities?.goal === true)
+// A native /goal command is enough for the shared goal composer. Live goal
+// state and pause/resume controls require the separate runtime capability.
+const goalCommandAvailable = computed(() => runtimeControlSnapshot.value?.commands?.some(command => command.name === 'goal' && command.kind === 'turn') === true)
+const goalDraftScope = ref('')
+const goalDraftEnabled = computed(() => goalCommandAvailable.value && goalDraftScope.value === runtimeModeScope.value)
+const goalExecutionBlockedReason = computed(() => goalSupported.value && planModeEnabled.value ? t('errors.runtime_control.goal_requires_default_mode') : '')
+const goalSubmissionBlocked = computed(() => {
+  if (streaming.value || !goalSupported.value || !goalExecutionBlockedReason.value) return false
+  const text = inputText.value.trim()
+  return /^\/goal(?:\s|$)/i.test(text) || (goalDraftEnabled.value && !text.startsWith('/'))
+})
+const goalRequests = reactive(new Map<string, symbol>())
+const goalChanging = computed(() => goalRequests.has(runtimeModeScope.value))
+const goalControlsDisabled = computed(() => activeChatReadOnly.value || !paneTarget.value.sessionId || loadingMessages.value || goalChanging.value)
+const goalResumeDisabled = computed(() => !!goalExecutionBlockedReason.value || !!runtimeModeUnavailableReason.value || streaming.value || creatingSession.value || composerConfigPending.value || composerHasNoModel.value || isCompactingSession.value)
+
+async function controlGoal(action: 'pause' | 'clear' | 'resume') {
+  if (goalControlsDisabled.value || !runtimeControls.goal.value) return
+  if (action === 'resume' && goalResumeDisabled.value) return
+  const scope = runtimeModeScope.value
+  const request = Symbol()
+  goalRequests.set(scope, request)
+  const releaseRequest = () => {
+    if (goalRequests.get(scope) === request) goalRequests.delete(scope)
+  }
+  const pairSend = action === 'resume' ? composerPair.captureSend() : undefined
+  composerError.value = ''
+  try {
+    if (pairSend) {
+      const result = await chatStore.sendMessage('/goal resume', undefined, {
+        target: paneTarget.value,
+        modelId: pairSend.pair.modelId,
+        reasoningEffort: pairSend.pair.reasoningEffort,
+        restoreDraftOnFailure: false,
+        onBeforeMessageSend: () => pairSend.begin(),
+        onModelPreferenceSettled: () => pairSend.finish(false),
+        // sendMessage waits for the entire run. Once dispatched, streaming
+        // guards resume; pause and clear must become available immediately.
+        onBeforeTurnAppend: releaseRequest,
+      })
+      pairSend.finish(result.messageSent === true || result.stage === 'stream')
+      if (!result.ok && scope === runtimeModeScope.value) composerError.value = result.error ?? t('chat.sendFailed')
+    } else if (action !== 'resume') {
+      await runtimeControls.controlGoal(action)
+    }
+  } catch (error) {
+    if (scope === runtimeModeScope.value) composerError.value = resolveApiErrorMessage(error, t('errors.runtime_control.failed'))
+  } finally {
+    pairSend?.finish(false)
+    pairSend?.releaseReads()
+    releaseRequest()
+    if (action === 'resume' && scope === runtimeModeScope.value) void runtimeControls.refresh()
+  }
+}
+
+const planModeSupported = computed(() => runtimeControlSnapshot.value?.capabilities?.plan_mode === true)
+const planModeEnabled = computed(() => planModeSupported.value && (
+  chatStore.pendingExternalAgentStateFor(paneTarget.value)?.input.planMode
+  ?? (runtimeControlSnapshot.value?.plan_mode?.current_mode_id === 'plan')
 ))
-const visibleACPAgentCommands = computed(() =>
-  visibleACPSlashCommands(composerACPAvailableCommands.value, slashQuery.value),
+const currentRuntimeMode = computed(() => runtimeModes.value.find(mode => mode.id === currentRuntimeModeId.value))
+const runtimeModeRequestScope = ref('')
+const runtimeModeScope = computed(() => JSON.stringify([paneTarget.value, activeBotAgentID.value]))
+const runtimeModeChanging = computed(() => runtimeModeRequestScope.value === runtimeModeScope.value)
+const runtimeModeDisabled = computed(() => activeChatReadOnly.value || streaming.value || creatingSession.value || loadingMessages.value || agentChanging.value || runtimeModeChanging.value)
+const visibleRuntimeAgentCommands = computed(() =>
+  visibleRuntimeCommands(composerRuntimeCommands.value, slashQuery.value).filter(command => command.name !== 'goal' || !goalCommandAvailable.value),
 )
 const slashPanelHasResults = computed(() =>
   visibleSlashQuickActions.value.length > 0
-  || visibleACPAgentCommands.value.length > 0
+  || visibleRuntimeAgentCommands.value.length > 0
   || visibleSlashSkills.value.length > 0,
 )
 
-// Session usage for the /compact quick action's live description ("42% full")
-// and its availability. Shares the query key with SessionInfoRing/panel, so
-// this adds no extra fetch.
+// Runtime-owned compaction (an external Agent's own compact command) shares
+// the session's compaction lock and feedback. Shares the query key with
+// SessionInfoRing/panel, so this adds no extra fetch.
 const sessionFallbackContextWindow = computed(() => activeModel.value?.config?.context_window ?? null)
 const {
-  contextTokens: sessionContextTokens,
-  compactionAvailable: sessionCompactionAvailable,
-  contextWindow: sessionContextWindow,
-  contextPercent: sessionContextPercent,
   isCompacting: isCompactingSession,
-  triggerCompact: triggerSessionCompact,
+  runCompaction: runSessionCompaction,
 } = useSessionInfo({
   botId: computed(() => paneTarget.value.botId),
   sessionId: computed(() => paneTarget.value.sessionId),
@@ -1864,53 +2315,68 @@ const {
   overrideModelId,
   fallbackContextWindow: sessionFallbackContextWindow,
 })
-const sessionContextPercentKnown = computed(() => sessionContextWindow.value != null && sessionContextWindow.value > 0)
-const canCompactViaSlash = computed(() =>
-  !!activeSessionId.value && sessionCompactionAvailable.value && sessionContextTokens.value > 0 && !isCompactingSession.value,
-)
 
 // Client-side quick actions run an existing UI affordance directly instead of
-// round-tripping text through send: /compact triggers the session-info
-// panel's compaction, /model opens the composer's model picker. Everything
+// round-tripping text through send: /model opens the composer's model
+// picker. Everything
 // else keeps the type-and-send flow (the store intercepts /new; /help and
 // /skill list execute server-side).
 async function runPendingPermission(text: string) {
+  if (runtimeModeDisabled.value) return
   const modeId = text.trim().replace(/^\/permission(?:\s+|$)/i, '').trim()
+  if (unavailableRuntimeModes.value.includes(modeId)) {
+    composerError.value = t('chat.runtimeModeModelUnavailable')
+    return
+  }
+  const operationScope = runtimeModeScope.value
+  const complete = chatStore.beginCommandEvent({
+    type: 'command_result', terminal: false, action_id: 'permission',
+    result: { kind: 'runtime_command', title: '/permission', text_key: 'common.loading' },
+  }, currentPaneCommandScope())
   try {
-    const runtime = modeId ? await setACPMode(modeId) : await ensureACPRuntime()
-    if (!runtime?.modes) return
-    const currentModeId = runtime.modes.current_mode_id ?? ''
-    chatStore.rememberCommandEvent({
+    if (modeId) await setRuntimeMode(modeId)
+    else if (activeUsesACPRuntime.value) await ensureACPRuntime()
+    const modes = rawRuntimeControlSnapshot.value?.modes
+    if (runtimeModeScope.value !== operationScope || !modes) {
+      complete(null)
+      return
+    }
+    const currentModeId = currentRuntimeModeId.value
+    complete({
       type: 'command_result',
-      composer_scope: paneComposerScope.value,
       action_id: 'permission',
       terminal: true,
       result: {
         kind: modeId ? 'permission_mode_changed' : 'permission_modes',
-        items: (runtime.modes.available_modes ?? []).flatMap((mode): CommandActionListItem[] => {
+        items: (modes.available_modes ?? []).flatMap((mode): CommandActionListItem[] => {
           const id = mode.id ?? ''
           if (!id) return []
           return [{
             id,
-            title: mode.name || id,
+            i18n_key: mode.i18n_key,
+            title: mode.name || (mode.i18n_key ? '' : id),
             description: mode.description,
-            kind: id === currentModeId ? 'acp_mode_current' : 'acp_mode',
+            kind: id === currentModeId ? 'runtime_mode_current' : 'runtime_mode',
           }]
         }),
       },
-    }, currentPaneCommandScope())
+    })
   } catch (error) {
-    composerError.value = resolveApiErrorMessage(error, t('chat.modeSwitchFailed'))
+    complete({ type: 'command_error', terminal: true, code: parseMemohError(error)?.code || 'runtime_control.failed', message: resolveApiErrorMessage(error, t('chat.modeSwitchFailed')) })
   }
 }
 
 function runLocalQuickAction(id: string, text = ''): boolean {
-  if (id === 'compact') {
-    if (!canCompactViaSlash.value) {
-      composerError.value = t('chat.slash.compactUnavailable')
+  if (id === 'goal' && goalCommandAvailable.value) {
+    if (goalExecutionBlockedReason.value) {
+      composerError.value = goalExecutionBlockedReason.value
       return true
     }
-    void triggerSessionCompact()
+    if (!runtimeModeDisabled.value) goalDraftScope.value = goalDraftEnabled.value ? '' : runtimeModeScope.value
+    return true
+  }
+  if (id === 'plan' && planModeSupported.value) {
+    void togglePlanMode()
     return true
   }
   if (id === 'model') {
@@ -1930,7 +2396,7 @@ function localQuickActionBlocked(): boolean {
     return true
   }
   if (requestedSkills.value.length > 0) {
-    composerError.value = t('chat.slash.errorMessages.invalid_skill_slash_syntax')
+    composerError.value = t('errors.slash.skill_syntax_invalid')
     return true
   }
   return false
@@ -1958,8 +2424,8 @@ function sendSlashCommandText(text: string) {
   })
 }
 
-function selectACPAgentCommand(command: ACPAvailableCommand) {
-  const text = acpSlashCommandComposerText(command)
+function selectRuntimeCommand(command: RuntimeCommand) {
+  const text = runtimeCommandComposerText(command)
   if (!text) return
   slashPanelSuppressedPrefix.value = text.trimEnd()
   inputText.value = text
@@ -1967,14 +2433,16 @@ function selectACPAgentCommand(command: ACPAvailableCommand) {
   void nextTick(focusTextarea)
 }
 
-// Typed forms of the client-side quick actions ("/compact", "/model") — must
+// Typed forms of the client-side quick actions ("/model") — must
 // be intercepted before the store send path, which would otherwise classify
-// them as skill activation and fail with requested_skill_not_found.
+// them as skill activation and fail with slash.skill_not_found.
 function localQuickActionIDForSlash(text: string): string {
   if (activeIsPendingExternalAgent.value && /^\/permission(?:\s|$)/i.test(text.trim())) return 'permission'
   return composerLocalQuickActionID(
     text,
     activeIsExternalAgent.value || activeIsPendingExternalAgent.value,
+    planModeSupported.value,
+    goalCommandAvailable.value,
   )
 }
 
@@ -1993,15 +2461,15 @@ function clearCurrentCommandEvent() {
 
 const commandPanelEvent = computed(() => chatStore.commandEventForScope(currentPaneCommandScope()))
 const commandResult = computed(() => commandPanelEvent.value?.type === 'command_result' ? commandPanelEvent.value.result : null)
-const commandError = computed(() => commandPanelEvent.value?.type === 'command_error' ? commandPanelEvent.value.error : null)
+const commandError = computed(() => commandPanelEvent.value?.type === 'command_error' ? commandPanelEvent.value : null)
 const commandPanelActionID = computed(() => commandPanelEvent.value?.action_id?.trim() ?? '')
 const commandPanelIsError = computed(() => !!commandError.value)
 const presentedCommandResult = computed(() => commandResult.value
-  ? commandResultPresentation(commandResult.value, {
-      modesTitle: t('chat.slash.permissionModesTitle'),
+  ? commandResultPresentation(localizeRuntimeCommandResult(commandResult.value, runtimeText, locale.value, commandPanelActionID.value), {
+      modesTitle: runtimeModeLabel.value,
       modesText: t('chat.slash.permissionModesText'),
       changedTitle: t('chat.slash.permissionModeChangedTitle'),
-      changedText: t('chat.slash.permissionModeChangedText'),
+      changedText: t(runtimeControlSnapshot.value?.modes?.apply_on_next_turn ? 'chat.runtimeModeNextTurn' : 'chat.slash.permissionModeChangedText'),
       currentMode: t('chat.slash.permissionCurrentMode'),
     })
   : null)
@@ -2009,14 +2477,10 @@ const commandPanelTitle = computed(() => {
   if (commandError.value) return t('chat.slash.commandError')
   return presentedCommandResult.value?.title || t('chat.slash.commandResult')
 })
-function localizedCommandErrorMessage(error: CommandActionError): string {
-  const code = error.code.trim()
-  if (code) {
-    const key = `chat.slash.errorMessages.${code}`
-    const translated = t(key)
-    if (translated !== key) return translated
-  }
-  return error.message || t('chat.slash.errorMessages.generic')
+// The chat store's command_error copy, read through vue-i18n so the panel
+// follows a locale switch.
+function localizedCommandErrorMessage(error: CommandEventResponse): string {
+  return resolveCommandErrorMessage(error, key => te(key) || te(key, 'en') ? t(key) : '')
 }
 
 const commandPanelText = computed(() => commandError.value ? localizedCommandErrorMessage(commandError.value) : presentedCommandResult.value?.text || '')
@@ -2034,6 +2498,7 @@ const composerCommandPanel = computed(() => {
     title: commandPanelTitle.value,
     text: commandPanelText.value,
     items: commandResultItems.value,
+    data: presentedCommandResult.value?.data,
   }
 })
 
@@ -2048,9 +2513,9 @@ function selectCommandResultItem(item: CommandActionListItem) {
     })
     return
   }
-  if (selection.kind === 'acp_permission') {
+  if (selection.kind === 'runtime_permission') {
     clearCurrentCommandEvent()
-    void onACPModeSelected(selection.modeId)
+    void onRuntimeModeSelected(selection.modeId)
     return
   }
   if (!skillSlashEnabled.value) return
@@ -2062,9 +2527,8 @@ function selectCommandResultItem(item: CommandActionListItem) {
 }
 const {
   runtime: acpCapabilityRuntime,
-  availableCommands: acpAvailableCommands,
+  controls: pendingRuntimeControls,
   modes: acpModes,
-  currentModeId: currentACPModeId,
   models: acpModels,
   currentModelId: currentACPModelId,
   reasoningEfforts: acpReasoningEfforts,
@@ -2081,15 +2545,6 @@ const {
   enabled: computed(() => activeUsesACPRuntime.value && !!currentBotId.value),
   agentId: activeACPAgentId,
   projectPath: activeACPProjectPath,
-})
-const boundLiveACPRuntime = computed(() => {
-  return activeIsExternalAgent.value
-    && !activeIsPendingExternalAgent.value
-    && isBoundACPRuntimeForTarget(acpCapabilityRuntime.value, {
-      sessionId: paneTarget.value.sessionId ?? '',
-      agentId: activeACPAgentId.value,
-      projectPath: activeACPProjectPath.value,
-  })
 })
 
 const acpModelsLoading = computed(() =>
@@ -2108,6 +2563,7 @@ const {
   botAgentId: activeBotAgentID,
   runtime: computed(() => activeChatTarget.value.runtimeType),
   selectedModelId: overrideModelId,
+  projectPath: computed(() => runtimeProject.value?.path || activeACPProjectPath.value),
   acpModels,
   acpCurrentModelId: currentACPModelId,
   acpReasoningEfforts,
@@ -2124,24 +2580,67 @@ const directRuntimeAuthRequired = computed(() =>
     || isApiErrorCode(composerModelCatalogError.value, 'agent_credential.reauthorization_required')
   ),
 )
+// Native catalogs keep the last loaded list on a failed refresh, so the menu
+// only reports a failure it has nothing to show for.
+const modelCatalogMenuError = computed(() => {
+  if (activeUsesDirectRuntime.value) return directModelCatalogError.value
+  if (!composerModelCatalogError.value || composerModels.value.length) return ''
+  return resolveApiErrorMessage(composerModelCatalogError.value, t('common.loadFailed'))
+})
 const directModelCatalogError = computed(() => {
   if (!activeUsesDirectRuntime.value || !composerModelCatalogError.value) return ''
   return resolveApiErrorMessage(composerModelCatalogError.value, t('bots.agent.modelsLoadFailed'))
 })
 
-const composerConfigPending = computed(() => activeUsesExternalAgentComposer.value && (
+const composerAgentConfigPending = computed(() => activeUsesExternalAgentComposer.value && (
   agentChanging.value || (activeUsesACPRuntime.value && (acpConfigChanging.value || acpConfigPreparing.value))
 ))
-const composerSpinnerVisible = useDelayedTrue(
-  computed(() => composerConfigPending.value || composerModelsLoading.value),
-  3000,
-)
-const canChangeAgent = computed(() => !streaming.value
+// Mode persistence blocks conflicting actions without Button.loading: even
+// manual loading paints hover chrome. Keep opacity only, with no busy chrome
+// or model/Agent preparation spinner.
+const composerConfigPending = computed(() => composerAgentConfigPending.value || runtimeModeChanging.value)
+const canAddAgent = computed(() => !!currentBotId.value && hasBotPermission(currentBot.value?.current_user_permissions, 'manage'))
+const canChangeAgent = computed(() => !!currentBotId.value
+  && !hasRenderedSession.value
+  && !activeChatReadOnly.value
+  && !loadingMessages.value
+  && voiceInputState.value === 'idle'
+  && !streaming.value
   && !creatingSession.value
   && !composerConfigPending.value
   && messages.value.length === 0)
 
 const composerModels = computed(() => composerModelCatalog.value.models)
+const unavailableRuntimeModes = computed(() => composerModelCatalog.value.unavailablePermissionModes ?? [])
+const runtimeModeUnavailableReason = computed(() => unavailableRuntimeModes.value.includes(currentRuntimeModeId.value)
+  ? t('chat.runtimeModeModelUnavailable')
+  : '')
+// What the dock's error line shows. Standing reasons (goal blocked by plan
+// mode, runtime mode without a usable model) win over the transient
+// composerError, matching their precedence before dismissal existed.
+const rawComposerPanelError = computed(() => goalSubmissionBlocked.value
+  ? goalExecutionBlockedReason.value
+  : runtimeModeUnavailableReason.value || composerError.value)
+// Every error line can be dismissed, standing reasons included: a user who
+// already understands the reason should not be forced to keep reading it.
+// Dismissal hides that exact message only — a different message, or the same
+// one returning after it went away, shows again. The underlying state (and
+// the send button's disabled state) is untouched.
+const dismissedComposerPanelError = ref('')
+const composerPanelError = computed(() => rawComposerPanelError.value === dismissedComposerPanelError.value ? '' : rawComposerPanelError.value)
+watch(rawComposerPanelError, (message) => {
+  if (!message) dismissedComposerPanelError.value = ''
+})
+function dismissComposerPanelError() {
+  dismissedComposerPanelError.value = rawComposerPanelError.value
+  // A transient error is consumed outright; a standing reason only gets hidden.
+  if (composerError.value === dismissedComposerPanelError.value) composerError.value = ''
+}
+const dismissedRuntimeGoalError = ref('')
+const visibleRuntimeGoalError = computed(() => runtimeGoalError.value === dismissedRuntimeGoalError.value ? '' : runtimeGoalError.value)
+watch(runtimeGoalError, (message) => {
+  if (!message) dismissedRuntimeGoalError.value = ''
+})
 const composerModelProviders = computed(() => composerModelCatalog.value.providers)
 
 // "Default" alone tells the user nothing — resolve what it actually means:
@@ -2164,10 +2663,22 @@ const composerDefaultModelLabel = computed(() =>
   composerDefaultModelName.value
     ? t('chat.modelDefaultNamed', { model: composerDefaultModelName.value })
     : t('chat.modelDefault'))
+// Resolve inherited values for display without turning them into user overrides.
+const composerModelId = computed(() => {
+  const id = overrideModelId.value || (activeUsesDirectRuntime.value ? composerDefaultModelId.value : '')
+  // A session can remember the resolved ID while the picker uses an alias.
+  // Normalize only the displayed selection; the stored preference stays intact.
+  return composerModels.value.find(model => model.id === id || model.model_id === id)?.id || id
+})
+const composerReasoningEffort = computed(() => {
+  if (!activeUsesDirectRuntime.value || overrideReasoningEffort.value) return overrideReasoningEffort.value
+  const catalog = composerModelCatalog.value
+  return catalog.configuredReasoningEffort || catalog.defaultReasoningEffort
+})
 const composerReasoningOptions = computed(() => {
   const efforts = composerModelCatalog.value.reasoningEfforts
   if (!efforts) return undefined
-  return efforts.flatMap((effort) => {
+  const options = efforts.flatMap((effort) => {
     const value = effort.id?.trim() ?? ''
     if (!value) return []
     const runtimeLabel = effort.name?.trim() ?? ''
@@ -2178,16 +2689,24 @@ const composerReasoningOptions = computed(() => {
       description: effort.description?.trim() || undefined,
     }]
   })
+  // A Codex model without a default level sends none until one is picked, so
+  // the menu needs a way back to that state.
+  if (activeDirectRuntime.value === BOT_AGENT_RUNTIME_CODEX && options.length && !composerModelCatalog.value.defaultReasoningEffort) {
+    options.unshift({ value: '', label: t('chat.modelDefault'), description: undefined })
+  }
+  return options
 })
 
-function openDirectAgentSettings() {
+function openAgentSettings(addAgent: boolean) {
+  if (addAgent && !canAddAgent.value) return
   const botName = currentBot.value?.name || currentBot.value?.id || currentBotId.value
   if (!botName) return
   modelPopoverOpen.value = false
+  agentPopoverOpen.value = false
   void router.push({
     name: 'bot-detail',
     params: { botName },
-    query: { tab: 'agents' },
+    query: { tab: 'agents', ...(addAgent ? { addAgent: currentBotId.value } : {}) },
   })
 }
 
@@ -2291,7 +2810,7 @@ const defaultExternalAgentAvailability = computed<DefaultExternalAgentAvailabili
   if (!settings) {
     return { input: null, messageKey: '', loading: !!currentBotId.value && botSettingsLoading.value }
   }
-  if (settings.chat_runtime !== 'acp_agent' && settings.chat_runtime !== 'codex' && settings.chat_runtime !== 'claude-code') return { input: null, messageKey: '', loading: false }
+  if (!isAgentRuntimeType(settings.chat_runtime)) return { input: null, messageKey: '', loading: false }
   if (!hasBotPermission(currentBot.value?.current_user_permissions, 'workspace_exec')) {
     return { input: null, messageKey: 'chat.defaultAgentNoWorkspaceExec', loading: false }
   }
@@ -2321,10 +2840,9 @@ const defaultExternalAgentAvailability = computed<DefaultExternalAgentAvailabili
         loading: acpProfilesLoading.value,
       }
     }
-    const profile = acpProfiles.value.find(item => normalizeACPAgentID(item.id) === agentId)
+    const profile = acpProfiles.value.find(item => normalizeAgentID(item.id) === agentId)
     if (!profile) return { input: null, messageKey: 'chat.defaultAgentUnavailable', loading: false }
-    const config = readACPAgentConfig(currentBotMetadata.value, agentId)
-    if (config.setupModeSet && findMissingRequiredManagedField(profile, config.managed, config.setupMode)) {
+    if (!isACPAgentConfigured(agent, profile)) {
       return { input: null, messageKey: 'chat.defaultAgentNotConfigured', loading: false }
     }
   }
@@ -2333,8 +2851,8 @@ const defaultExternalAgentAvailability = computed<DefaultExternalAgentAvailabili
       botAgentId,
       runtime: normalizeBotAgentRuntime(agent.runtime) || BOT_AGENT_RUNTIME_ACP,
       agentId,
-      projectPath: settings.chat_acp_project_path?.trim() || ACP_DEFAULT_PROJECT_PATH,
-      projectMode: settings.chat_acp_project_mode?.trim() || ACP_DEFAULT_PROJECT_MODE,
+      projectPath: settings.chat_acp_project_path?.trim() || EXTERNAL_AGENT_DEFAULT_PROJECT_PATH,
+      projectMode: settings.chat_acp_project_mode?.trim() || EXTERNAL_AGENT_DEFAULT_PROJECT_MODE,
     },
     messageKey: '',
     loading: false,
@@ -2366,33 +2884,37 @@ const composerHasNoModel = computed(() =>
 )
 
 const selectedModelLabel = computed(() => {
-  const current = composerModels.value.find(model => model.id === overrideModelId.value)
+  const current = composerModels.value.find(model => model.id === composerModelId.value)
   if (current?.name || current?.model_id) return current.name || current.model_id
   // A configured-but-missing id still shows the raw id rather than "None": the
   // model list can lag behind settings, and a transient gap must not read as
   // "unconfigured".
-  if (overrideModelId.value) return overrideModelId.value
+  if (composerModelId.value) return composerModelId.value
+  if (activeDirectRuntime.value === BOT_AGENT_RUNTIME_CODEX) {
+    return composerModelsLoading.value ? t('common.loading') : t('chat.modelOverride')
+  }
   return composerHasNoModel.value ? t('common.none') : composerDefaultModelLabel.value
 })
 
+const nativeDisplayedEffort = computed(() => displayedEffort(overrideReasoningEffort.value, activeModelReasoning.value))
+
 const selectedReasoningLabel = computed(() => {
   if (activeUsesExternalAgentComposer.value) {
-    const current = overrideReasoningEffort.value
+    const current = composerReasoningEffort.value
     return composerReasoningOptions.value?.find(option => option.value === current)?.label || current
   }
-  const v = overrideReasoningEffort.value
+  const v = nativeDisplayedEffort.value
   return t(EFFORT_LABELS[v] ?? 'chat.modelDefault')
 })
 
 const reasoningActive = computed(() =>
   activeUsesExternalAgentComposer.value
     ? Boolean(
-        overrideReasoningEffort.value
-        && composerReasoningOptions.value?.some(option => option.value === overrideReasoningEffort.value),
+        composerReasoningEffort.value
+        && composerReasoningOptions.value?.some(option => option.value === composerReasoningEffort.value),
       )
-    : activeModelSupportsReasoning.value
-      && Boolean(overrideReasoningEffort.value)
-      && overrideReasoningEffort.value !== REASONING_EFFORT_DISABLE,
+    : Boolean(nativeDisplayedEffort.value)
+      && nativeDisplayedEffort.value !== REASONING_EFFORT_DISABLE,
 )
 
 const modelTriggerLabel = computed(() =>
@@ -2532,9 +3054,13 @@ function pendingMatchesDefaultExternalAgent(input: ExternalAgentSessionInput): b
     && chatStore.pendingExternalAgentMatchesInput(input, paneTarget.value)
 }
 
+// The Bot's default External Agent only applies to an empty draft. A pane that
+// already renders a Session keeps it: staging a default there would clear the
+// selection behind the tab the user is looking at.
 watch([defaultExternalAgentUnavailableMessage, defaultExternalAgentLoading, currentBotId, hasExplicitSessionSelection, isActive], ([message, loading, _bot, _explicit, focused]) => {
   if (!focused) return
   clearDefaultExternalAgentComposerError()
+  if (hasRenderedSession.value) return
   if (!message || !currentBotId.value) return
   if (hasExplicitSessionSelection.value) return
   if (!loading) {
@@ -2551,13 +3077,13 @@ watch([defaultExternalAgentSessionInput, defaultExternalAgentLoading, currentBot
     if (!loading) {
       chatStore.cacheDefaultExternalAgentSession(null)
     }
-    if (!loading && !hasExplicitSessionSelection.value && activeIsPendingExternalAgent.value) {
+    if (!loading && !hasExplicitSessionSelection.value && !hasRenderedSession.value && activeIsPendingExternalAgent.value) {
       chatStore.resetToEmptyComposer({}, paneTarget.value)
     }
     return
   }
   chatStore.cacheDefaultExternalAgentSession(input)
-  if (hasExplicitSessionSelection.value) return
+  if (hasExplicitSessionSelection.value || hasRenderedSession.value) return
   clearDefaultExternalAgentComposerError()
   if (pendingMatchesDefaultExternalAgent(input)) return
   chatStore.stageDefaultExternalAgentSession(input, paneTarget.value)
@@ -2614,21 +3140,13 @@ async function selectBotAgent(agent: BotagentsBotAgent) {
   agentChanging.value = true
   composerError.value = ''
   try {
-    if (paneTarget.value.sessionId) {
-      await withAgentSwitchTimeout(chatStore.updateCurrentSessionAgent({
-        botAgentId,
-        runtime,
-        agentId,
-      }, paneTarget.value))
-    } else {
-      chatStore.stageExternalAgentSession({
-        botAgentId,
-        runtime,
-        agentId,
-      }, {}, paneTarget.value)
-      if (runtime === BOT_AGENT_RUNTIME_ACP) {
-        await withAgentSwitchTimeout(chatStore.ensurePendingACPRuntime(paneTarget.value))
-      }
+    chatStore.stageExternalAgentSession({
+      botAgentId,
+      runtime,
+      agentId,
+    }, {}, paneTarget.value)
+    if (runtime === BOT_AGENT_RUNTIME_ACP) {
+      await withAgentSwitchTimeout(chatStore.ensurePendingACPRuntime(paneTarget.value))
     }
   } catch (error) {
     composerError.value = agentSwitchErrorMessage(error)
@@ -2637,26 +3155,13 @@ async function selectBotAgent(agent: BotagentsBotAgent) {
   }
 }
 
-async function selectMemohAgent() {
+function selectMemohAgent() {
   if (agentChanging.value || !canChangeAgent.value) return
   agentPopoverOpen.value = false
-  if (!paneTarget.value.sessionId) {
-    chatStore.resetToEmptyComposer({ explicitSelection: true }, paneTarget.value)
-    clearDefaultExternalAgentComposerError()
-    composerError.value = ''
-    pendingFiles.value = []
-    return
-  }
-  if (!activeIsExternalAgent.value) return
-  agentChanging.value = true
+  chatStore.resetToEmptyComposer({ explicitSelection: true }, paneTarget.value)
+  clearDefaultExternalAgentComposerError()
   composerError.value = ''
-  try {
-    await withAgentSwitchTimeout(chatStore.updateCurrentSessionToMemoh(paneTarget.value))
-  } catch (error) {
-    composerError.value = agentSwitchErrorMessage(error)
-  } finally {
-    agentChanging.value = false
-  }
+  pendingFiles.value = []
 }
 
 function onModelSelected() {
@@ -2708,35 +3213,51 @@ async function onComposerModelValueSelected(value: string) {
   }
 }
 
-async function onACPModeSelected(value: unknown) {
-  if (typeof value !== 'string') return
-  if (acpConfigChanging.value) return
-  if (!value || value === currentACPModeId.value) return
-  const previousMode = currentACPModeId.value
-  const operationScope = acpOperationScope.value
-  acpConfigChangeScope.value = operationScope
+async function setRuntimeMode(modeId: string, modeKind: 'permission' | 'plan' = 'permission') {
+  const scope = runtimeModeScope.value
+  runtimeModeRequestScope.value = scope
+  try {
+    if (activeIsPendingExternalAgent.value) {
+      if (modeKind === 'permission' && activeUsesACPRuntime.value) await setACPMode(modeId)
+      else {
+        const modes = modeKind === 'plan' ? runtimeControlSnapshot.value?.plan_mode?.available_modes ?? [] : runtimeModes.value
+        if (!modes.some(mode => mode.id === modeId)) throw new UserFacingError(t('errors.runtime_control.mode_unavailable'))
+        chatStore.setPendingRuntimeMode(modeId, paneTarget.value, modeKind)
+      }
+    } else await runtimeControls.setMode(modeId, modeKind)
+  } finally {
+    if (runtimeModeRequestScope.value === scope) runtimeModeRequestScope.value = ''
+  }
+}
+
+async function togglePlanMode() {
+  if (!planModeSupported.value || runtimeModeDisabled.value) return
+  const scope = runtimeModeScope.value
+  composerError.value = ''
+  clearCurrentCommandEvent()
+  try {
+    await setRuntimeMode(planModeEnabled.value ? 'default' : 'plan', 'plan')
+  } catch (error) {
+    if (scope === runtimeModeScope.value) composerError.value = resolveApiErrorMessage(error, t('chat.planMode.changeFailed'))
+  }
+}
+
+async function onRuntimeModeSelected(value: unknown) {
+  if (typeof value !== 'string' || !value || runtimeModeDisabled.value || value === currentRuntimeModeId.value) return
+  if (unavailableRuntimeModes.value.includes(value)) return
+  const scope = currentPaneCommandScope()
   composerError.value = ''
   try {
-    const runtime = await setACPMode(value)
-    if (
-      runtime
-      && acpOperationScope.value === operationScope
-      && runtime.modes?.current_mode_id !== previousMode
-    ) {
-      toast.warning(t('chat.sessionModeChanged'))
-    }
+    await setRuntimeMode(value)
   } catch (error) {
-    if (activeUsesExternalAgentComposer.value && acpOperationScope.value === operationScope) {
-      composerError.value = resolveApiErrorMessage(error, t('chat.modeSwitchFailed'))
-    }
-  } finally {
-    if (acpConfigChangeScope.value === operationScope) acpConfigChangeScope.value = ''
+    if (scope.botId === paneTarget.value.botId && (scope.sessionId ?? '') === (paneTarget.value.sessionId ?? '') && scope.composerScope === paneComposerScope.value) composerError.value = resolveApiErrorMessage(error, t('chat.modeSwitchFailed'))
   }
 }
 
 async function onComposerReasoningEffortSelected(value: string) {
   if (activeUsesACPRuntime.value && acpConfigChanging.value) return
   const previous = composerPair.snapshot()
+  if (activeUsesDirectRuntime.value && !overrideModelId.value) overrideModelId.value = composerModelId.value
   overrideReasoningEffort.value = value
   composerPair.setSource('user')
   if (!activeUsesACPRuntime.value) {
@@ -2778,39 +3299,23 @@ const {
 
 const inputText = ref('')
 const queueSubmissionGate = new SessionQueueSubmissionGate()
-const composerQueueCommand = computed(() => parseSessionQueueCommand(inputText.value, composerACPAvailableCommands.value))
+const composerQueueCommand = computed(() => parseSessionQueueCommand(inputText.value, composerRuntimeCommands.value))
 const composerPlaceholder = computed(() => {
   if (activeChatReadOnly.value) return t('chat.readonlyHint')
-  if (!streaming.value) return t('chat.inputPlaceholder')
-  return t('chat.queue.followUpPlaceholder')
+  if (!streaming.value) return t(goalDraftEnabled.value ? 'chat.goal.placeholder' : planModeEnabled.value ? 'chat.planMode.placeholder' : 'chat.inputPlaceholder')
+  return t('chat.inputPlaceholder')
 })
 watch(inputText, (text) => {
   const prefix = slashPanelSuppressedPrefix.value
   if (!prefix || text === prefix || text.startsWith(`${prefix} `)) return
   slashPanelSuppressedPrefix.value = ''
 })
-// Mirror of ComposerContinueOn's pill rule: only an explicit non-default
-// selection expands the trigger (unset — including the pre-load window —
-// renders the collapsed default circle; a missing/ghost selection resolves to
-// null here exactly like the child's selectedTarget). The reservation must
-// track which width the control is actually rendering, and on mobile the
-// trigger never expands (see the child's header comment).
-const isMobileShell = useIsMobile()
-const continueOnExpanded = computed(() => (
-  !!selectedWorkspaceTargetId.value
-  && selectedWorkspaceTarget.value?.kind !== 'native'
-  && !isMobileShell.value
-))
-
 const {
   textareaEl,
   composerEl,
   focusTextarea,
   modelTriggerMaxWidth,
-} = useComposerLayout({
-  continueOnVisible: showComputersMenu,
-  continueOnExpanded,
-})
+} = useComposerLayout()
 
 useUnfocusedComposerInput({
   textarea: textareaEl,
@@ -2822,17 +3327,29 @@ useUnfocusedComposerInput({
 
 const showSend = computed(() => Boolean(inputText.value.trim()) || pendingFiles.value.length > 0 || requestedSkills.value.length > 0)
 
-// Whether the trailing slot shows the send button (vs. mic — see micVisible
-// just below, its exact complement). Streaming always wins the slot for stop,
-// same as before; unlike the old ring-era rule this no longer special-cases
-// ACP, because mic — not a dimmed disabled send — is what now fills the slot
-// on empty input in EVERY mode.
+// TODO(voice-input): shelved until a default transcription model ships —
+// today the mic dead-ends users into a settings detour. The whole path (mic
+// button, MediaRecorder/transcription plumbing, the mic⇄send cross-fade)
+// stays in place behind this flag; a disabled send-styled placeholder holds
+// the inactive slot meanwhile. Once the default model lands, open an issue
+// to restore voice input: flip this to true and delete the placeholder.
+const voiceInputEnabled = false
+
+// Whether the trailing slot shows the send button (vs. its inactive
+// occupant — see inactiveSlotVisible just below, its exact complement).
+// Streaming always wins the slot for stop, same as before; unlike the old
+// ring-era rule this no longer special-cases ACP: the inactive occupant —
+// not a dimmed disabled send — is what fills the slot on empty input in
+// EVERY mode (the mic when voice input is on, a look-alike placeholder while
+// it's shelved).
 const sendButtonVisible = computed(() => showSend.value || streaming.value)
 
-// Mic owns the trailing slot whenever send doesn't: nothing to send is
-// exactly when voice input is the useful affordance there. Exact complement
-// of sendButtonVisible so the two can never both show (or both hide).
-const micVisible = computed(() => !sendButtonVisible.value)
+// The slot's inactive occupant: a grayed send stand-in while voice input is
+// shelved, the mic itself once voiceInputEnabled flips back on (nothing to
+// send is exactly when voice input is the useful affordance there). Exact
+// complement of sendButtonVisible so the two can never both show (or both
+// hide).
+const inactiveSlotVisible = computed(() => !sendButtonVisible.value)
 
 // Voice input: MediaRecorder → the bot's configured transcription model →
 // transcript appended into the draft. The recorder/stream live outside
@@ -2848,6 +3365,21 @@ const micVisible = computed(() => !sendButtonVisible.value)
 type VoiceInputState = 'idle' | 'recording' | 'transcribing'
 
 const voiceInputState = ref<VoiceInputState>('idle')
+
+useComposerKeyboardFocus({
+  textarea: textareaEl,
+  enabled: () => isActive.value && isVisible.value,
+  available: () => (router.currentRoute.value.name === 'home' || router.currentRoute.value.name === 'bot')
+    && !!currentBotId.value && !activeChatReadOnly.value
+    && voiceInputState.value === 'idle',
+  ready: () => !loadingMessages.value && !composerPlacementPending.value,
+  owner: () => `${paneTarget.value.botId}:${paneTarget.value.viewId}:${paneTarget.value.sessionId ?? ''}`,
+  request: () => workspaceTabs.pendingChatInputFocus?.panelId === props.tabId
+    && workspaceTabs.pendingChatInputFocus.botId === paneTarget.value.botId
+    && workspaceTabs.pendingChatInputFocus.sessionId === paneTarget.value.sessionId,
+  consumeRequest: () => { workspaceTabs.pendingChatInputFocus = null },
+})
+
 const voiceInputLabel = computed(() => {
   if (voiceInputState.value === 'recording') return t('chat.voiceInput.stop')
   if (voiceInputState.value === 'transcribing') return t('chat.voiceInput.transcribing')
@@ -2971,7 +3503,8 @@ function voiceFileExtension(mimeType: string): string {
 function openTranscriptionSettings() {
   const botName = currentBot.value?.name || currentBot.value?.id || currentBotId.value
   if (!botName) {
-    void router.push({ name: 'voice' })
+    // Voice is a scope of the Providers settings page now (no flat route).
+    void router.push({ name: 'providers', query: { tab: 'voice' } })
     return
   }
   void router.push({
@@ -3168,6 +3701,40 @@ const { inputDraftKey, saveInputDraft, clearAllDrafts } = useComposerDrafts({
   tabId: () => props.tabId,
   inputText,
 })
+// Registered after useComposerDrafts so its draft restore runs first and
+// cannot overwrite a prefilled prompt (usage examples, App "Try it").
+const replaceDraftConfirm = useAsyncConfirm()
+const { lastPrefilled } = useComposerPrefillConsumer({
+  botId: () => paneTarget.value.botId,
+  active: () => isActive.value,
+  writable: () => !activeChatReadOnly.value,
+  ready: () => !loadingChats.value,
+  currentText: () => inputText.value,
+  // Focus the composer first: the dialog returns focus to whatever held it
+  // when it opened, so this keeps the caret in the composer either way.
+  confirmReplace: () => {
+    focusTextarea()
+    return replaceDraftConfirm.ask()
+  },
+  apply: (text) => {
+    inputText.value = text
+    saveInputDraft(inputDraftKey.value, text)
+    void nextTick(focusTextarea)
+  },
+})
+
+// The welcome composer holds no text of the user's own: it is empty, or still
+// exactly what a prefill last wrote. Only then may a suggestion preview into it
+// and Enter pick one, since replacing it loses nothing. A first send in flight
+// keeps its text locked in the composer, so nothing may replace it then.
+const composerReplaceable = computed(() =>
+  isWelcome.value && voiceInputState.value === 'idle' && !firstSendAwaiting.value
+  && (inputText.value === '' || inputText.value === lastPrefilled.value))
+// A welcome suggestion previews its prompt in the composer while it is hovered
+// or focused (chat-example-suggestions.vue owns the value).
+const composerPreview = ref<ComposerPreview | null>(null)
+const composerPreviewShown = computed(() => !!composerPreview.value && composerReplaceable.value)
+const composerPreviewBox = useComposerPreviewBox(textareaEl, () => composerPreviewShown.value)
 
 // The dock owns ALL geometry/visibility orchestration (box-slot mutex,
 // backdrop-mask height) — the pane only needs two readings back from it: the
@@ -3224,7 +3791,7 @@ watch([
   requestedSkills.value = skillSlashEnabled.value
     ? (failure.restoreRequestedSkills ?? []).map(skill => ({ ...skill }))
     : []
-  composerError.value = failure.error || t('chat.sendFailed')
+  composerError.value = failure.error ?? t('chat.sendFailed')
   chatStore.clearStartupSendFailure(failure.id)
 }, { immediate: true })
 
@@ -3508,12 +4075,65 @@ async function handleSend() {
   const text = inputText.value.trim()
   const files = [...pendingFiles.value]
   const skills = [...requestedSkills.value]
+  if (goalSubmissionBlocked.value) {
+    composerError.value = goalExecutionBlockedReason.value
+    return
+  }
+  if (localQuickActionIDForSlash(text) === 'goal') {
+    if (runtimeModeDisabled.value || localQuickActionBlocked()) return
+    goalDraftScope.value = goalDraftEnabled.value ? '' : runtimeModeScope.value
+    inputText.value = ''
+    saveInputDraft(inputDraftKey.value, '')
+    return
+  }
+  if (localQuickActionIDForSlash(text) === 'plan') {
+    if (runtimeModeDisabled.value || localQuickActionBlocked()) return
+    inputText.value = ''
+    saveInputDraft(inputDraftKey.value, '')
+    await togglePlanMode()
+    return
+  }
+  const selector = text.startsWith('/') ? text.slice(1).split(/\s/, 1)[0] : ''
+  const runtimeCommand = composerRuntimeCommands.value.find(command => command.name === selector)
+  if (runtimeCommand && runtimeCommand.kind !== 'turn') {
+    if (activeChatReadOnly.value || loadingMessages.value || localQuickActionBlocked()) return
+    if (streaming.value && runtimeCommand.kind === 'operation') {
+      composerError.value = t('errors.session_runtime.session_busy')
+      return
+    }
+    if (runtimeCommand.kind === 'operation') {
+      clearCurrentCommandEvent()
+      composerError.value = ''
+      inputText.value = ''
+      saveInputDraft(inputDraftKey.value, '')
+      await runSessionCompaction(() => runtimeControls.execute(runtimeCommand.name!))
+      return
+    }
+    const draftKey = inputDraftKey.value
+    const title = `/${runtimeCommand.name}`
+    const complete = chatStore.beginCommandEvent({
+      type: 'command_result', terminal: false, action_id: runtimeCommand.name,
+      result: { kind: 'runtime_command', title, text: runtimeCommand.running_text, text_key: 'common.loading' },
+    }, currentPaneCommandScope())
+    inputText.value = ''
+    saveInputDraft(draftKey, '')
+    try {
+      const result = await runtimeControls.execute(runtimeCommand.name!)
+      complete({
+        type: 'command_result', terminal: true, action_id: runtimeCommand.name,
+        result: { kind: 'runtime_command', title, ...(Object.keys(result).length ? result : { text: runtimeCommand.completed_text, text_key: 'common.toast.success' }) },
+      })
+    } catch (error) {
+      complete({ type: 'command_error', terminal: true, code: parseMemohError(error)?.code || 'runtime_control.failed', message: resolveApiErrorMessage(error, t('errors.runtime_control.failed')) })
+    }
+    return
+  }
   const queueCommand = composerQueueCommand.value
   if (queueCommand) {
     if (files.length || skills.length) {
       composerError.value = files.length
         ? t('chat.slash.attachmentsUnsupported')
-        : t('chat.slash.errorMessages.invalid_skill_slash_syntax')
+        : t('errors.slash.skill_syntax_invalid')
       return
     }
     if (!queueCommand.text || !activeSessionId.value) {
@@ -3522,6 +4142,17 @@ async function handleSend() {
     }
   }
   if (streaming.value || queueCommand) {
+    // Until controls load, a slash input may be a runtime command.
+    const runtimeCommandUnresolved = activeUsesExternalAgentComposer.value
+      && !runtimeControlSnapshot.value
+      && text.startsWith('/')
+      && !queueCommand
+    // The queue carries plain text only: a runtime turn command or a goal
+    // draft would run as an ordinary message once dequeued.
+    if (runtimeCommand || runtimeCommandUnresolved || (goalDraftEnabled.value && text && !text.startsWith('/'))) {
+      composerError.value = t('errors.session_runtime.session_busy')
+      return
+    }
     if (!text || files.length || skills.length || !currentBotId.value || !activeSessionId.value || activeChatReadOnly.value) return
     const botId = currentBotId.value
     const sessionId = activeSessionId.value
@@ -3567,12 +4198,20 @@ async function handleSend() {
     // Keyboard send bypasses the disabled button, so the no-model gate is
     // repeated here rather than living only on the control.
     || composerHasNoModel.value
+    || !!runtimeModeUnavailableReason.value
   ) return
   const localAction = localQuickActionIDForSlash(text)
   if (localAction && localQuickActionBlocked()) return
   if (localAction && runLocalQuickAction(localAction, text)) {
     inputText.value = ''
     saveInputDraft(inputDraftKey.value, '')
+    return
+  }
+  const sentGoalScope = goalDraftScope.value
+  const goalSend = goalDraftEnabled.value && !text.startsWith('/')
+  const sendText = goalSend ? `/goal ${text}` : text
+  if ((goalSend || /^\/goal(?:\s|$)/.test(text)) && (files.length || skills.length)) {
+    composerError.value = t('chat.goal.textOnly')
     return
   }
   const isNewCommand = /^\/new(?:\s|$)/i.test(text)
@@ -3591,10 +4230,18 @@ async function handleSend() {
   const sentWorkspaceTargetId = sendWorkspaceTargetId.value
   const preserveDirectDraftSelection = activeUsesDirectRuntime.value && !sentContext.target.sessionId
   composerError.value = ''
-  inputText.value = ''
-  saveInputDraft(sentDraftKey, '')
-  pendingFiles.value = []
-  requestedSkills.value = []
+  // A draft's first send keeps its input on screen, locked, until the server
+  // confirms it (onBeforeTurnAppend); a failure then leaves it where it is.
+  const holdsInput = !sentContext.target.sessionId
+  const clearSentInput = (onSentPane = true) => {
+    saveInputDraft(sentDraftKey, '')
+    if (!onSentPane) return
+    inputText.value = ''
+    pendingFiles.value = []
+    requestedSkills.value = []
+  }
+  if (holdsInput) draftSendStarting.value = true
+  else clearSentInput()
 
   let attachments: ChatAttachment[] | undefined
   try {
@@ -3603,6 +4250,7 @@ async function handleSend() {
     }
   } catch (error) {
     pairSend.releaseReads()
+    draftSendStarting.value = false
     if (!matchesChatPaneSendContext(
       sentContext,
       paneTarget.value,
@@ -3611,7 +4259,7 @@ async function handleSend() {
     inputText.value = text
     pendingFiles.value = files
     requestedSkills.value = skills
-    composerError.value = error instanceof Error ? error.message : t('chat.sendFailed')
+    composerError.value = resolveApiErrorMessage(error, t('chat.sendFailed'))
     return
   }
 
@@ -3620,7 +4268,7 @@ async function handleSend() {
   // not leave a latent pin behind; startup failures roll the arm back.
   let rollbackPin: (() => void) | null = null
   directDraftPromotionPending = preserveDirectDraftSelection
-  const result = await chatStore.sendMessage(text, attachments, {
+  const result = await chatStore.sendMessage(sendText, attachments, {
     target: sentContext.target,
     modelId: sentModelId,
     reasoningEffort: sentReasoningEffort,
@@ -3630,14 +4278,22 @@ async function handleSend() {
     onBeforeMessageSend: () => pairSend.begin(),
     onModelPreferenceSettled: () => pairSend.finish(false),
     onBeforeTurnAppend: (target) => {
-      if (preserveDirectDraftSelection) {
-        void nextTick(() => { directDraftPromotionPending = false })
-      }
-      if (!matchesChatPaneSendContext(
+      // The confirmed target carries the session the send created; a draft
+      // pane that was promoted to it is still the pane that sent.
+      const onSentPane = matchesChatPaneSendContext(
         { ...sentContext, target },
         { ...paneTarget.value, sessionId: paneView.value.sessionId },
         inputDraftKey.value || 'chat',
-      )) return
+      )
+      if (holdsInput) {
+        clearSentInput(onSentPane)
+        draftSendStarting.value = false
+      }
+      if (goalSend && goalDraftScope.value === sentGoalScope) goalDraftScope.value = ''
+      if (preserveDirectDraftSelection) {
+        void nextTick(() => { directDraftPromotionPending = false })
+      }
+      if (!onSentPane) return
       rollbackPin = pinAfterSend()
     },
     onTurnAppendAborted: () => {
@@ -3645,6 +4301,7 @@ async function handleSend() {
       rollbackPin = null
     },
   }).finally(() => {
+    draftSendStarting.value = false
     directDraftPromotionPending = false
     pairSend.finish(false)
     pairSend.releaseReads()
@@ -3652,19 +4309,19 @@ async function handleSend() {
   rollbackPin = null
   pairSend.finish(result.messageSent === true || result.stage === 'stream')
   await refreshACPComposerConfigAfterSelectionError(result)
-  if (!result.ok && result.stage === 'startup') {
-    const restoreInput = result.restoreInput ?? text
+  const restore = composerRestoreForSendResult(result, text, t('chat.sendFailed'))
+  if (restore) {
     if (!matchesChatPaneSendContext(
       sentContext,
       paneTarget.value,
       inputDraftKey.value || 'chat',
     )) return
-    inputText.value = restoreInput
-    saveInputDraft(sentDraftKey, restoreInput)
+    inputText.value = restore.input
+    saveInputDraft(sentDraftKey, restore.input)
     pendingFiles.value = files
     requestedSkills.value = skills
     if (commandPanelEvent.value?.type !== 'command_error') {
-      composerError.value = result.error || t('chat.sendFailed')
+      composerError.value = restore.error
     }
     return
   }
@@ -3678,6 +4335,8 @@ async function handleSend() {
 }
 
 function handleSendButton() {
+  // A first send waits for the server to confirm it.
+  if (firstSendAwaiting.value) return
   if (streaming.value && !showSend.value) {
     chatStore.abort(paneTarget.value)
     return

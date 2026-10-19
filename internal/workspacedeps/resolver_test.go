@@ -31,7 +31,7 @@ func onPath(version string) Candidate {
 
 // seedCandidates stores a discovery snapshot for (testBot, target) in which
 // agent-x has exactly the given copies, in discovery order.
-func (f *serviceFixture) seedCandidates(targetID string, candidates ...Candidate) {
+func (f *serviceFixture) seedCandidates(candidates ...Candidate) {
 	obs := Observed{DepID: "agent-x"}
 	if len(candidates) > 0 {
 		obs.Present = true
@@ -40,16 +40,16 @@ func (f *serviceFixture) seedCandidates(targetID string, candidates ...Candidate
 		obs.Version = candidates[0].Version
 		obs.Candidates = candidates
 	}
-	f.svc.cache.Put(testBot, normalizeTargetID(targetID), Snapshot{
+	f.svc.cache.Put(testBot, Snapshot{
 		Platform: f.platform,
 		Observed: map[string]Observed{"agent-x": obs},
 	})
 }
 
-func (f *serviceFixture) cachedCandidates(targetID string) []Candidate {
-	snap, ok := f.svc.cache.Get(testBot, normalizeTargetID(targetID))
+func (f *serviceFixture) cachedCandidates() []Candidate {
+	snap, ok := f.svc.cache.Get(testBot)
 	if !ok {
-		f.t.Fatalf("no snapshot cached for %s", targetID)
+		f.t.Fatal("no snapshot cached for bot")
 	}
 	return snap.Observed["agent-x"].Candidates
 }
@@ -94,7 +94,7 @@ func TestResolveLauncherOrdersCandidates(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			f := newServiceFixture(t)
-			f.seedCandidates(testTarget, tt.candidates...)
+			f.seedCandidates(tt.candidates...)
 			got, err := f.svc.ResolveLauncher(f.ctx(), testBot, "agent-x")
 			if err != nil {
 				t.Fatalf("ResolveLauncher: %v", err)
@@ -131,26 +131,6 @@ func TestResolveLauncherDiscoversOnMiss(t *testing.T) {
 	}
 }
 
-func TestResolveLauncherUsesCurrentTarget(t *testing.T) {
-	f := newServiceFixture(t)
-	f.ws.setCurrentTarget("remote-1", nil)
-	f.seedCandidates(testTarget, managed("2.0.0"))
-	f.seedCandidates("remote-1", onPath("2.0.0"))
-
-	got, err := f.svc.ResolveLauncher(f.ctx(), testBot, "agent-x")
-	if err != nil {
-		t.Fatalf("ResolveLauncher: %v", err)
-	}
-	if got.Path != pathCopy || got.Source != external.LauncherSourcePath {
-		t.Fatalf("launcher = %+v, want the remote target's copy", got)
-	}
-
-	f.ws.setCurrentTarget("", errors.New("primary lookup failed"))
-	if _, err := f.svc.ResolveLauncher(f.ctx(), testBot, "agent-x"); err == nil || err.Error() != "primary lookup failed" {
-		t.Fatalf("error = %v, want the target lookup failure", err)
-	}
-}
-
 func TestResolveLauncherRejectsUnknownDependencies(t *testing.T) {
 	f := newServiceFixture(t)
 	if _, err := f.svc.ResolveLauncher(f.ctx(), testBot, "nope"); !errors.Is(err, ErrDependencyNotFound) {
@@ -181,7 +161,7 @@ func TestResolveLauncherMissingNeverStartsUnapprovedInstall(t *testing.T) {
 	f := newServiceFixture(t)
 	mgr := background.New(slog.New(slog.DiscardHandler))
 	f.svc.background = mgr
-	f.seedCandidates(testTarget)
+	f.seedCandidates()
 	for range 3 {
 		_, err := f.svc.ResolveLauncher(f.ctx(), testBot, "agent-x")
 		var missing *external.DependencyMissingError
@@ -199,7 +179,7 @@ func TestResolveLauncherMissingNeverStartsUnapprovedInstall(t *testing.T) {
 
 func TestResolveLauncherReportsExistingOperation(t *testing.T) {
 	f := newServiceFixture(t)
-	f.seedCandidates(testTarget)
+	f.seedCandidates()
 	key := f.key("agent-x")
 	if !f.svc.locks.tryLock(key) {
 		t.Fatal("lock unavailable")
@@ -245,7 +225,7 @@ func (*offlineResolverCatalog) Definition(context.Context, string, string) (cata
 
 func TestResolveLauncherMissingWithoutBackground(t *testing.T) {
 	f := newServiceFixture(t)
-	f.seedCandidates(testTarget)
+	f.seedCandidates()
 
 	_, err := f.svc.ResolveLauncher(f.ctx(), testBot, "agent-x")
 	var missing *external.DependencyMissingError
@@ -264,44 +244,43 @@ func TestObserveLauncherVersionRewritesTheLaunchedCopy(t *testing.T) {
 	f := newServiceFixture(t)
 	// Discovery listed the toolkit copy first; the resolver still launches
 	// the managed one, and the handshake version must land on that copy.
-	f.seedCandidates(testTarget, toolkit("2.0.0"), managed("1.9.0"))
+	f.seedCandidates(toolkit("2.0.0"), managed("1.9.0"))
 
 	if _, err := f.svc.ResolveLauncher(f.ctx(), testBot, "agent-x"); err != nil {
 		t.Fatalf("ResolveLauncher: %v", err)
 	}
 	f.svc.ObserveLauncherVersion(f.ctx(), testBot, "agent-x", "1.9.5")
-	got := f.cachedCandidates(testTarget)
+	got := f.cachedCandidates()
 	if got[0].Version != "2.0.0" || got[1].Version != "1.9.5" {
 		t.Fatalf("candidates = %+v, want the managed copy corrected and the toolkit one untouched", got)
 	}
-	snap, _ := f.svc.cache.Get(testBot, testTarget)
+	snap, _ := f.svc.cache.Get(testBot)
 	if snap.Observed["agent-x"].Version != "2.0.0" {
 		t.Fatalf("winner version = %q, want unchanged", snap.Observed["agent-x"].Version)
 	}
 
 	// Without a prior resolution the default winning copy is corrected.
-	f.seedCandidates(testTarget, managed("1.9.0"), toolkit("2.0.0"))
+	f.seedCandidates(managed("1.9.0"), toolkit("2.0.0"))
 	f.svc.forgetLaunched(f.key("agent-x"))
 	f.svc.ObserveLauncherVersion(f.ctx(), testBot, "agent-x", "1.9.5")
-	got = f.cachedCandidates(testTarget)
+	got = f.cachedCandidates()
 	if got[0].Version != "1.9.5" || got[1].Version != "2.0.0" {
 		t.Fatalf("candidates = %+v, want the winner corrected", got)
 	}
 
-	// Errors and blanks are ignored.
+	// Blank versions are ignored.
 	f.svc.ObserveLauncherVersion(f.ctx(), testBot, "agent-x", "")
-	f.ws.setCurrentTarget("", errors.New("offline"))
-	f.svc.ObserveLauncherVersion(f.ctx(), testBot, "agent-x", "3.0.0")
-	if got = f.cachedCandidates(testTarget); got[0].Version != "1.9.5" {
-		t.Fatalf("candidates = %+v, want no change on error", got)
+
+	if got = f.cachedCandidates(); got[0].Version != "1.9.5" {
+		t.Fatalf("candidates = %+v, want no change on a blank version", got)
 	}
 }
 
 func TestPreflightFollowsLauncherSelection(t *testing.T) {
 	f := newServiceFixture(t)
-	f.seedCandidates(testTarget, toolkit("2.0.0"), managed("1.9.0"))
+	f.seedCandidates(toolkit("2.0.0"), managed("1.9.0"))
 
-	result, err := f.svc.Preflight(f.ctx(), testBot, testTarget, []string{"agent-x"})
+	result, err := f.svc.Preflight(f.ctx(), testBot, []string{"agent-x"})
 	if err != nil {
 		t.Fatalf("Preflight: %v", err)
 	}
@@ -310,8 +289,8 @@ func TestPreflightFollowsLauncherSelection(t *testing.T) {
 		t.Fatalf("item = %+v, want the managed copy the resolver would run", item)
 	}
 
-	f.seedCandidates(testTarget, onPath("2.0.0"), toolkit("1.8.0"))
-	result, err = f.svc.Preflight(f.ctx(), testBot, testTarget, []string{"agent-x"})
+	f.seedCandidates(onPath("2.0.0"), toolkit("1.8.0"))
+	result, err = f.svc.Preflight(f.ctx(), testBot, []string{"agent-x"})
 	if err != nil {
 		t.Fatalf("Preflight: %v", err)
 	}

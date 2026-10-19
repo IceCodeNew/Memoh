@@ -92,7 +92,7 @@ func (f admitFixture) input(invocationID, payload string) AdmitInput {
 
 func (f admitFixture) finish(t *testing.T, admission Admission) {
 	t.Helper()
-	if err := f.manager.FinishRun(context.Background(), admission.Handle, RunStatusCompleted, ""); err != nil {
+	if _, err := f.manager.FinishRun(context.Background(), admission.Handle, RunStatusCompleted); err != nil {
 		t.Fatalf("finish run: %v", err)
 	}
 	if _, _, err := f.runs.Finalize(context.Background(), ledger.FinalizeParams{
@@ -485,7 +485,7 @@ func TestAdmittedRunParksAndResumesOnUserInputDecision(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("publish deferred stream end: %v", err)
 	}
-	if err := fixture.manager.FinishRun(context.Background(), handle, "", ""); err != nil {
+	if _, err := fixture.manager.FinishRun(context.Background(), handle, ""); err != nil {
 		t.Fatalf("finish deferred stream: %v", err)
 	}
 	snapshot, err := fixture.manager.Snapshot(context.Background(), testBotID, testSessionID)
@@ -509,10 +509,52 @@ func TestAdmittedRunParksAndResumesOnUserInputDecision(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("publish resumed stream end: %v", err)
 	}
-	if err := fixture.manager.FinishRun(context.Background(), handle, "", ""); err != nil {
+	if _, err := fixture.manager.FinishRun(context.Background(), handle, ""); err != nil {
 		t.Fatalf("finish resumed run: %v", err)
 	}
 	if got := fixture.runs.State(admission.RunID); got != ledger.StateCompleted {
 		t.Fatalf("ledger state after completion = %q, want completed", got)
 	}
+}
+
+func TestConfigurationRunIsMarkedBeforeAdmissionAndStillExcludesOtherRuns(t *testing.T) {
+	f := newAdmitFixture(t)
+	input := f.input("config", `{"mode_id":"plan"}`)
+	input.Execution.ConfigurationOnly = true
+	input.Execution.Admission = func(ctx context.Context, _ RunHandle) (RunAdmissionView, error) {
+		snapshot, err := f.manager.Snapshot(ctx, testBotID, testSessionID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if snapshot.CurrentRunView == nil || !snapshot.CurrentRunView.ConfigurationOnly || snapshot.CurrentRunView.Status != RunStatusAdmitting {
+			t.Fatalf("first frame looked like generation: %+v", snapshot.CurrentRunView)
+		}
+		return RunAdmissionView{}, nil
+	}
+	admission, err := f.manager.Admit(t.Context(), input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	snapshot, err := f.manager.Snapshot(t.Context(), testBotID, testSessionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !snapshot.CurrentRunView.ConfigurationOnly || snapshot.CurrentRunView.Status != RunStatusRunning {
+		t.Fatalf("active config frame: %+v", snapshot.CurrentRunView)
+	}
+	encoded, err := marshalSnapshot(snapshot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var decoded Snapshot
+	if err := unmarshalSnapshot(encoded, &decoded); err != nil {
+		t.Fatal(err)
+	}
+	if !decoded.CurrentRunView.ConfigurationOnly {
+		t.Fatal("config marker lost in transport")
+	}
+	if _, err := f.manager.Admit(t.Context(), f.input("send", `{"text":"hi"}`)); !errors.Is(err, ErrSessionBusy) {
+		t.Fatalf("configuration released exclusion early: %v", err)
+	}
+	f.finish(t, admission)
 }

@@ -33,6 +33,7 @@
            and subagent threads back their own loops. -->
       <SessionSelect
         v-model="sessionModel"
+        :invalid="submitted && !form.targetSessionId"
         :bot-id="botId"
         :modes="TARGET_SESSION_MODES"
         :placeholder="t('bots.schedule.execution.sessionPlaceholder')"
@@ -61,6 +62,7 @@
         v-if="form.runTarget === 'new_session'"
         v-model="runtimeModel"
         v-model:reasoning-effort="effortModel"
+        :invalid="submitted && modelRequired && !form.modelId"
         :models="runtimePickerModels"
         :providers="runtimePickerProviders"
         model-type="chat"
@@ -138,6 +140,7 @@
 </template>
 
 <script setup lang="ts">
+import { normalizeAgentID } from '@/utils/external-agent'
 /* eslint-disable vue/no-mutating-props -- parent-owned reactive form, same
    contract as the settings-*-card children. */
 import { computed, onMounted, ref, watch } from 'vue'
@@ -170,8 +173,7 @@ import type {
   SessionSession,
 } from '@memohai/sdk'
 import { resolveApiErrorMessage } from '@/utils/api-error'
-import { normalizeACPAgentID } from '@/utils/acp'
-import { BOT_AGENT_RUNTIME_CLAUDE_CODE, BOT_AGENT_RUNTIME_CODEX, botAgentName, botAgentProvider, normalizeBotAgentRuntime } from '@/utils/bot-agent'
+import { botAgentName, botAgentProvider, isDirectBotAgentRuntime, normalizeBotAgentRuntime, type DirectBotAgentRuntime } from '@/utils/bot-agent'
 import { isAgentRuntimeType, normalizedRuntimeType } from '@/store/chat-list.utils'
 import { useWorkdirsStore } from '@/store/workdirs'
 import SessionSelect from '@/components/session-select/index.vue'
@@ -188,7 +190,7 @@ import {
 export interface ScheduleExecutionForm {
   runTarget: 'new_session' | 'existing_session'
   targetSessionId: string
-  runtimeType: '' | 'acp_agent' | 'codex' | 'claude-code'
+  runtimeType: '' | 'acp_agent' | DirectBotAgentRuntime
   botAgentId: string
   acpAgentId: string
   modelId: string
@@ -199,6 +201,7 @@ export interface ScheduleExecutionForm {
 
 const props = defineProps<{
   botId: string
+  submitted?: boolean
   form: ScheduleExecutionForm
 }>()
 
@@ -242,10 +245,9 @@ const chatModels = computed(() =>
 
 const enabledAgents = computed(() => botAgents.value.filter(agent => agent.enabled !== false && !!agent.id))
 
-function sessionRuntimeForAgent(agent: BotagentsBotAgent | undefined): 'acp_agent' | 'codex' | 'claude-code' {
+function sessionRuntimeForAgent(agent: BotagentsBotAgent | undefined): 'acp_agent' | DirectBotAgentRuntime {
   const runtime = normalizeBotAgentRuntime(agent?.runtime)
-  if (runtime === BOT_AGENT_RUNTIME_CODEX || runtime === BOT_AGENT_RUNTIME_CLAUDE_CODE) return runtime
-  return 'acp_agent'
+  return isDirectBotAgentRuntime(runtime) ? runtime : 'acp_agent'
 }
 
 const selectableWorkdirs = computed(() => {
@@ -267,7 +269,7 @@ const selectedSessionIsExternalAgent = computed(() =>
 
 const selectedSessionAgentID = computed(() => {
   if (!selectedSessionIsACP.value) return ''
-  return normalizeACPAgentID(
+  return normalizeAgentID(
     selectedSession.value?.runtime_metadata?.acp_agent_id ?? selectedSession.value?.metadata?.acp_agent_id,
   )
 })
@@ -276,7 +278,7 @@ const selectedSessionSummary = computed(() => {
   if (!selectedSession.value) return ''
   if (selectedSessionIsExternalAgent.value) {
     const botAgent = botAgents.value.find(agent => agent.id === selectedSession.value?.bot_agent_id)
-    const profile = acpProfiles.value.find(item => normalizeACPAgentID(item.id) === selectedSessionAgentID.value)
+    const profile = acpProfiles.value.find(item => normalizeAgentID(item.id) === selectedSessionAgentID.value)
     return t('bots.schedule.execution.sessionRuntimeAgent', { agent: botAgent ? botAgentName(botAgent) : (profile?.display_name || selectedSessionAgentID.value) })
   }
   return t('bots.schedule.execution.sessionRuntimeNative')

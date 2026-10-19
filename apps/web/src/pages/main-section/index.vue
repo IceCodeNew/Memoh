@@ -27,6 +27,12 @@
         <MainContainer />
       </div>
       <MobileNavSheet v-if="isMobile" />
+      <!-- The one usage-example gallery; the sidebar entry and the welcome
+           suggestions' "See all" open it through useChatExamplesUi. -->
+      <ChatExampleGalleryDialog
+        v-model:open="galleryOpen"
+        :bot-id="currentBotId ?? ''"
+      />
       <FileDropOverlay
         :active="baseDropActive"
         :bounds="baseDropBounds"
@@ -38,19 +44,23 @@
 </template>
 
 <script setup lang="ts">
-import { computed, inject, ref, onMounted } from 'vue'
+import { inject, onScopeDispose, ref, onMounted } from 'vue'
 import { storeToRefs } from 'pinia'
 import { useRoute } from 'vue-router'
-import { DesktopShellKey } from '@/lib/desktop-shell'
+import { useMacTrafficReserve } from '@/composables/useMacTrafficReserve'
 import SideBar from '@/components/sidebar/index.vue'
 import MainContainer from '@/components/main-container/index.vue'
 import MobileTopBar from './components/mobile-top-bar.vue'
 import MobileNavSheet from './components/mobile-nav-sheet.vue'
 import { ONBOARDING_KEYS } from '@/pages/onboarding/constants'
 import { safeSessionGet, safeSessionRemove } from '@/utils/safe-storage'
-import { useKeyboardCommand } from '@/composables/useKeyboardCommand'
+import { KEYBOARD_REGISTRY, useKeyboardCommand } from '@/composables/useKeyboardCommand'
+import { registerWorkbenchCommands } from '@/pages/home/commands/workbench-commands'
 import { appKeyboardCommands } from '@/lib/keyboard-commands'
 import { useWorkspaceTabsStore } from '@/store/workspace-tabs'
+import { useChatStore } from '@/store/chat-list'
+import ChatExampleGalleryDialog from '@/components/chat-examples/chat-example-gallery-dialog.vue'
+import { useChatExamplesUi } from '@/components/chat-examples/use-chat-examples-ui'
 import { useI18n } from 'vue-i18n'
 import { ImagePlus } from 'lucide-vue-next'
 import FileDropOverlay from '@/components/file-drop-overlay/index.vue'
@@ -74,12 +84,7 @@ const { active: baseDropActive, bounds: baseDropBounds, handlers: baseDropHandle
   measureTarget: () => getChatFileDropTarget()?.hostEl() ?? null,
 })
 
-const desktopShell = inject(DesktopShellKey, false)
-const macTrafficReserve = computed(() =>
-  desktopShell
-  && typeof navigator !== 'undefined'
-  && navigator.platform.toLowerCase().includes('mac'),
-)
+const macTrafficReserve = useMacTrafficReserve()
 
 const shouldAnimateEntry = safeSessionGet(ONBOARDING_KEYS.entryAnimation) === '1'
 if (shouldAnimateEntry) {
@@ -103,7 +108,11 @@ onMounted(() => {
 // the desktop settings sidebar's pinned-open intent AND prevent the web
 // browser from falling through to its native Mod+B (bookmarks bar).
 const workspaceTabs = useWorkspaceTabsStore()
+const keyboardRegistry = inject(KEYBOARD_REGISTRY, null)
+if (keyboardRegistry) onScopeDispose(registerWorkbenchCommands(keyboardRegistry, workspaceTabs))
 const { isMobile } = storeToRefs(workspaceTabs)
+const { currentBotId } = storeToRefs(useChatStore())
+const { galleryOpen } = useChatExamplesUi()
 const route = useRoute()
 useKeyboardCommand(appKeyboardCommands.toggleSidebar, () => {
   if (route.path.startsWith('/settings')) return true

@@ -11,7 +11,7 @@ var (
 	// ErrPlatformUnsupported means the catalog manifest does not list the
 	// probed platform of the target.
 	ErrPlatformUnsupported = errors.New("workspace dependency does not support the target platform")
-	// ErrBusy means another operation on the same (bot, target, dependency)
+	// ErrBusy means another operation on the same (bot, dependency)
 	// is in progress, either in this process or, through the workspace lock,
 	// in another Server instance. Operations never queue.
 	ErrBusy = errors.New("workspace dependency operation already in progress")
@@ -21,9 +21,6 @@ var (
 	// ErrWorkspaceMissing means the native workspace container has not been
 	// created; the caller must create it before installing anything.
 	ErrWorkspaceMissing = errors.New("workspace has not been created")
-	// ErrRemoteOffline means the remote workspace target cannot be reached.
-	// Remote targets are never woken up by the Server.
-	ErrRemoteOffline = errors.New("remote workspace is offline")
 	// ErrRollbackUnavailable means state.json records no previous version or
 	// its versions/<previous> directory is gone.
 	ErrRollbackUnavailable = errors.New("no previous version available to roll back to")

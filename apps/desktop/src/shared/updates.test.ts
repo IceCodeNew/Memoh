@@ -8,14 +8,16 @@ describe('desktop update state', () => {
   it('marks builds without a configured feed as unavailable', () => {
     expect(createInitialDesktopUpdateState('1.2.3', false)).toEqual({
       status: 'unavailable',
+      autoUpdate: true,
       currentVersion: '1.2.3',
       latestVersion: null,
       progress: null,
       error: 'No update feed URL is configured.',
+      releaseNotes: null,
     })
   })
 
-  it('tracks the manual download lifecycle and clamps progress', () => {
+  it('tracks the automatic download lifecycle and clamps progress', () => {
     const initial = createInitialDesktopUpdateState('1.2.3')
     const available = reduceDesktopUpdateState(initial, {
       type: 'available',
@@ -30,7 +32,8 @@ describe('desktop update state', () => {
     })
 
     expect(available).toMatchObject({
-      status: 'available',
+      status: 'downloading',
+      progress: null,
       latestVersion: '1.3.0',
     })
     expect(downloading).toMatchObject({
@@ -42,6 +45,27 @@ describe('desktop update state', () => {
       latestVersion: '1.3.0',
       progress: 100,
     })
+  })
+
+  it('carries release notes from available into downloaded and clears them when up-to-date', () => {
+    const initial = createInitialDesktopUpdateState('1.2.3')
+    const available = reduceDesktopUpdateState(initial, {
+      type: 'available',
+      latestVersion: '1.3.0',
+      releaseNotes: '### Fixes\n- something',
+    })
+    expect(available.releaseNotes).toBe('### Fixes\n- something')
+
+    // Downloaded without fresh notes keeps what `available` carried.
+    const downloaded = reduceDesktopUpdateState(available, { type: 'downloaded' })
+    expect(downloaded.releaseNotes).toBe('### Fixes\n- something')
+
+    // A later check that finds nothing new clears stale notes.
+    const upToDate = reduceDesktopUpdateState(downloaded, {
+      type: 'not-available',
+      latestVersion: '1.3.0',
+    })
+    expect(upToDate.releaseNotes).toBeNull()
   })
 
   it('normalizes update errors for the renderer', () => {

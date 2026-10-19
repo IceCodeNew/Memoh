@@ -72,7 +72,7 @@ dep_switch() {
   case "$MEMOH_DEP_OS" in
     darwin)
       # BSD mv has no -T. ln -sfh is unlink+create, close enough to atomic for
-      # a user-confirmed foreground operation on a remote target.
+      # the serialized foreground dependency operation.
       ln -sfh "$1" "$MEMOH_DEP_HOME/current" ;;
     *)
       ln -sfn "$1" "$MEMOH_DEP_HOME/current.tmp"

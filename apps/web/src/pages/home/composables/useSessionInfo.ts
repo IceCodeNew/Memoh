@@ -3,7 +3,7 @@ import { storeToRefs } from 'pinia'
 import { useI18n } from 'vue-i18n'
 import { useQuery, useQueryCache } from '@pinia/colada'
 import { toast } from '@felinic/ui'
-import { getBotsByBotIdSessionsBySessionIdStatus, postBotsByBotIdSessionsBySessionIdCompact } from '@memohai/sdk'
+import { getBotsByBotIdSessionsBySessionIdStatus } from '@memohai/sdk'
 import type { HandlersSessionInfoResponse } from '@memohai/sdk'
 import { resolveApiErrorMessage } from '@/utils/api-error'
 import { useChatStore } from '@/store/chat-list'
@@ -75,17 +75,15 @@ export function useSessionInfo(options: UseSessionInfoOptions = {}) {
     return ((estimatedTokens.value ?? usedTokens.value) / contextWindow.value) * 100
   })
 
-  // Compaction lives here (not in a component) so every surface that offers
-  // it — the session info panel's button and the composer's /compact slash —
-  // runs the identical action: same API call, same toasts, same cache
-  // invalidation of this composable's own query.
+  // Runtime-owned compaction shares the session lock and feedback; callers
+  // supply the transport.
   const { t } = useI18n()
   const queryCache = useQueryCache()
   const isCompacting = computed(() => chatStore.isSessionCompacting(
     currentBotId.value ?? '', sessionId.value ?? '',
   ))
 
-  async function triggerCompact() {
+  async function runCompaction(execute: () => Promise<unknown>) {
     const botId = currentBotId.value
     const sid = sessionId.value
     if (!botId || !sid) return
@@ -93,10 +91,7 @@ export function useSessionInfo(options: UseSessionInfoOptions = {}) {
     if (!finish) return
 
     try {
-      await postBotsByBotIdSessionsBySessionIdCompact({
-        path: { bot_id: botId, session_id: sid },
-        throwOnError: true,
-      })
+      await execute()
       toast.success(t('chat.compactSuccess'))
       queryCache.invalidateQueries({ key: ['session-status', botId, sid] })
     }
@@ -123,6 +118,6 @@ export function useSessionInfo(options: UseSessionInfoOptions = {}) {
     currentBotId,
     sessionId,
     isCompacting,
-    triggerCompact,
+    runCompaction,
   }
 }

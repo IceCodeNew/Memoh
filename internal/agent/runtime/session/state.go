@@ -60,6 +60,15 @@ func pendingDecisionEvent(event native.StreamEvent) bool {
 	return status == "" || strings.EqualFold(status, "pending")
 }
 
+func terminalDecisionEvent(event native.StreamEvent) bool {
+	switch event.Type {
+	case native.EventToolApprovalRequest, native.EventUserInputRequest:
+		return !pendingDecisionEvent(event)
+	default:
+		return false
+	}
+}
+
 // decisionEventID identifies the decision an approval or user-input event
 // belongs to, pairing its pending event with the later terminal status.
 func decisionEventID(event native.StreamEvent) string {
@@ -85,12 +94,11 @@ func runtimeRunPatch(snapshot Snapshot, status, runError, lease bool) RuntimeDel
 	if status {
 		value := run.Status
 		patch.Status = &value
+		patch.setRetry(run.Retry)
 	}
 	if runError {
 		code := run.ErrorCode
 		patch.ErrorCode = &code
-		value := run.Error
-		patch.Error = &value
 	}
 	if lease {
 		value := time.Time{}
@@ -100,6 +108,15 @@ func runtimeRunPatch(snapshot Snapshot, status, runError, lease bool) RuntimeDel
 		patch.OwnerLeaseExpiresAt = &value
 	}
 	return RuntimeDelta{Run: patch}
+}
+
+func (patch *CurrentRunPatch) setRetry(retry *RunRetryView) {
+	if retry == nil {
+		patch.Retry, patch.ClearRetry = nil, true
+		return
+	}
+	value := *retry
+	patch.Retry, patch.ClearRetry = &value, false
 }
 
 // leaseExpired is independent of process-local control. Once the backend
@@ -141,7 +158,13 @@ func (m *Manager) markLostIfExpired(snapshot *Snapshot, now time.Time) bool {
 	snapshot.Seq++
 	snapshot.UpdatedAt = now
 	run.Status = RunStatusLost
-	run.Error = "runtime owner lease expired"
+	run.Retry = nil
+	// Until the reaper records the run, the view names the failure by the
+	// code the reaper records for an expired lease. A code the run already
+	// failed with is kept: a proposal that holds it wins in the ledger too.
+	if run.ErrorCode == "" {
+		run.ErrorCode = runErrorOwnerLeaseExpired
+	}
 	run.UpdatedAt = now
 	run.OwnerLeaseExpiresAt = nil
 	return true
@@ -253,6 +276,31 @@ func normalizeRequestUserTurn(turn *chatview.UITurn) (*chatview.UITurn, error) {
 	clone.Attachments = append([]chatview.UIAttachment(nil), turn.Attachments...)
 	clone.Messages = append([]chatview.UIMessage(nil), turn.Messages...)
 	return &clone, nil
+}
+
+// stampRunTurnPosition numbers the run's own request turn from the position
+// admission drew. Turns persisted later (an applied steer opens its own
+// canonical turn per SR-TURN-001) arrive from the history projection already
+// numbered, so this only fills the one turn the runtime allocated itself and
+// never overwrites a position the database decided.
+func stampRunTurnPosition(run *CurrentRunView) {
+	if run == nil || run.TurnPosition <= 0 {
+		return
+	}
+	runTurnID := strings.TrimSpace(run.TurnID)
+	if runTurnID == "" {
+		return
+	}
+	for i := range run.UserTurns {
+		if run.UserTurns[i].TurnPosition != nil {
+			continue
+		}
+		if strings.TrimSpace(run.UserTurns[i].TurnID) != runTurnID {
+			continue
+		}
+		position := run.TurnPosition
+		run.UserTurns[i].TurnPosition = &position
+	}
 }
 
 func leaseRenewInterval(ttl time.Duration) time.Duration {

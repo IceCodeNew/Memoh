@@ -10,6 +10,7 @@ import {
   InputGroupButton,
   Label,
   Separator,
+  SettingsSection,
   Spinner,
   Tooltip,
   TooltipContent,
@@ -17,32 +18,36 @@ import {
   TooltipTrigger,
 } from '@felinic/ui'
 import { SquarePen, CircleHelp, Bot, Dices } from 'lucide-vue-next'
-import { ref, reactive, computed, watch } from 'vue'
+import { ref, reactive, computed, onMounted } from 'vue'
 import { FieldStack, InlineLoadingRow, toast } from '@felinic/ui'
 import { useI18n } from 'vue-i18n'
 import { useQuery, useQueryCache } from '@pinia/colada'
-import { getModels, getProviders, getProvidersByIdModels, getMemoryProviders, getAcpProfiles, putModelsById, type AcpprofilePublicProfile } from '@memohai/sdk'
-import { getBotsQueryKey } from '@memohai/sdk/colada'
-import { storeToRefs } from 'pinia'
-import { useOnboarding } from '@/composables/useOnboarding'
+import { getBots, getBotsByBotIdSettings, getModels, getProviders, getProvidersByIdModels, putModelsById } from '@memohai/sdk'
+import { markOnboardingCompleted, useOnboarding } from '@/composables/useOnboarding'
+import { useUserStore } from '@/store/user'
+import { readCreatedBotSession } from '@/pages/bots/created-bot-session'
+import { safeLocalGet } from '@/utils/safe-storage'
+import { apiErrorStatus } from '@/utils/api-error'
 import { useAvatarInitials } from '@/composables/useAvatarInitials'
 import { defaultAclPreset } from '@/constants/acl-presets'
 import { randomCatName } from '@/constants/bot-name-presets'
-import { acpAgentDisplayName, normalizeACPAgentID, withACPMetadata, type ACPForm } from '@/utils/acp'
-import { BOT_AGENT_RUNTIME_CLAUDE_CODE, BOT_AGENT_RUNTIME_CODEX, directBotAgentMetadata } from '@/utils/bot-agent'
+import { externalAgentDisplayName } from '@/utils/external-agent'
+import { directBotAgentMetadata, isDirectBotAgentRuntime } from '@/utils/bot-agent'
 import { useBotCreateProgressStore } from '@/store/bot-create-progress'
 import AvatarEditDialog from '@/pages/bots/components/avatar-edit-dialog.vue'
-import BotCreateTerminal from '@/pages/bots/components/bot-create-terminal.vue'
 import ModelSelect from '@/pages/bots/components/model-select.vue'
 import AgentTypePill from '@/pages/bots/components/agent-type-pill.vue'
-import AcpSetupPanel, { type AcpSetupSelection } from '@/pages/bots/components/acp-setup-panel.vue'
+import AgentAuthorization from '@/pages/bots/components/agent-authorization.vue'
+import { readAgentAuthorizationDraft } from '@/composables/useAgentAuthorization'
 import { MEMOH_AGENT_VALUE } from '@/pages/bots/components/agent-type'
 import { useStepTransition } from '../useStepTransition'
 import {
   clearOnboardingBotResult,
   readOnboardingProviderId,
+  readOnboardingBotResult,
   writeOnboardingBotResult,
 } from '../session'
+import { ONBOARDING_KEYS } from '../constants'
 import { mergeOnboardingModels } from './provider-setup'
 import StepFrame from '../components/step-frame.vue'
 import StepExitShell from '../components/step-exit-shell.vue'
@@ -50,37 +55,78 @@ import HintBox from '../components/hint-box.vue'
 import FooterNav from '../components/footer-nav.vue'
 
 const { t } = useI18n()
-const { nextStep, prevStep } = useOnboarding()
+const { nextStep, prevStep, skipToEnd } = useOnboarding()
 const queryCache = useQueryCache()
 const { visible, exiting, leave } = useStepTransition()
 
 const submitting = ref(false)
-
 const store = useBotCreateProgressStore()
-const { lines: terminalLines, status: createStatus } = storeToRefs(store)
+const userStore = useUserStore()
 
-const agentType = ref(MEMOH_AGENT_VALUE)
-const acpError = ref('')
-const acpSetupPanelRef = ref<InstanceType<typeof AcpSetupPanel> | null>(null)
-const acpSelection = ref<AcpSetupSelection | null>(null)
-
-const { data: acpProfileData } = useQuery({
-  key: ['acp-profiles'],
-  query: async () => {
-    const { data } = await getAcpProfiles({ throwOnError: true })
-    return data
-  },
+onMounted(() => {
+  if (readOnboardingBotResult()) {
+    nextStep()
+    return
+  }
+  void adoptExistingBot()
 })
-const acpProfiles = computed(() => acpProfileData.value?.items ?? [])
-// codex / claude-code are direct runtimes with no ACP profile: no setup
-// fields here, credentials are configured on the Bot's settings page.
+
+// The wizard's progress lives in this tab's session storage, so a new tab or
+// device starts over at this step. Onboarding exists to give the user a first
+// Bot; if they already own one, finish with it instead of creating another
+// (which may also exceed the team's resources).
+async function adoptExistingBot() {
+  // A dev replay explicitly wants to exercise creation again; a creation that
+  // is in flight or resumable in this tab is still owned by the progress step.
+  if (import.meta.env.DEV && safeLocalGet(ONBOARDING_KEYS.forceOnboarding)?.trim() === '1') return
+  if (store.status !== 'idle' || readCreatedBotSession(true)) return
+  submitting.value = true
+  try {
+    const { data } = await getBots({ throwOnError: true })
+    const owned = (data.items ?? []).filter(item => item.id
+      && item.owner_user_id === userStore.userInfo.id && item.status !== 'deleting')
+    const adopted = owned.find(item => item.status === 'ready')
+    if (!adopted?.id) {
+      // A Bot still provisioning or whose workspace failed goes to the progress
+      // step, which follows it to ready or offers Retry / Continue later on that
+      // same Bot instead of creating another.
+      const pending = owned.find(item => item.status === 'creating') ?? owned[0]
+      if (!pending?.id) return
+      void store.restore({
+        botId: pending.id, botName: pending.name ?? '', displayName: pending.display_name ?? '',
+        avatarUrl: pending.avatar_url, setupError: null,
+      }, true)
+      leave(nextStep)
+      return
+    }
+    let modelConfigured = false
+    try {
+      const { data: settings } = await getBotsByBotIdSettings({ path: { bot_id: adopted.id }, throwOnError: true })
+      // A direct Agent (Codex / Claude Code) answers without a chat model.
+      modelConfigured = !!settings.chat_model_id || !!settings.default_bot_agent_id
+    } catch (error) {
+      // Deleted in the meantime: nothing to adopt, so create as usual.
+      if (apiErrorStatus(error) === 404) return
+      // The Bot still exists; creating another would duplicate it. The final
+      // step then points the user at Bot Settings to check the model.
+    }
+    writeOnboardingBotResult({ botId: adopted.id, modelConfigured })
+    void markOnboardingCompleted().catch(() => {})
+    leave(skipToEnd)
+  } catch {
+    // Without the list the user can still create a Bot as before.
+  } finally {
+    submitting.value = false
+  }
+}
+
+const authorizationKey = 'memoh:onboarding:agent-authorization'
+const agentType = ref(readAgentAuthorizationDraft(authorizationKey)?.runtime ?? MEMOH_AGENT_VALUE)
+const account = ref({ ready: false, busy: false, id: '', auth: '' })
+const accountPanel = ref<InstanceType<typeof AgentAuthorization> | null>(null)
 const selectedDirectRuntime = computed(() => {
   const value = agentType.value
-  return value === BOT_AGENT_RUNTIME_CODEX || value === BOT_AGENT_RUNTIME_CLAUDE_CODE ? value : ''
-})
-const selectedAcpProfile = computed<AcpprofilePublicProfile | null>(() => {
-  if (agentType.value === MEMOH_AGENT_VALUE || selectedDirectRuntime.value) return null
-  return acpProfiles.value.find(profile => normalizeACPAgentID(profile.id) === agentType.value) ?? null
+  return isDirectBotAgentRuntime(value) ? value : ''
 })
 const onboardingProviderId = readOnboardingProviderId()
 
@@ -90,7 +136,6 @@ const form = reactive({
   display_name: randomCatName(),
   avatar_url: '',
   chat_model_id: '',
-  memory_provider_id: '',
 })
 
 const avatarDialogOpen = ref(false)
@@ -99,24 +144,6 @@ const avatarFallback = useAvatarInitials(() => form.display_name || '')
 function rollRandomName() {
   form.display_name = randomCatName(form.display_name)
 }
-
-const { data: memoryProviderData } = useQuery({
-  key: ['memory-providers'],
-  query: async () => {
-    const { data } = await getMemoryProviders({ throwOnError: true })
-    return data
-  },
-})
-
-const memoryProviders = computed(() => memoryProviderData.value ?? [])
-
-watch(memoryProviders, (list) => {
-  if (form.memory_provider_id) return
-  const builtin = list.find(p => p.provider === 'builtin')
-  if (builtin?.id) {
-    form.memory_provider_id = builtin.id
-  }
-}, { immediate: true })
 
 const { data: modelData } = useQuery({
   key: ['models'],
@@ -158,9 +185,10 @@ const models = computed(() => mergeOnboardingModels(
 const providers = computed(() => providerData.value ?? [])
 
 const canSubmit = computed(() => {
+  if (selectedDirectRuntime.value && (!account.value.ready || account.value.busy)) return false
   if (!form.display_name.trim()) return false
   // Agent runtimes resolve their own model; only a Memoh-model bot needs one.
-  if (selectedAcpProfile.value || selectedDirectRuntime.value || !onboardingProviderId) return true
+  if (selectedDirectRuntime.value || !onboardingProviderId) return true
   if (onboardingModelsStatus.value !== 'success') return false
   return !!form.chat_model_id
 })
@@ -172,44 +200,8 @@ const ctaLabel = computed(() => {
   return t('onboarding.next')
 })
 
-function buildMetadata(): Record<string, unknown> | undefined {
-  let metadata: Record<string, unknown> = {}
-
-  if (selectedDirectRuntime.value) return undefined
-
-  const selection = acpSelection.value
-  if (selection) {
-    const acpForm: ACPForm = {
-      agents: {
-        [selection.agentId]: {
-          enabled: true,
-          setup_mode: selection.setupMode,
-          managed: selection.setupMode === 'api_key' ? selection.managed : {},
-        },
-      },
-    }
-    metadata = withACPMetadata(metadata, acpForm, acpProfiles.value)
-  }
-
-  return Object.keys(metadata).length > 0 ? metadata : undefined
-}
-
 async function handleSubmit() {
   if (!canSubmit.value || submitting.value) return
-
-  if (selectedAcpProfile.value) {
-    const panel = acpSetupPanelRef.value
-    const missing = panel?.missingRequiredField()
-    if (missing) {
-      acpError.value = t('bots.agentCreate.requiredError', { field: missing.label || missing.id || '' })
-      return
-    }
-    const selection = panel?.selection()
-    if (!selection) return
-    acpSelection.value = selection
-  } else {
-    acpSelection.value = null
-  }
 
   clearOnboardingBotResult()
   submitting.value = true
@@ -238,80 +230,37 @@ async function handleSubmit() {
     }
   }
 
-  // The store drives the inline terminal reactively while we await completion.
-  const createResult = await store.start({
+  // The dedicated progress step owns the remaining creation and installation.
+  accountPanel.value?.handoff()
+  void store.start({
     display_name: form.display_name.trim(),
     avatar_url: form.avatar_url.trim() || undefined,
     timezone: undefined,
     is_active: true,
     acl_preset: defaultAclPreset,
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    metadata: buildMetadata() as any,
     wait_for_ready: true,
   }, {
+    onboarding: true,
     display: {
       display_name: form.display_name.trim(),
       avatar_url: form.avatar_url.trim() || undefined,
     },
     settings: {
       chat_model_id: form.chat_model_id || undefined,
-      memory_provider_id: form.memory_provider_id || undefined,
+      memory_enabled: true,
     },
     ...(selectedDirectRuntime.value
       ? {
           agent: {
-            name: acpAgentDisplayName(selectedDirectRuntime.value, selectedDirectRuntime.value),
+            name: externalAgentDisplayName(selectedDirectRuntime.value, selectedDirectRuntime.value),
             provider: selectedDirectRuntime.value,
-            metadata: directBotAgentMetadata(selectedDirectRuntime.value),
+            metadata: { ...directBotAgentMetadata(selectedDirectRuntime.value), auth: account.value.auth },
+            authorizationId: account.value.id,
           },
         }
-      : selectedAcpProfile.value && {
-          agent: {
-            name: selectedAcpProfile.value.display_name?.trim() || normalizeACPAgentID(selectedAcpProfile.value.id),
-            provider: normalizeACPAgentID(selectedAcpProfile.value.id),
-          },
-        }),
+      : {}),
   })
-  submitting.value = false
-
-  if (store.status === 'error') {
-    toast.error(store.setupError ?? t('common.saveFailed'))
-    store.reset()
-    return
-  }
-
-  const botId = store.bot?.id
-  if (!botId) {
-    toast.error(store.setupError ?? t('common.saveFailed'))
-    store.reset()
-    return
-  }
-
-  if (acpSelection.value && (!createResult.agentApplied || !createResult.agentId)) {
-    acpSelection.value = null
-  }
-
-  const stagedAgentId = selectedDirectRuntime.value || acpSelection.value?.agentId || ''
-  writeOnboardingBotResult({
-    botId,
-    modelConfigured: !!form.chat_model_id && createResult.settingsApplied,
-    ...(stagedAgentId && createResult.agentId && {
-      agent: {
-        agentId: stagedAgentId,
-        botAgentId: createResult.agentId,
-      },
-    }),
-  })
-  if (store.setupError) {
-    toast.error(store.setupError)
-  } else if (!createResult.settingsApplied) {
-    toast.error(t('common.saveFailed'))
-  }
-
-  void queryCache.invalidateQueries({ key: getBotsQueryKey() })
-
   leave(nextStep)
-  store.reset()
 }
 
 </script>
@@ -326,6 +275,7 @@ async function handleSubmit() {
       >
         <div class="min-h-0 flex-1 overflow-y-auto -mx-2 px-2 -my-1 py-1">
           <form
+            :inert="submitting"
             @submit.prevent="handleSubmit"
           >
             <div
@@ -408,16 +358,19 @@ async function handleSubmit() {
             >
               <AgentTypePill
                 v-model="agentType"
-                :profiles="acpProfiles"
+                :profiles="[]"
                 class="mb-3"
               />
-              <p
-                v-if="selectedDirectRuntime"
-                class="text-sm text-muted-foreground"
-              >
-                {{ $t('bots.agentCreate.directSetupHint') }}
-              </p>
-              <template v-else-if="!selectedAcpProfile">
+              <SettingsSection v-if="selectedDirectRuntime">
+                <AgentAuthorization
+                  :key="selectedDirectRuntime"
+                  ref="accountPanel"
+                  :runtime="selectedDirectRuntime"
+                  :storage-key="authorizationKey"
+                  @status="account = $event"
+                />
+              </SettingsSection>
+              <template v-if="agentType === MEMOH_AGENT_VALUE">
                 <div class="mb-2 flex items-center gap-2">
                   <Label>{{ $t('bots.settings.chatModel') }}</Label>
                   <Tooltip>
@@ -467,15 +420,9 @@ async function handleSubmit() {
                   :providers="providers"
                   model-type="chat"
                   :placeholder="$t('onboarding.bot.model.selectPlaceholder')"
+                  hover-lighten
                 />
               </template>
-              <AcpSetupPanel
-                v-else
-                ref="acpSetupPanelRef"
-                v-model:error-message="acpError"
-                :profile="selectedAcpProfile"
-                :oauth-hint="t('onboarding.bot.acp.deferredHint')"
-              />
             </div>
 
             <HintBox
@@ -484,13 +431,6 @@ async function handleSubmit() {
             >
               {{ $t('bots.createBotWaitHint') }}
             </HintBox>
-            <div
-              v-if="(createStatus === 'creating' || createStatus === 'error') && terminalLines.length"
-              class="mt-3 transition-all duration-[350ms] ease-out delay-[220ms]"
-              :class="visible ? 'opacity-100 translate-y-0' : 'opacity-0 -translate-y-3'"
-            >
-              <BotCreateTerminal :lines="terminalLines" />
-            </div>
           </form>
         </div>
 

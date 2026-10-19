@@ -247,6 +247,54 @@ func TestBuildPersistInputsKeepsAttachmentOnlyUserDisplayTextEmpty(t *testing.T)
 	}
 }
 
+func TestBuildPersistInputsLiftsToolCallDiffsToRowMetadata(t *testing.T) {
+	t.Parallel()
+
+	service := &Service{
+		settingsService: settings.NewService(slog.New(slog.DiscardHandler), &storeRoundSettingsQueries{}, nil, nil),
+		logger:          slog.New(slog.DiscardHandler),
+	}
+	diff := "--- a/f\n+++ b/f\n@@ -1 +1 @@\n-old\n+new\n"
+	parts, err := json.Marshal([]map[string]any{{
+		"type":       "tool-call",
+		"toolCallId": "call-1",
+		"toolName":   "edit",
+		"input":      map[string]any{"path": "f"},
+		"providerMetadata": map[string]any{
+			"diff":               diff,
+			"execution_location": map[string]any{"kind": "remote"},
+		},
+	}})
+	if err != nil {
+		t.Fatalf("marshal parts: %v", err)
+	}
+
+	inputs, err := service.buildPersistInputs(context.Background(), ChatRequest{
+		BotID:    storeRoundBotID,
+		ThreadID: "33333333-3333-3333-3333-333333333333",
+	}, []ModelMessage{
+		{Role: "assistant", Content: parts},
+	}, "", storeRoundOptions{})
+	if err != nil {
+		t.Fatalf("buildPersistInputs() error = %v", err)
+	}
+	if len(inputs) != 1 {
+		t.Fatalf("persist inputs = %d, want 1", len(inputs))
+	}
+	// The diff must not live in the content column — that is what the history
+	// byte budget measures — while sibling providerMetadata stays put.
+	if bytes.Contains(inputs[0].Content, []byte(`"diff"`)) {
+		t.Fatalf("content still carries the diff: %s", inputs[0].Content)
+	}
+	if !bytes.Contains(inputs[0].Content, []byte(`"execution_location"`)) {
+		t.Fatalf("content lost sibling providerMetadata: %s", inputs[0].Content)
+	}
+	diffs, ok := inputs[0].Metadata[messagepkg.ToolCallDiffsMetadataKey].(map[string]string)
+	if !ok || diffs["call-1"] != diff {
+		t.Fatalf("row metadata diffs = %#v", inputs[0].Metadata)
+	}
+}
+
 func TestStoreRoundPersistsLifecycleMetadataOnLastAssistant(t *testing.T) {
 	t.Parallel()
 

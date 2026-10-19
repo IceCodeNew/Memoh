@@ -2,14 +2,11 @@ import { describe, expect, it } from 'vitest'
 import { macWindowChromeOptions } from './window-chrome'
 
 describe('macWindowChromeOptions', () => {
-  it('uses the native sidebar material on macOS', () => {
+  it('uses hidden title-bar chrome on macOS', () => {
     expect(macWindowChromeOptions('darwin', 'memoh-chat')).toMatchObject({
-      backgroundColor: '#00000000',
       tabbingIdentifier: 'memoh-chat',
       titleBarStyle: 'hidden',
-      transparent: true,
-      vibrancy: 'sidebar',
-      visualEffectState: 'followWindow',
+      trafficLightPosition: { x: 14, y: 13 },
     })
   })
 
