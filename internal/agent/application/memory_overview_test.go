@@ -116,7 +116,7 @@ func TestWriteMemoryMarksPostTurnWritesAsConversationWrites(t *testing.T) {
 	}
 }
 
-func TestRefreshMemoryOverviewIfCold(t *testing.T) {
+func TestRefreshMemoryOverview(t *testing.T) {
 	now := time.Date(2026, 10, 19, 12, 0, 0, 0, time.UTC)
 	previous := memoryOverviewNow
 	memoryOverviewNow = func() time.Time { return now }
@@ -134,6 +134,7 @@ func TestRefreshMemoryOverviewIfCold(t *testing.T) {
 		// otherActive is when another session of the bot last ran in this
 		// process; zero means it never did.
 		otherActive       time.Time
+		otherTTL          string
 		activeRuns        []string
 		activeErr         error
 		wantRefreshes     int
@@ -152,6 +153,9 @@ func TestRefreshMemoryOverviewIfCold(t *testing.T) {
 		{name: "subagent session never refreshes", stale: true, sessionID: overviewTestSessionID, sessionType: "subagent"},
 		{name: "another warm session defers the refresh", stale: true, sessionID: overviewTestSessionID, otherActive: now.Add(-2 * time.Minute), wantLookups: 1},
 		{name: "another session idle past the ttl does not defer", stale: true, sessionID: overviewTestSessionID, otherActive: now.Add(-6 * time.Minute), wantRefreshes: 1, wantLookups: 1, wantActiveLookups: 1},
+		{name: "5m caller preserves another session's 1h cache", stale: true, ttl: "5m", sessionID: overviewTestSessionID, otherActive: now.Add(-10 * time.Minute), otherTTL: "1h", wantLookups: 1},
+		{name: "1h caller does not extend another session's expired 5m cache", stale: true, ttl: "1h", sessionID: overviewTestSessionID, otherActive: now.Add(-10 * time.Minute), otherTTL: "5m", wantRefreshes: 1, wantLookups: 1, wantActiveLookups: 1},
+		{name: "other session expires exactly at its ttl", stale: true, sessionID: overviewTestSessionID, otherActive: now.Add(-5 * time.Minute), wantRefreshes: 1, wantLookups: 1, wantActiveLookups: 1},
 		{name: "another session with a run in flight defers the refresh", stale: true, sessionID: overviewTestSessionID, activeRuns: []string{overviewTestOtherSessionID}, wantLookups: 1, wantActiveLookups: 1},
 		{name: "the session's own run in flight does not defer", stale: true, sessionID: overviewTestSessionID, activeRuns: []string{overviewTestSessionID}, wantRefreshes: 1, wantLookups: 1, wantActiveLookups: 1},
 		{name: "active run lookup failure defers the refresh", stale: true, sessionID: overviewTestSessionID, activeErr: errors.New("db down"), wantLookups: 1, wantActiveLookups: 1},
@@ -166,10 +170,10 @@ func TestRefreshMemoryOverviewIfCold(t *testing.T) {
 			queries := &lastRunQueries{lastRun: tc.lastRun, err: tc.lookupErr, activeRuns: tc.activeRuns, activeErr: tc.activeErr}
 			service := overviewRefreshService(provider, queries)
 			if !tc.otherActive.IsZero() {
-				service.memoryOverviewActivity.noteTurn(storeRoundBotID, overviewTestOtherSessionID, tc.otherActive)
+				service.memoryOverviewActivity.noteTurn(storeRoundBotID, overviewTestOtherSessionID, tc.otherActive, promptCacheTTLDuration(tc.otherTTL))
 			}
 
-			service.refreshMemoryOverviewIfCold(context.Background(), storeRoundBotID, tc.sessionID, tc.sessionType, tc.ttl)
+			service.refreshMemoryOverview(context.Background(), storeRoundBotID, tc.sessionID, tc.sessionType, tc.ttl)
 
 			if provider.refreshes != tc.wantRefreshes {
 				t.Fatalf("refreshes = %d, want %d", provider.refreshes, tc.wantRefreshes)
@@ -184,7 +188,7 @@ func TestRefreshMemoryOverviewIfCold(t *testing.T) {
 	}
 }
 
-func TestRefreshMemoryOverviewIfColdWaitsForAnotherSessionThatJustRan(t *testing.T) {
+func TestRefreshMemoryOverviewWaitsForAnotherSessionThatJustRan(t *testing.T) {
 	now := time.Date(2026, 10, 19, 12, 0, 0, 0, time.UTC)
 	previous := memoryOverviewNow
 	memoryOverviewNow = func() time.Time { return now }
@@ -198,17 +202,17 @@ func TestRefreshMemoryOverviewIfColdWaitsForAnotherSessionThatJustRan(t *testing
 
 	// A warm turn of the first session leaves MEMORY.md alone but records the
 	// session as active.
-	service.refreshMemoryOverviewIfCold(context.Background(), storeRoundBotID, overviewTestOtherSessionID, "", "")
+	service.refreshMemoryOverview(context.Background(), storeRoundBotID, overviewTestOtherSessionID, "", "")
 	// A new session four minutes later must not break the first one's cache.
 	now = now.Add(4 * time.Minute)
 	queries.lastRun = time.Time{}
-	service.refreshMemoryOverviewIfCold(context.Background(), storeRoundBotID, overviewTestSessionID, "", "")
+	service.refreshMemoryOverview(context.Background(), storeRoundBotID, overviewTestSessionID, "", "")
 	if provider.refreshes != 0 {
 		t.Fatalf("refreshes = %d, want the new session to wait for the warm one", provider.refreshes)
 	}
 	// Once both sessions have been idle past the TTL, a cold turn refreshes.
 	now = now.Add(6 * time.Minute)
-	service.refreshMemoryOverviewIfCold(context.Background(), storeRoundBotID, "55555555-5555-5555-5555-555555555555", "", "")
+	service.refreshMemoryOverview(context.Background(), storeRoundBotID, "55555555-5555-5555-5555-555555555555", "", "")
 	if provider.refreshes != 1 {
 		t.Fatalf("refreshes = %d, want one once no other session is warm", provider.refreshes)
 	}
@@ -219,13 +223,16 @@ func TestSessionActivityRunEndOnlyUpdatesTrackedSessions(t *testing.T) {
 
 	start := time.Date(2026, 10, 19, 12, 0, 0, 0, time.UTC)
 	var activity sessionActivity
-	activity.noteTurn(storeRoundBotID, overviewTestOtherSessionID, start)
+	activity.noteTurn(storeRoundBotID, overviewTestOtherSessionID, start, time.Hour)
 
 	activity.noteRunEnd(storeRoundBotID, overviewTestOtherSessionID, start.Add(10*time.Minute))
 	activity.noteRunEnd(storeRoundBotID, "subagent-session", start.Add(10*time.Minute))
 
-	if !activity.warmOther(storeRoundBotID, overviewTestSessionID, start.Add(9*time.Minute)) {
+	if !activity.warmOther(storeRoundBotID, overviewTestSessionID, start.Add(50*time.Minute)) {
 		t.Fatal("a run that ended after a long turn must keep its session warm from the run's end")
+	}
+	if activity.warmOther(storeRoundBotID, overviewTestSessionID, start.Add(70*time.Minute)) {
+		t.Fatal("the session must expire one TTL after run end")
 	}
 	if activity.warmOther(storeRoundBotID, overviewTestOtherSessionID, start) {
 		t.Fatal("a session never counts as warm against itself")
@@ -240,34 +247,34 @@ func TestSessionActivityPrunesSessionsPastTheLongestTTL(t *testing.T) {
 
 	start := time.Date(2026, 10, 19, 12, 0, 0, 0, time.UTC)
 	var activity sessionActivity
-	activity.noteTurn(storeRoundBotID, overviewTestOtherSessionID, start)
-	activity.noteTurn(storeRoundBotID, overviewTestSessionID, start.Add(memoryOverviewActivityHorizon+time.Minute))
+	activity.noteTurn(storeRoundBotID, overviewTestOtherSessionID, start, 5*time.Minute)
+	activity.noteTurn(storeRoundBotID, overviewTestSessionID, start.Add(memoryOverviewActivityHorizon+time.Minute), 5*time.Minute)
 
 	if _, tracked := activity.last[storeRoundBotID][overviewTestOtherSessionID]; tracked {
 		t.Fatal("activity older than the longest prompt cache TTL should be pruned")
 	}
 }
 
-func TestRefreshMemoryOverviewIfColdSurvivesRefreshFailure(t *testing.T) {
+func TestRefreshMemoryOverviewSurvivesRefreshFailure(t *testing.T) {
 	t.Parallel()
 
 	provider := &overviewRefreshProvider{stale: true, refreshErr: errors.New("workspace unavailable")}
 	service := overviewRefreshService(provider, &lastRunQueries{})
 
-	service.refreshMemoryOverviewIfCold(context.Background(), storeRoundBotID, overviewTestSessionID, "", "")
+	service.refreshMemoryOverview(context.Background(), storeRoundBotID, overviewTestSessionID, "", "")
 
 	if provider.refreshes != 1 || !provider.stale {
 		t.Fatalf("refreshes = %d stale = %v, want one failed attempt that leaves the overview stale", provider.refreshes, provider.stale)
 	}
 }
 
-func TestRefreshMemoryOverviewIfColdIgnoresProvidersWithoutRefresher(t *testing.T) {
+func TestRefreshMemoryOverviewIgnoresProvidersWithoutRefresher(t *testing.T) {
 	t.Parallel()
 
 	queries := &lastRunQueries{}
 	service := overviewRefreshService(&storeRoundMemoryProvider{}, queries)
 
-	service.refreshMemoryOverviewIfCold(context.Background(), storeRoundBotID, overviewTestSessionID, "", "")
+	service.refreshMemoryOverview(context.Background(), storeRoundBotID, overviewTestSessionID, "", "")
 
 	if queries.calls != 0 {
 		t.Fatalf("last-run lookups = %d, want none for a provider that never defers MEMORY.md", queries.calls)

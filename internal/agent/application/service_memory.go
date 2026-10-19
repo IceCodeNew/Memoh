@@ -312,7 +312,7 @@ func (s *Service) writeMemory(ctx context.Context, req ChatRequest, botID string
 	}
 	_, tzLoc := s.resolveTimezone(ctx, req.BotID, req.UserID)
 	// A post-turn write belongs to a conversation that is still warm: it may
-	// leave MEMORY.md for refreshMemoryOverviewIfCold to rewrite.
+	// leave MEMORY.md for refreshMemoryOverview to rewrite.
 	if err := p.OnAfterChat(storefs.WithConversationWrite(ctx), memprovider.AfterChatRequest{
 		BotID:             botID,
 		Messages:          memMsgs,

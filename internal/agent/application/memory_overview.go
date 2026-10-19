@@ -14,7 +14,7 @@ import (
 	"github.com/felinics/memoh/internal/models"
 )
 
-// memoryOverviewNow is the clock refreshMemoryOverviewIfCold measures idle
+// memoryOverviewNow is the clock refreshMemoryOverview measures idle
 // time and overview lag with; tests replace it.
 var memoryOverviewNow = time.Now
 
@@ -36,23 +36,13 @@ const (
 	memoryOverviewRefreshMaxLag       = "max_lag"
 )
 
-// refreshMemoryOverviewIfCold rewrites a MEMORY.md that memory written during
-// a conversation left behind, but only on a turn whose prompt cache is cold
-// anyway: the session's first turn, or its first turn after the provider's
-// cache TTL elapsed since the session's last run. MEMORY.md sits in the system
-// prompt ahead of the whole history, so rewriting it while the session is warm
-// would make every following token of the request miss the cache. MEMORY.md
-// is shared by every session of the bot, so a cold turn also waits while
-// another session may still be warm. Once MEMORY.md has lagged for
-// memoryOverviewMaxLag, the next turn rewrites it regardless. Memory written
-// in between still reaches the model through recall and the memory tools,
-// which read the memory store rather than MEMORY.md.
-//
-// It runs before the system files are read and is a no-op unless the bot's
-// memory provider deferred an overview rewrite. A subagent session never
-// refreshes: it is new by construction while its parent session is warm, and
-// the rewrite would break the parent's next request instead.
-func (s *Service) refreshMemoryOverviewIfCold(ctx context.Context, botID, sessionID, sessionType, promptCacheTTL string) {
+// refreshMemoryOverview applies the bot-wide overview freshness policy before
+// loading system files. Normally it refreshes only at a cold turn, while no
+// other session is warm or running. At the 30-minute lag limit it deliberately
+// refreshes even warm sessions, trading cache reuse for a current index.
+// Subagents never trigger a refresh. New memories remain available through
+// recall and memory tools while the shared index lags.
+func (s *Service) refreshMemoryOverview(ctx context.Context, botID, sessionID, sessionType, promptCacheTTL string) {
 	botID = strings.TrimSpace(botID)
 	sessionID = strings.TrimSpace(sessionID)
 	if s == nil || botID == "" || strings.EqualFold(strings.TrimSpace(sessionType), sessionmode.Subagent) {
@@ -63,7 +53,8 @@ func (s *Service) refreshMemoryOverviewIfCold(ctx context.Context, botID, sessio
 		return
 	}
 	now := memoryOverviewNow()
-	defer s.memoryOverviewActivity.noteTurn(botID, sessionID, now)
+	ttl := promptCacheTTLDuration(promptCacheTTL)
+	defer s.memoryOverviewActivity.noteTurn(botID, sessionID, now, ttl)
 
 	since, stale := refresher.OverviewStaleSince(botID)
 	if !stale {
@@ -74,12 +65,11 @@ func (s *Service) refreshMemoryOverviewIfCold(ctx context.Context, botID, sessio
 	lag := max(now.Sub(since), 0)
 	reason := memoryOverviewRefreshMaxLag
 	if lag < memoryOverviewMaxLag {
-		ttl := promptCacheTTLDuration(promptCacheTTL)
 		var cold bool
 		if reason, cold = s.sessionPromptCacheCold(ctx, sessionID, now, ttl); !cold {
 			return
 		}
-		if s.otherSessionWarm(ctx, botID, sessionID, now, ttl) {
+		if s.otherSessionWarm(ctx, botID, sessionID, now) {
 			if s.logger != nil {
 				s.logger.DebugContext(ctx, "memory overview refresh deferred: another session may be warm",
 					slog.String("bot_id", botID),
@@ -144,13 +134,10 @@ func (s *Service) sessionPromptCacheCold(ctx context.Context, sessionID string, 
 	return "", false
 }
 
-// otherSessionWarm reports whether another session of the bot may still hold
-// a warm prompt cache: it ran in this process within ttl, or it has a run in
-// flight. The other sessions are assumed to use a provider that keeps its
-// cache as long as this session's does. A failed lookup counts as warm;
-// memoryOverviewMaxLag still bounds how long that defers the refresh.
-func (s *Service) otherSessionWarm(ctx context.Context, botID, sessionID string, now time.Time, ttl time.Duration) bool {
-	if s.memoryOverviewActivity.warmOther(botID, sessionID, now.Add(-ttl)) {
+// otherSessionWarm uses each observed session's own TTL, plus the durable
+// active-run list. Lookup failures defer refresh until the max-lag limit.
+func (s *Service) otherSessionWarm(ctx context.Context, botID, sessionID string, now time.Time) bool {
+	if s.memoryOverviewActivity.warmOther(botID, sessionID, now) {
 		return true
 	}
 	if s.queries == nil {
@@ -195,57 +182,62 @@ func promptCacheTTLDuration(ttl string) time.Duration {
 // Subagent sessions are never recorded.
 type sessionActivity struct {
 	mu   sync.Mutex
-	last map[string]map[string]time.Time
+	last map[string]map[string]sessionCacheActivity
+}
+
+type sessionCacheActivity struct {
+	last time.Time
+	ttl  time.Duration
 }
 
 // noteTurn records that sessionID of botID is starting a turn at now.
-func (a *sessionActivity) noteTurn(botID, sessionID string, now time.Time) {
+func (a *sessionActivity) noteTurn(botID, sessionID string, now time.Time, ttl time.Duration) {
 	if sessionID == "" {
 		return
 	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	if a.last == nil {
-		a.last = make(map[string]map[string]time.Time)
+		a.last = make(map[string]map[string]sessionCacheActivity)
 	}
 	sessions := a.last[botID]
 	if sessions == nil {
-		sessions = make(map[string]time.Time)
+		sessions = make(map[string]sessionCacheActivity)
 		a.last[botID] = sessions
 	}
-	sessions[sessionID] = now
+	sessions[sessionID] = sessionCacheActivity{last: now, ttl: ttl}
 	pruneSessionActivity(sessions, now)
 }
 
 // noteRunEnd records that a run of sessionID finished at now. Only sessions
-// that started a turn through refreshMemoryOverviewIfCold are tracked, which
+// that started a turn through refreshMemoryOverview are tracked, which
 // keeps subagent sessions out.
 func (a *sessionActivity) noteRunEnd(botID, sessionID string, now time.Time) {
 	botID = strings.TrimSpace(botID)
 	sessionID = strings.TrimSpace(sessionID)
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	if _, tracked := a.last[botID][sessionID]; tracked {
-		a.last[botID][sessionID] = now
+	if activity, tracked := a.last[botID][sessionID]; tracked {
+		activity.last = now
+		a.last[botID][sessionID] = activity
 	}
 }
 
-// warmOther reports whether a session of botID other than sessionID was active
-// at or after since.
-func (a *sessionActivity) warmOther(botID, sessionID string, since time.Time) bool {
+// warmOther reports whether another session is within its own cache TTL.
+func (a *sessionActivity) warmOther(botID, sessionID string, now time.Time) bool {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	for other, at := range a.last[botID] {
-		if other != sessionID && !at.Before(since) {
+	for other, activity := range a.last[botID] {
+		if other != sessionID && now.Before(activity.last.Add(activity.ttl)) {
 			return true
 		}
 	}
 	return false
 }
 
-func pruneSessionActivity(sessions map[string]time.Time, now time.Time) {
-	for sessionID, at := range sessions {
-		if now.Sub(at) > memoryOverviewActivityHorizon {
+func pruneSessionActivity(sessions map[string]sessionCacheActivity, now time.Time) {
+	for sessionID, activity := range sessions {
+		if now.Sub(activity.last) > memoryOverviewActivityHorizon {
 			delete(sessions, sessionID)
 		}
 	}
