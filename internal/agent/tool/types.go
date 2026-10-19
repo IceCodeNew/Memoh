@@ -11,7 +11,6 @@ import (
 
 	sdk "github.com/felinics/twilight/sdk"
 
-	contextfrag "github.com/felinics/memoh/internal/agent/context/fragment"
 	toolapproval "github.com/felinics/memoh/internal/agent/decision/approval"
 	"github.com/felinics/memoh/internal/agent/sessionmode"
 	"github.com/felinics/memoh/internal/agent/tool/internal/toolset"
@@ -341,13 +340,12 @@ type SessionContext struct {
 	WorkspaceTargetName string
 	// WorkdirPath is the session's immutable working directory. When set,
 	// relative tool paths resolve under it and exec defaults its cwd to it.
-	WorkdirPath               string
-	Skills                    map[string]SkillDetail
-	TimezoneLocation          *time.Location
-	Emitter                   StreamEmitter
-	LiveStream                bool
-	ContextBudgetMaxTokens    int
-	ContextToolExchangePolicy *contextfrag.ToolExchangePolicy
+	WorkdirPath            string
+	Skills                 map[string]SkillDetail
+	TimezoneLocation       *time.Location
+	Emitter                StreamEmitter
+	LiveStream             bool
+	ContextBudgetMaxTokens int
 }
 
 // CanAskUser reports whether ask_user can be both shown to the model and
@@ -474,6 +472,15 @@ func joinRefs(refs []string, conjunction string) string {
 // Return "" to contribute nothing.
 type ToolUsage interface {
 	Usage(ctx context.Context, session SessionContext, available AvailableTools) string
+}
+
+// ToolNotice lets a provider tell the model about tools it could not
+// register this turn, for example a federated source whose upstream failed.
+// Unlike ToolUsage the text is collected even when the provider contributed
+// no tools, which is exactly when a silent gap would mislead the model.
+// Return "" to contribute nothing.
+type ToolNotice interface {
+	ToolNotice(ctx context.Context, session SessionContext) string
 }
 
 // ---- argument parsing helpers ----

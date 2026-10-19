@@ -14,6 +14,7 @@ import (
 	"github.com/felinics/memoh/internal/agent/runtime/native"
 	sessionruntime "github.com/felinics/memoh/internal/agent/runtime/session"
 	"github.com/felinics/memoh/internal/agent/step"
+	"github.com/felinics/memoh/internal/agent/toolexec"
 	chatview "github.com/felinics/memoh/internal/agent/view"
 	"github.com/felinics/memoh/internal/apperror"
 	messagepkg "github.com/felinics/memoh/internal/chat/message"
@@ -429,7 +430,7 @@ func (c *agentStepCommitter) recordFailure(ctx context.Context, partialText stri
 	if skip {
 		return nil, nil
 	}
-	record := &step.Record{Messages: []sdk.Message{sdk.AssistantMessage(partialText)}}
+	record := &step.Record{Messages: toolexec.BuildStepMessages(partialText, nil, nil, nil, nil, nil)}
 	_, err := c.persist(ctx, stepIndex, record, stepInterrupted, code)
 	return nil, err
 }
