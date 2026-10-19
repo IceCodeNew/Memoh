@@ -186,25 +186,76 @@ display_ready() {
 }
 
 prepare_lock=/tmp/memoh-display-prepare.lock
-if mkdir "$prepare_lock" 2>/dev/null; then
-  trap 'rmdir "$prepare_lock" 2>/dev/null || true' EXIT INT TERM
-else
+prepare_guard=/tmp/memoh-display-prepare.guard
+prepare_owner=0
+# Serialize directory/PID changes, including recovery. Keep this inode: removing
+# a flock file would allow different callers to lock different files.
+exec 9>"$prepare_guard"
+
+prepare_process_alive() {
+  prepare_pid="$1"
+  [ -n "$prepare_pid" ] || return 1
+  kill -0 "$prepare_pid" 2>/dev/null || return 1
+  [ -r "/proc/$prepare_pid/cmdline" ] || return 1
+  tr '\000' ' ' <"/proc/$prepare_pid/cmdline" 2>/dev/null | grep -Fq 'display-prepare.sh'
+}
+
+release_prepare_lock() {
+  # The owner closed fd 9 before starting the desktop; exit releases this one.
+  exec 9>"$prepare_guard"
+  flock 9
+  if [ "$(cat "$prepare_lock/pid" 2>/dev/null || true)" = "$$" ]; then
+    rm -f "$prepare_lock/pid"
+    rmdir "$prepare_lock" 2>/dev/null || true
+  fi
+}
+
+try_prepare_lock() {
+  flock -n 9 || return 1
+  if ! mkdir "$prepare_lock" 2>/dev/null; then
+    # Owners create the directory and write its PID under the guard, so a
+    # directory without a live owner here is stale, even one without a PID.
+    if prepare_process_alive "$(cat "$prepare_lock/pid" 2>/dev/null || true)"; then
+      flock -u 9
+      return 1
+    fi
+    # Never remove unknown contents recursively.
+    rm -f "$prepare_lock/pid"
+    if ! rmdir "$prepare_lock" 2>/dev/null || ! mkdir "$prepare_lock" 2>/dev/null; then
+      flock -u 9
+      return 1
+    fi
+  fi
+  printf '%s\n' "$$" >"$prepare_lock/pid"
+  prepare_owner=1
+  trap release_prepare_lock EXIT
+  trap 'exit 130' INT
+  trap 'exit 143' TERM
+  # Desktop processes started below must not inherit the guard: they would
+  # share its lock, which a kill during release could then leave held.
+  exec 9>&-
+}
+
+if ! try_prepare_lock; then
   progress 12 checking "Waiting for another desktop preparation"
   wait_i=0
-  while [ -d "$prepare_lock" ] && [ "$wait_i" -lt 180 ]; do
+  while [ "$wait_i" -lt 180 ]; do
     if display_ready; then
       emit_complete
       exit 0
     fi
+    if try_prepare_lock; then break; fi
     sleep 1
     wait_i=$((wait_i + 1))
   done
-  if display_ready; then
-    emit_complete
-    exit 0
+  if [ "$prepare_owner" -ne 1 ]; then
+    if display_ready; then
+      emit_complete
+      exit 0
+    fi
+    echo "Another desktop preparation is still running." >&2
+    exit 1
   fi
-  echo "Another desktop preparation is still running." >&2
-  exit 1
 fi
 
 progress 10 checking "Checking display runtime"
@@ -217,6 +268,9 @@ has_desktop || { echo "Workspace image contract violation: desktop session runti
 progress 18 checking "Display runtime is available"
 
 export DISPLAY=:99
+# Desktop processes inherit this locale. Default to UTF-8 so applications can
+# decode committed Unicode text; preserve a locale already set by the user.
+export LANG="${LANG:-C.UTF-8}"
 mkdir -p /run/memoh /tmp/.X11-unix
 chmod 1777 /tmp/.X11-unix 2>/dev/null || true
 
@@ -245,7 +299,7 @@ if ! display_socket_ready; then
   if ! display_socket_ready; then
     stop_xvnc
     cleanup_stale_display
-    nohup "$XVNC" :99 -geometry "$XVNC_GEOMETRY" -depth 24 -SecurityTypes None -localhost -rfbport "$RFB_PORT" >/tmp/memoh-xvnc.log 2>&1 &
+    nohup "$XVNC" :99 -geometry "$XVNC_GEOMETRY" -depth 24 -SecurityTypes None -SendPrimary=0 -localhost -rfbport "$RFB_PORT" >/tmp/memoh-xvnc.log 2>&1 &
     wait_i=0
     while [ "$wait_i" -lt 25 ]; do
       display_socket_ready && break
@@ -264,6 +318,11 @@ run_quick() {
     "$@" >/dev/null 2>&1 &
   fi
 }
+# Transfer explicit CLIPBOARD copies, not X11 PRIMARY changes from selecting
+# text. Apply to an existing display as well, without restarting applications.
+if has_cmd vncconfig; then
+  run_quick vncconfig -display "$DISPLAY" -set SendPrimary=0
+fi
 if command -v fc-cache >/dev/null 2>&1; then
   nohup fc-cache -f >/tmp/memoh-fc-cache.log 2>&1 &
 fi
