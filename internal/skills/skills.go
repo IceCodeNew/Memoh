@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"io"
 	"path"
 	"slices"
@@ -14,6 +15,7 @@ import (
 	"gopkg.in/yaml.v3"
 
 	"github.com/felinics/memoh/internal/config"
+	"github.com/felinics/memoh/internal/workspace/bridge"
 	pb "github.com/felinics/memoh/internal/workspace/bridgepb"
 )
 
@@ -279,6 +281,9 @@ func ApplyAction(ctx context.Context, client fileClient, rawCompatRoots []string
 		if err != nil {
 			return err
 		}
+		if err := CheckUserSkillDirAvailable(ctx, client, dirPath); err != nil {
+			return err
+		}
 		if err := client.Mkdir(ctx, dirPath); err != nil {
 			return err
 		}
@@ -291,6 +296,23 @@ func ApplyAction(ctx context.Context, client fileClient, rawCompatRoots []string
 	default:
 		return ErrInvalidSkillRequest
 	}
+}
+
+// CheckUserSkillDirAvailable fails with ErrSkillDirTaken when dir exists, is
+// not empty and has no SKILL.md of its own. Writing a user Skill there would
+// hide whatever the directory already holds, such as Registry App Skills.
+func CheckUserSkillDirAvailable(ctx context.Context, client fileClient, dir string) error {
+	entries, err := client.ListDirAll(ctx, dir, false)
+	if errors.Is(err, bridge.ErrNotFound) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if len(entries) == 0 || containsSkillFile(entries) {
+		return nil
+	}
+	return ErrSkillDirTaken
 }
 
 func compatDiscoveryRoots(rawRoots []string) []string {

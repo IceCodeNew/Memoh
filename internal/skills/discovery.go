@@ -31,15 +31,20 @@ func appendDiscoveryRoots(roots []Root, extra ...Root) []Root {
 }
 
 // orderedDiscoveryRoots defines the source precedence consumed by resolve():
-// user > built-in > legacy > compat > Registry.
+// user (/data/skills/<skill>) > user compatibility (/data/skills/user/personal)
+// > built-in > legacy > compat > Registry.
 func orderedDiscoveryRoots(ctx context.Context, client fileClient, rawCompatRoots []string) []Root {
-	userRoots, registryRoots := discoverManagedSkillRoots(ctx, client)
-	roots := appendDiscoveryRoots(userRoots, DiscoveryRoots(rawCompatRoots)...)
+	compatUserRoots, registryRoots := discoverManagedSkillRoots(ctx, client)
+	roots := []Root{{Path: ManagedDirPath, Kind: SourceKindManaged, Managed: true}}
+	roots = appendDiscoveryRoots(roots, compatUserRoots...)
+	roots = appendDiscoveryRoots(roots, DiscoveryRoots(rawCompatRoots)...)
 	roots = appendDiscoveryRoots(roots, registryRoots...)
 	return roots
 }
 
-// discoverManagedSkillRoots walks the canonical namespace/app/Skill layout.
+// discoverManagedSkillRoots walks the namespace/app/Skill layout below
+// ManagedDirPath. A directory holding its own SKILL.md is a user Skill, not a
+// namespace, so its subdirectories are never read as Registry Apps.
 func discoverManagedSkillRoots(ctx context.Context, client fileClient) (userRoots, registryRoots []Root) {
 	if client == nil {
 		return nil, nil
@@ -66,7 +71,7 @@ func discoverManagedSkillRoots(ctx context.Context, client fileClient) (userRoot
 			continue
 		}
 		apps, err := client.ListDirAll(ctx, namespacePath, false)
-		if err != nil {
+		if err != nil || containsSkillFile(apps) {
 			continue
 		}
 		slices.SortFunc(apps, func(a, b *pb.FileEntry) int {
@@ -116,4 +121,13 @@ func discoverManagedSkillRoots(ctx context.Context, client fileClient) (userRoot
 		}
 	}
 	return userRoots, registryRoots
+}
+
+func containsSkillFile(entries []*pb.FileEntry) bool {
+	for _, entry := range entries {
+		if !entry.GetIsDir() && path.Base(entry.GetPath()) == "SKILL.md" {
+			return true
+		}
+	}
+	return false
 }

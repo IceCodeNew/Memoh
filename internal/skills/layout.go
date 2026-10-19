@@ -8,9 +8,12 @@ import (
 )
 
 const (
-	// UserSkillNamespace is reserved for Skills authored from the Memoh UI.
+	// UserSkillNamespace is reserved below ManagedDirPath. Releases that
+	// shipped the namespaced layout wrote user Skills to
+	// /data/skills/user/personal/<skill>; that directory stays discoverable
+	// and editable in place, but new user Skills are never written there.
 	UserSkillNamespace = "user"
-	// UserApp groups a workspace user's personal Skills.
+	// UserApp is the only app of UserSkillNamespace.
 	UserApp = "personal"
 )
 
@@ -73,7 +76,27 @@ func skillNamespaceDirForID(namespaceID string) (string, error) {
 	return dirPath, nil
 }
 
+// isValidUserSkillName reports whether name can be a user Skill directory
+// directly below ManagedDirPath.
+func isValidUserSkillName(name string) bool {
+	return IsValidName(name) && strings.TrimSpace(name) != UserSkillNamespace
+}
+
+// userSkillDirForName returns /data/skills/<name>, the directory of one user
+// Skill.
 func userSkillDirForName(name string) (string, error) {
+	name = strings.TrimSpace(name)
+	if !isValidUserSkillName(name) {
+		return "", ErrInvalidSkillRequest
+	}
+	dirPath := path.Clean(path.Join(ManagedDirPath, name))
+	if path.Dir(dirPath) != ManagedDirPath {
+		return "", ErrInvalidSkillRequest
+	}
+	return dirPath, nil
+}
+
+func compatUserSkillDirForName(name string) (string, error) {
 	return SkillDirForIDs(UserSkillNamespace, UserApp, name)
 }
 
@@ -83,39 +106,30 @@ type UpsertPlan struct {
 	RenameFromDir string
 }
 
-// PlanUpsert resolves the target for a user edit. User Skills retain their
-// canonical namespace and rename by moving their containing directory. A
-// Registry Skills are immutable and can only be replaced through their
-// Registry installation flow.
+// PlanUpsert resolves the target for a user edit. New Skills are written to
+// /data/skills/<name>. An existing user Skill is edited where it lives and
+// renames by moving its directory within the same parent, so Skills in the
+// /data/skills/user/personal compatibility directory are never moved out of
+// it. Built-in and Registry Skills are read-only.
 func PlanUpsert(raw, sourcePath string) (UpsertPlan, error) {
 	parsed := ParseFile(raw, "")
 	if !IsValidName(parsed.Name) {
 		return UpsertPlan{}, ErrInvalidSkillName
 	}
-	userDir, err := userSkillDirForName(parsed.Name)
-	if err != nil {
-		return UpsertPlan{}, fmt.Errorf("%w: %w", ErrInvalidSkillName, err)
-	}
-	userWrite := path.Join(userDir, "SKILL.md")
 
 	sourcePath = strings.TrimSpace(sourcePath)
 	if sourcePath == "" {
-		return UpsertPlan{WritePath: userWrite}, nil
+		return planUserSkillWrite(userSkillDirForName, "", parsed.Name)
 	}
 	sourcePath = path.Clean(sourcePath)
 	if path.Base(sourcePath) != "SKILL.md" || !path.IsAbs(sourcePath) {
 		return UpsertPlan{}, ErrInvalidSkillRequest
 	}
 	if oldName, ok := UserSkillName(sourcePath); ok {
-		plan := UpsertPlan{WritePath: userWrite}
-		if oldName != parsed.Name {
-			oldDir, dirErr := userSkillDirForName(oldName)
-			if dirErr != nil {
-				return UpsertPlan{}, dirErr
-			}
-			plan.RenameFromDir = oldDir
-		}
-		return plan, nil
+		return planUserSkillWrite(userSkillDirForName, oldName, parsed.Name)
+	}
+	if oldName, ok := compatUserSkillName(sourcePath); ok {
+		return planUserSkillWrite(compatUserSkillDirForName, oldName, parsed.Name)
 	}
 	if _, ok := BuiltinSkillName(sourcePath); ok {
 		return UpsertPlan{}, ErrBuiltinSkillReadOnly
@@ -123,7 +137,23 @@ func PlanUpsert(raw, sourcePath string) (UpsertPlan, error) {
 	if IsNamespacedSkillPath(sourcePath) {
 		return UpsertPlan{}, ErrRegistrySkillReadOnly
 	}
-	return UpsertPlan{WritePath: userWrite}, nil
+	return planUserSkillWrite(userSkillDirForName, "", parsed.Name)
+}
+
+func planUserSkillWrite(dirForName func(string) (string, error), oldName, newName string) (UpsertPlan, error) {
+	dir, err := dirForName(newName)
+	if err != nil {
+		return UpsertPlan{}, fmt.Errorf("%w: %w", ErrInvalidSkillName, err)
+	}
+	plan := UpsertPlan{WritePath: path.Join(dir, "SKILL.md")}
+	if oldName != "" && oldName != newName {
+		oldDir, err := dirForName(oldName)
+		if err != nil {
+			return UpsertPlan{}, err
+		}
+		plan.RenameFromDir = oldDir
+	}
+	return plan, nil
 }
 
 // DeletableSkillDirForSourcePath resolves the directory to remove for a
@@ -134,6 +164,9 @@ func DeletableSkillDirForSourcePath(sourcePath string) (string, error) {
 		return "", ErrInvalidSkillRequest
 	}
 	if _, ok := UserSkillName(sourcePath); ok {
+		return path.Dir(sourcePath), nil
+	}
+	if _, ok := compatUserSkillName(sourcePath); ok {
 		return path.Dir(sourcePath), nil
 	}
 	if _, ok := BuiltinSkillName(sourcePath); ok {
@@ -160,9 +193,26 @@ func PrunableSkillNamespaceDirs(skillDir string) []string {
 	return []string{appDir, namespaceDir}
 }
 
-// UserSkillName reports the name for
-// /data/skills/user/personal/<skill>/SKILL.md.
+// UserSkillName reports the name for /data/skills/<skill>/SKILL.md.
 func UserSkillName(skillMDPath string) (string, bool) {
+	skillMDPath = path.Clean(strings.TrimSpace(skillMDPath))
+	if path.Base(skillMDPath) != "SKILL.md" {
+		return "", false
+	}
+	dir := path.Dir(skillMDPath)
+	if path.Dir(dir) != ManagedDirPath {
+		return "", false
+	}
+	name := path.Base(dir)
+	if !isValidUserSkillName(name) {
+		return "", false
+	}
+	return name, true
+}
+
+// compatUserSkillName reports the name for
+// /data/skills/user/personal/<skill>/SKILL.md.
+func compatUserSkillName(skillMDPath string) (string, bool) {
 	namespaceID, appID, skillID, ok := skillPathIDs(skillMDPath)
 	if !ok || namespaceID != UserSkillNamespace || appID != UserApp {
 		return "", false
@@ -238,4 +288,8 @@ var (
 	// ErrSkillNotFound reports that the Skill an action names is not among
 	// the discovered Skills.
 	ErrSkillNotFound = errors.New("skill not found")
+	// ErrSkillDirTaken reports that a user Skill name names a directory
+	// below ManagedDirPath that holds something other than a user Skill,
+	// such as a Registry namespace.
+	ErrSkillDirTaken = errors.New("skill directory is taken")
 )

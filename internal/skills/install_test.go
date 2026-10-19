@@ -150,6 +150,30 @@ func TestAppPublicationRollbackRestoresPreviousRevision(t *testing.T) {
 	}
 }
 
+func TestPublishAppRefusesUserSkillDirectory(t *testing.T) {
+	t.Parallel()
+
+	const registryID, appID = "openai", "docs"
+	client := newAppInstallTestClient(t)
+	userSkill := path.Join(ManagedDirPath, registryID, "SKILL.md")
+	if err := client.WriteFile(context.Background(), userSkill, []byte("user")); err != nil {
+		t.Fatalf("write user Skill: %v", err)
+	}
+	_, err := PublishApp(
+		context.Background(), client, "linux", registryID, appID, strings.Repeat("b", 64),
+		[]AppArchive{{SkillID: "skill", Archive: Archive{files: []archiveFile{{path: "SKILL.md", content: []byte("new")}}}}},
+	)
+	if err == nil {
+		t.Fatal("PublishApp() into a user Skill directory succeeded")
+	}
+	if _, err := client.Stat(context.Background(), path.Join(ManagedDirPath, registryID, appID)); !errors.Is(err, bridge.ErrNotFound) {
+		t.Fatalf("App directory Stat() error = %v, want not found", err)
+	}
+	if got := readAppInstallTestFile(t, client, userSkill); got != "user" {
+		t.Fatalf("user Skill = %q, want it untouched", got)
+	}
+}
+
 func newAppInstallTestClient(t *testing.T) *bridge.Client {
 	t.Helper()
 	return newWorkspaceTestClient(t, t.TempDir())

@@ -49,7 +49,7 @@ type SkillsUpsertRequest struct {
 	Skills []string `json:"skills"`
 	// SourcePath is the existing SKILL.md being edited when saving a single skill.
 	// Empty means create (or overwrite by frontmatter name under
-	// /data/skills/user/personal/<name>/).
+	// /data/skills/<name>/).
 	SourcePath string `json:"source_path,omitempty"`
 }
 
@@ -214,6 +214,12 @@ func (h *ContainerdHandler) upsertSkills(
 		// A pooled client can pass getGRPCClient and still fail on first use
 		// when the workspace just stopped; classify per-op errors so the dial
 		// diagnostics never reach the response body.
+		if err := skillset.CheckUserSkillDirAvailable(ctx, client, dirPath); err != nil {
+			if errors.Is(err, skillset.ErrSkillDirTaken) {
+				return apperror.New(apperror.CodeSkillNameTaken, nil)
+			}
+			return skillSaveHTTPError(fmt.Errorf("inspect skill dir: %w", err))
+		}
 		if err := client.Mkdir(ctx, dirPath); err != nil {
 			return skillSaveHTTPError(fmt.Errorf("mkdir skill dir: %w", err))
 		}
@@ -235,6 +241,8 @@ func skillActionHTTPError(err error) error {
 		return apperror.Wrap(apperror.CodeSkillRegistryReadOnly, err, nil)
 	case errors.Is(err, skillset.ErrBuiltinSkillReadOnly):
 		return apperror.Wrap(apperror.CodeSkillBuiltinReadOnly, err, nil)
+	case errors.Is(err, skillset.ErrSkillDirTaken):
+		return apperror.Wrap(apperror.CodeSkillNameTaken, err, nil)
 	case errors.Is(err, skillset.ErrInvalidSkillRequest):
 		return apperror.FieldInvalid("target_path", err)
 	default:

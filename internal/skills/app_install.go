@@ -150,6 +150,11 @@ func PublishApp(
 	if err != nil {
 		return nil, errors.New("registry App identity is invalid")
 	}
+	if entries, err := client.ListDirAll(ctx, registryDir, false); err == nil && containsSkillFile(entries) {
+		return nil, fmt.Errorf("registry directory %q is a user Skill", registryDir)
+	} else if err != nil && !errors.Is(err, bridge.ErrNotFound) {
+		return nil, fmt.Errorf("inspect Registry Skill directory: %w", err)
+	}
 	seen := make(map[string]struct{}, len(members))
 	for _, member := range members {
 		if _, err := SkillDirForIDs(registryID, appID, member.SkillID); err != nil {

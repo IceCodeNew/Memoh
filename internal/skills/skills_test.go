@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/felinics/memoh/internal/workspace/bridge"
 	pb "github.com/felinics/memoh/internal/workspace/bridgepb"
 )
 
@@ -117,7 +118,7 @@ func TestApplyActionAdoptAndDisable(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("adopt returned error: %v", err)
 	}
-	if _, ok := client.files[pathJoin(ManagedDirPath, UserSkillNamespace, UserApp, "alpha", "SKILL.md")]; !ok {
+	if _, ok := client.files[pathJoin(ManagedDirPath, "alpha", "SKILL.md")]; !ok {
 		t.Fatalf("expected managed copy after adopt")
 	}
 
@@ -183,7 +184,7 @@ func TestApplyActionAdoptRejectsInvalidManagedName(t *testing.T) {
 	}
 }
 
-func TestApplyActionAdoptKeepsUserSkillSeparateFromRegistryNamespace(t *testing.T) {
+func TestApplyActionAdoptRefusesRegistryNamespaceDir(t *testing.T) {
 	client := newFakeClient()
 	registryID := "openai-api-curated"
 	externalPath := pathJoin("/data/.agents/skills", registryID, "SKILL.md")
@@ -201,11 +202,8 @@ func TestApplyActionAdoptKeepsUserSkillSeparateFromRegistryNamespace(t *testing.
 		Action:     ActionAdopt,
 		TargetPath: externalPath,
 	})
-	if err != nil {
-		t.Fatalf("adopt error = %v", err)
-	}
-	if _, ok := client.files[pathJoin(ManagedDirPath, UserSkillNamespace, UserApp, registryID, "SKILL.md")]; !ok {
-		t.Fatal("adopt did not write the user Skill")
+	if !errors.Is(err, ErrSkillDirTaken) {
+		t.Fatalf("adopt error = %v, want ErrSkillDirTaken", err)
 	}
 	if _, ok := client.files[pathJoin(registryRoot, "SKILL.md")]; ok {
 		t.Fatal("adopt wrote into the Registry namespace")
@@ -235,7 +233,7 @@ func TestIsValidNameRejectsTraversalPatterns(t *testing.T) {
 }
 
 func TestUserSkillDirForNameRejectsEscapingNames(t *testing.T) {
-	for _, name := range []string{".", "..", ".alpha", "alpha..beta"} {
+	for _, name := range []string{".", "..", ".alpha", "alpha..beta", "alpha/beta", UserSkillNamespace} {
 		if _, err := userSkillDirForName(name); !errors.Is(err, ErrInvalidSkillRequest) {
 			t.Fatalf("userSkillDirForName(%q) err = %v, want ErrInvalidSkillRequest", name, err)
 		}
@@ -245,18 +243,25 @@ func TestUserSkillDirForNameRejectsEscapingNames(t *testing.T) {
 	if err != nil {
 		t.Fatalf("userSkillDirForName(valid) returned error: %v", err)
 	}
-	if dirPath != pathJoin(ManagedDirPath, UserSkillNamespace, UserApp, "alpha.beta") {
-		t.Fatalf("userSkillDirForName(valid) = %q, want canonical user path", dirPath)
+	if dirPath != pathJoin(ManagedDirPath, "alpha.beta") {
+		t.Fatalf("userSkillDirForName(valid) = %q, want /data/skills/<name>", dirPath)
 	}
 }
 
 func TestDeletableSkillDirForSourcePath(t *testing.T) {
-	flat, err := DeletableSkillDirForSourcePath(pathJoin(ManagedDirPath, UserSkillNamespace, UserApp, "alpha", "SKILL.md"))
+	flat, err := DeletableSkillDirForSourcePath(pathJoin(ManagedDirPath, "alpha", "SKILL.md"))
 	if err != nil {
 		t.Fatalf("DeletableSkillDirForSourcePath(flat) error = %v", err)
 	}
-	if flat != pathJoin(ManagedDirPath, UserSkillNamespace, UserApp, "alpha") {
+	if flat != pathJoin(ManagedDirPath, "alpha") {
 		t.Fatalf("DeletableSkillDirForSourcePath(flat) = %q", flat)
+	}
+	compat, err := DeletableSkillDirForSourcePath(pathJoin(ManagedDirPath, UserSkillNamespace, UserApp, "alpha", "SKILL.md"))
+	if err != nil {
+		t.Fatalf("DeletableSkillDirForSourcePath(compat) error = %v", err)
+	}
+	if compat != pathJoin(ManagedDirPath, UserSkillNamespace, UserApp, "alpha") {
+		t.Fatalf("DeletableSkillDirForSourcePath(compat) = %q", compat)
 	}
 
 	if _, err := DeletableSkillDirForSourcePath(pathJoin(IndexDirPath, "skill-creator", "SKILL.md")); !errors.Is(err, ErrBuiltinSkillReadOnly) {
@@ -272,6 +277,7 @@ func TestDeletableSkillDirForSourcePath(t *testing.T) {
 		"",
 		"relative/SKILL.md",
 		pathJoin(ManagedDirPath, "alpha", "README.md"),
+		pathJoin(ManagedDirPath, UserSkillNamespace, "SKILL.md"),
 		"/data/.agents/skills/alpha/SKILL.md",
 		pathJoin(ManagedDirPath, "..", "escape", "SKILL.md"),
 	} {
@@ -296,31 +302,34 @@ func TestPrunableSkillNamespaceDirs(t *testing.T) {
 }
 
 func TestPlanUpsertCreateRenameAndRejectRegistryEdit(t *testing.T) {
-	create, err := PlanUpsert("---\nname: alpha\ndescription: A\n---\n\n# A\n", "")
-	if err != nil {
-		t.Fatalf("PlanUpsert(create) error = %v", err)
-	}
-	if create.WritePath != pathJoin(ManagedDirPath, UserSkillNamespace, UserApp, "alpha", "SKILL.md") || create.RenameFromDir != "" {
-		t.Fatalf("PlanUpsert(create) = %+v", create)
+	alpha := "---\nname: alpha\ndescription: A\n---\n\n# A\n"
+	beta := "---\nname: beta\ndescription: B\n---\n\n# B\n"
+	flatDir := func(name string) string { return pathJoin(ManagedDirPath, name) }
+	compatDir := func(name string) string { return pathJoin(ManagedDirPath, UserSkillNamespace, UserApp, name) }
+
+	for _, tc := range []struct {
+		name, raw, sourcePath, wantWrite, wantRenameFrom string
+	}{
+		{name: "create", raw: alpha, wantWrite: flatDir("alpha")},
+		{name: "same", raw: alpha, sourcePath: flatDir("alpha") + "/SKILL.md", wantWrite: flatDir("alpha")},
+		{name: "rename", raw: beta, sourcePath: flatDir("alpha") + "/SKILL.md", wantWrite: flatDir("beta"), wantRenameFrom: flatDir("alpha")},
+		{name: "override compat root", raw: alpha, sourcePath: "/data/.agents/skills/alpha/SKILL.md", wantWrite: flatDir("alpha")},
+		// Skills in the compatibility directory are edited and renamed in
+		// place, never moved to /data/skills/<name>.
+		{name: "compat same", raw: alpha, sourcePath: compatDir("alpha") + "/SKILL.md", wantWrite: compatDir("alpha")},
+		{name: "compat rename", raw: beta, sourcePath: compatDir("alpha") + "/SKILL.md", wantWrite: compatDir("beta"), wantRenameFrom: compatDir("alpha")},
+	} {
+		plan, err := PlanUpsert(tc.raw, tc.sourcePath)
+		if err != nil {
+			t.Fatalf("PlanUpsert(%s) error = %v", tc.name, err)
+		}
+		if plan.WritePath != tc.wantWrite+"/SKILL.md" || plan.RenameFromDir != tc.wantRenameFrom {
+			t.Fatalf("PlanUpsert(%s) = %+v, want write %s/SKILL.md rename from %q", tc.name, plan, tc.wantWrite, tc.wantRenameFrom)
+		}
 	}
 
-	same, err := PlanUpsert("---\nname: alpha\ndescription: A\n---\n\n# A\n", pathJoin(ManagedDirPath, UserSkillNamespace, UserApp, "alpha", "SKILL.md"))
-	if err != nil {
-		t.Fatalf("PlanUpsert(same) error = %v", err)
-	}
-	if same.WritePath != pathJoin(ManagedDirPath, UserSkillNamespace, UserApp, "alpha", "SKILL.md") || same.RenameFromDir != "" {
-		t.Fatalf("PlanUpsert(same) = %+v", same)
-	}
-
-	rename, err := PlanUpsert("---\nname: beta\ndescription: B\n---\n\n# B\n", pathJoin(ManagedDirPath, UserSkillNamespace, UserApp, "alpha", "SKILL.md"))
-	if err != nil {
-		t.Fatalf("PlanUpsert(rename) error = %v", err)
-	}
-	if rename.WritePath != pathJoin(ManagedDirPath, UserSkillNamespace, UserApp, "beta", "SKILL.md") {
-		t.Fatalf("PlanUpsert(rename).WritePath = %q", rename.WritePath)
-	}
-	if rename.RenameFromDir != pathJoin(ManagedDirPath, UserSkillNamespace, UserApp, "alpha") {
-		t.Fatalf("PlanUpsert(rename).RenameFromDir = %q", rename.RenameFromDir)
+	if _, err := PlanUpsert("---\nname: user\ndescription: U\n---\n\n# U\n", ""); !errors.Is(err, ErrInvalidSkillName) {
+		t.Fatalf("PlanUpsert(reserved name) error = %v, want ErrInvalidSkillName", err)
 	}
 
 	registryPath := pathJoin(ManagedDirPath, "openai-api-curated", "docs", "xlsx", "SKILL.md")
@@ -331,14 +340,6 @@ func TestPlanUpsertCreateRenameAndRejectRegistryEdit(t *testing.T) {
 	builtinPath := pathJoin(IndexDirPath, "skill-creator", "SKILL.md")
 	if _, err := PlanUpsert("---\nname: skill-creator\ndescription: Creator\n---\n\n# Creator\n", builtinPath); !errors.Is(err, ErrBuiltinSkillReadOnly) {
 		t.Fatalf("PlanUpsert(builtin) error = %v, want ErrBuiltinSkillReadOnly", err)
-	}
-
-	override, err := PlanUpsert("---\nname: alpha\ndescription: A\n---\n\n# A\n", "/data/.agents/skills/alpha/SKILL.md")
-	if err != nil {
-		t.Fatalf("PlanUpsert(override) error = %v", err)
-	}
-	if override.WritePath != pathJoin(ManagedDirPath, UserSkillNamespace, UserApp, "alpha", "SKILL.md") || override.RenameFromDir != "" {
-		t.Fatalf("PlanUpsert(override) = %+v", override)
 	}
 }
 
@@ -616,12 +617,93 @@ func TestListScansConfiguredDiscoveryRootsInOrder(t *testing.T) {
 		t.Fatalf("List() items = %+v, want managed alpha only", items)
 	}
 
-	wantCalls := []string{ManagedDirPath, pathJoin(ManagedDirPath, UserSkillNamespace), userApp}
+	wantCalls := []string{ManagedDirPath, pathJoin(ManagedDirPath, UserSkillNamespace), ManagedDirPath, userApp}
 	for _, root := range DiscoveryRoots(rawCompatRoots) {
 		wantCalls = append(wantCalls, root.Path)
 	}
 	if !slices.Equal(client.listCalls, wantCalls) {
 		t.Fatalf("ListDirAll calls = %+v, want %+v", client.listCalls, wantCalls)
+	}
+}
+
+func TestListDiscoversFlatUserSkillsFirst(t *testing.T) {
+	client := newFakeClient()
+	skill := func(name, description string) string {
+		return "---\nname: " + name + "\ndescription: " + description + "\n---\n\n# " + name
+	}
+	userNamespace := pathJoin(ManagedDirPath, UserSkillNamespace)
+	compatApp := pathJoin(userNamespace, UserApp)
+	registryRoot := pathJoin(ManagedDirPath, "openai-api-curated")
+	appRoot := pathJoin(registryRoot, "docs")
+	// "assets" holds a nested directory that looks like an App Skill; it must
+	// stay part of the flat "assets" user Skill.
+	flatWithNested := pathJoin(ManagedDirPath, "assets")
+	client.listings[ManagedDirPath] = []*pb.FileEntry{
+		{Path: "alpha", IsDir: true},
+		{Path: "assets", IsDir: true},
+		{Path: "openai-api-curated", IsDir: true},
+		{Path: UserSkillNamespace, IsDir: true},
+	}
+	client.listings[pathJoin(ManagedDirPath, "alpha")] = []*pb.FileEntry{{Path: "SKILL.md"}}
+	client.listings[flatWithNested] = []*pb.FileEntry{{Path: "SKILL.md"}, {Path: "templates", IsDir: true}}
+	client.listings[pathJoin(flatWithNested, "templates")] = []*pb.FileEntry{{Path: "deck", IsDir: true}}
+	client.listings[userNamespace] = []*pb.FileEntry{{Path: UserApp, IsDir: true}}
+	client.listings[compatApp] = []*pb.FileEntry{{Path: "alpha", IsDir: true}, {Path: "beta", IsDir: true}}
+	client.listings[IndexDirPath] = []*pb.FileEntry{{Path: "alpha", IsDir: true}}
+	client.listings[registryRoot] = []*pb.FileEntry{{Path: "docs", IsDir: true}}
+	client.listings[appRoot] = []*pb.FileEntry{{Path: "xlsx", IsDir: true}}
+	client.listings[pathJoin(appRoot, "xlsx")] = []*pb.FileEntry{{Path: "SKILL.md"}}
+	client.listings[pathJoin(flatWithNested, "templates", "deck")] = []*pb.FileEntry{{Path: "SKILL.md"}}
+	client.files[pathJoin(ManagedDirPath, "alpha", "SKILL.md")] = skill("alpha", "Flat alpha")
+	client.files[pathJoin(flatWithNested, "SKILL.md")] = skill("assets", "Flat assets")
+	client.files[pathJoin(flatWithNested, "templates", "deck", "SKILL.md")] = skill("deck", "Not a Skill")
+	client.files[pathJoin(compatApp, "alpha", "SKILL.md")] = skill("alpha", "Compat alpha")
+	client.files[pathJoin(compatApp, "beta", "SKILL.md")] = skill("beta", "Compat beta")
+	client.files[pathJoin(IndexDirPath, "alpha", "SKILL.md")] = skill("alpha", "Built-in alpha")
+	client.files[pathJoin(appRoot, "xlsx", "SKILL.md")] = skill("xlsx", "Registry xlsx")
+
+	items, err := LoadEffective(context.Background(), client, []string{})
+	if err != nil {
+		t.Fatalf("LoadEffective() error = %v", err)
+	}
+	got := make(map[string]string, len(items))
+	for _, item := range items {
+		got[item.Name] = item.SourcePath
+	}
+	want := map[string]string{
+		"alpha":  pathJoin(ManagedDirPath, "alpha", "SKILL.md"),
+		"assets": pathJoin(flatWithNested, "SKILL.md"),
+		"beta":   pathJoin(compatApp, "beta", "SKILL.md"),
+		"xlsx":   pathJoin(appRoot, "xlsx", "SKILL.md"),
+	}
+	if len(got) != len(want) {
+		t.Fatalf("effective skills = %+v, want %+v", got, want)
+	}
+	for name, sourcePath := range want {
+		if got[name] != sourcePath {
+			t.Fatalf("effective %s = %q, want %q (all: %+v)", name, got[name], sourcePath, got)
+		}
+	}
+}
+
+func TestCheckUserSkillDirAvailable(t *testing.T) {
+	client := newFakeClient()
+	registryRoot := pathJoin(ManagedDirPath, "openai-api-curated")
+	client.listings[registryRoot] = []*pb.FileEntry{{Path: "docs", IsDir: true}}
+	client.listings[pathJoin(ManagedDirPath, "alpha")] = []*pb.FileEntry{{Path: "SKILL.md"}, {Path: "scripts", IsDir: true}}
+	client.listings[pathJoin(ManagedDirPath, "empty")] = nil
+	client.listErrors[pathJoin(ManagedDirPath, "broken")] = io.ErrUnexpectedEOF
+
+	for _, name := range []string{"missing", "alpha", "empty"} {
+		if err := CheckUserSkillDirAvailable(context.Background(), client, pathJoin(ManagedDirPath, name)); err != nil {
+			t.Fatalf("CheckUserSkillDirAvailable(%s) error = %v, want nil", name, err)
+		}
+	}
+	if err := CheckUserSkillDirAvailable(context.Background(), client, registryRoot); !errors.Is(err, ErrSkillDirTaken) {
+		t.Fatalf("CheckUserSkillDirAvailable(registry) error = %v, want ErrSkillDirTaken", err)
+	}
+	if err := CheckUserSkillDirAvailable(context.Background(), client, pathJoin(ManagedDirPath, "broken")); !errors.Is(err, io.ErrUnexpectedEOF) {
+		t.Fatalf("CheckUserSkillDirAvailable(broken) error = %v, want the listing error", err)
 	}
 }
 
@@ -672,7 +754,7 @@ func (f *fakeClient) ListDirAll(_ context.Context, p string, _ bool) ([]*pb.File
 	}
 	items, ok := f.listings[p]
 	if !ok {
-		return nil, io.EOF
+		return nil, bridge.ErrNotFound
 	}
 	return items, nil
 }
