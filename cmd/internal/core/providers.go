@@ -40,6 +40,7 @@ import (
 	claudecoderuntime "github.com/felinics/memoh/internal/agent/runtime/claudecode"
 	codexruntime "github.com/felinics/memoh/internal/agent/runtime/codex"
 	"github.com/felinics/memoh/internal/agent/runtime/external"
+	grokruntime "github.com/felinics/memoh/internal/agent/runtime/grok"
 	"github.com/felinics/memoh/internal/agent/runtime/native"
 	sessionruntime "github.com/felinics/memoh/internal/agent/runtime/session"
 	"github.com/felinics/memoh/internal/agent/runtime/toolmount"
@@ -721,6 +722,26 @@ func provideClaudeCodeDriver(log *slog.Logger, workspaceManager *workspace.Manag
 	return driver
 }
 
+func provideGrokDriver(lc fx.Lifecycle, log *slog.Logger, workspaceManager *workspace.Manager, botAgents *botagents.Service, credentials *agentcredential.Service, toolApproval *toolapproval.Service, userInput *userinput.Service, toolGateway *mcp.ToolGatewayService, toolContexts *mcp.ToolSessionContextStore, workspaceDeps *workspacedeps.Service) *grokruntime.Driver {
+	driver := grokruntime.NewDriver(
+		workspaceManager,
+		botAgents,
+		credentials,
+		toolApproval,
+		toolmount.Gateway{Tools: toolGateway, Contexts: toolContexts, Logger: log},
+		log,
+	)
+	driver.SetLauncherResolver(workspaceDeps)
+	driver.SetUserInputService(userInput)
+	lc.Append(fx.Hook{
+		OnStop: func(context.Context) error {
+			driver.CloseAll() //nolint:contextcheck // shutdown must close every process and keep its login, whatever the lifecycle ctx.
+			return nil
+		},
+	})
+	return driver
+}
+
 // directRuntimeLaunchers names the CLI command each direct runtime executes,
 // keyed by runtime type. validateDriverDependencies requires it to be the
 // primary command (provides[0]) of the dependency the driver declares: the
@@ -730,14 +751,15 @@ func provideClaudeCodeDriver(log *slog.Logger, workspaceManager *workspace.Manag
 var directRuntimeLaunchers = map[string]string{
 	codexruntime.RuntimeType:      "codex",
 	claudecoderuntime.RuntimeType: "claude",
+	grokruntime.RuntimeType:       "grok",
 }
 
 // Built-in runtimes bind official dependency IDs to their launcher command.
 // The recipe itself is downloaded and validated by RemoteCatalog.
 var directRuntimeDependencies = workspacedeps.BuiltinLauncherCommands()
 
-func provideDirectAgentDrivers(codex *codexruntime.Driver, claude *claudecoderuntime.Driver) (external.Drivers, error) {
-	drivers := external.Drivers{codex, claude}
+func provideDirectAgentDrivers(codex *codexruntime.Driver, claude *claudecoderuntime.Driver, grok *grokruntime.Driver) (external.Drivers, error) {
+	drivers := external.Drivers{codex, claude, grok}
 	discovery, err := depcatalog.Discovery(directRuntimeDependencies)
 	if err != nil {
 		return nil, err
@@ -787,6 +809,10 @@ func validateDriverDependencies(drivers external.Drivers, cat *depcatalog.Catalo
 
 func provideExternalAgentCodexHandler(log *slog.Logger, driver *codexruntime.Driver, botAgents *botagents.Service, botService *bots.Service, accountService *accounts.Service) *handlers.ExternalAgentCodexHandler {
 	return handlers.NewExternalAgentCodexHandler(log, driver, botAgents, botService, accountService)
+}
+
+func provideExternalAgentLoginHandler(log *slog.Logger, drivers external.Drivers, botAgents *botagents.Service, botService *bots.Service, accountService *accounts.Service) *handlers.ExternalAgentLoginHandler {
+	return handlers.NewExternalAgentLoginHandler(log, drivers, botAgents, botService, accountService)
 }
 
 func provideAgentService(log *slog.Logger, a *native.Agent, modelsService *models.Service, queries dbstore.Queries, msgService *message.DBService, settingsService *settings.Service, accountService *accounts.Service, botService *bots.Service, mediaService *media.Service, containerdHandler *handlers.ContainerdHandler, workspaceManager *workspace.Manager, memoryRegistry *memprovider.Registry, channelStore *channel.Store, _ *route.DBService, sessionService *sessionpkg.Service, eventHub *event.Hub, compactionService *compaction.Service, pipeline *timeline.Pipeline, rc *boot.RuntimeConfig, bgManager *background.Manager, toolApproval *toolapproval.Service, userInput *userinput.Service, acpPool *acpagent.SessionPool, directAgents external.Drivers, hookService *hookspkg.Service, sessionRuntime *sessionruntime.Manager, workdirService *workdir.Service, cfg config.Config) *application.Service {
