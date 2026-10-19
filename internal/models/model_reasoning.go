@@ -122,10 +122,6 @@ func (c ModelConfig) ReasoningReplay() *ReasoningReplay {
 	return c.Reasoning.Replay
 }
 
-// inferUndeclaredDialect gives a reasoning model written without a dialect the
-// adaptive one when its id reads as Claude 4.6 or later, the inference version
-// 1 made for an undeclared thinking mode. Those generations reject the older
-// budget wire, so a hand-added Claude model must not fall back to it.
 // StoredForm returns the config as Create and Update store it: normalized, and
 // with the dialect the model's id implies when none is declared. A caller that
 // compares a stored row with a config it is about to write must compare the
@@ -134,6 +130,10 @@ func (c ModelConfig) StoredForm(modelID string) ModelConfig {
 	return inferUndeclaredDialect(normalizeModelConfig(c), modelID)
 }
 
+// inferUndeclaredDialect gives a reasoning model written without a dialect the
+// adaptive one when its id reads as Claude 4.6 or later, the inference version
+// 1 made for an undeclared thinking mode. Those generations reject the older
+// budget wire, so a hand-added Claude model must not fall back to it.
 func inferUndeclaredDialect(c ModelConfig, modelID string) ModelConfig {
 	if c.Reasoning == nil || c.Reasoning.Dialect != "" {
 		return c
