@@ -4498,6 +4498,7 @@
   },
   "notifications": {
     "inbox": "Needs you",
+    "justNow": "Just now",
     "showAll": "Show all ({count})",
     "showLess": "Show less",
     "otherBots": "Unread sessions in other bots",
