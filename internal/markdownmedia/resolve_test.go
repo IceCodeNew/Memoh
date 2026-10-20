@@ -6,9 +6,11 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
+	"strings"
 	"testing"
 
 	"github.com/felinics/memoh/internal/media"
@@ -54,12 +56,12 @@ func (s *memoryStore) Open(_ context.Context, botID, hash string) (io.ReadCloser
 func TestSnapshotSurvivesOverwriteAndDeletion(t *testing.T) {
 	ctx := context.Background()
 	s := &memoryStore{files: map[string][]byte{"bot/data/report.txt": []byte("original")}}
-	bindings := Resolve(ctx, s, "bot", "[report](/data/report.txt) and [again](/data/report.txt)")
+	bindings := Resolve(ctx, s, "bot", "[report](/data/report.txt) and [again](/data/report.txt)", Options{Links: true})
 	if len(bindings) != 2 || s.reads != 1 {
 		t.Fatalf("bindings=%+v reads=%d", bindings, s.reads)
 	}
 	s.files["bot/data/report.txt"] = []byte("revised")
-	newBinding := Resolve(ctx, s, "bot", "[report](/data/report.txt)")[0]
+	newBinding := Resolve(ctx, s, "bot", "[report](/data/report.txt)", Options{Links: true})[0]
 	if newBinding.Asset.ContentHash == bindings[0].Asset.ContentHash {
 		t.Fatal("new message reused stale bytes")
 	}
@@ -77,8 +79,9 @@ func TestSnapshotSurvivesOverwriteAndDeletion(t *testing.T) {
 
 func TestFailuresAreIsolatedAndDoNotExposeStorageErrors(t *testing.T) {
 	s := &memoryStore{files: map[string][]byte{"bot/data/good.txt": []byte("hello")}}
-	bindings := Resolve(context.Background(), s, "bot", "[good](/data/good.txt) ![bad](/data/good.txt) [missing](/data/missing) [outside](/etc/passwd)")
-	if len(bindings) != 4 || bindings[0].ErrorCode != "" {
+	// Paths outside /data are ordinary links, not references.
+	bindings := Resolve(context.Background(), s, "bot", "[good](/data/good.txt) ![bad](/data/good.txt) [missing](/data/missing) [outside](/etc/passwd) [escape](/data/../etc/passwd)", Options{Links: true})
+	if len(bindings) != 3 || bindings[0].ErrorCode != "" {
 		t.Fatalf("bindings=%+v", bindings)
 	}
 	for _, b := range bindings[1:] {
@@ -89,14 +92,14 @@ func TestFailuresAreIsolatedAndDoNotExposeStorageErrors(t *testing.T) {
 	if s.reads != 3 {
 		t.Fatalf("outside path reached storage: reads=%d", s.reads)
 	}
-	other := Resolve(context.Background(), s, "other", "[good](/data/good.txt)")
+	other := Resolve(context.Background(), s, "other", "[good](/data/good.txt)", Options{Links: true})
 	if other[0].ErrorCode == "" {
 		t.Fatal("cross-bot read succeeded")
 	}
 }
 
 func TestRemoteImageRejectsLoopback(t *testing.T) {
-	bindings := Resolve(context.Background(), &memoryStore{}, "bot", "![internal](http://127.0.0.1:9/secret)")
+	bindings := Resolve(context.Background(), &memoryStore{}, "bot", "![internal](http://127.0.0.1:9/secret)", Options{})
 	if len(bindings) != 1 || bindings[0].ErrorCode == "" {
 		t.Fatalf("bindings=%+v", bindings)
 	}
@@ -110,5 +113,40 @@ func TestMediaDownloadRejectsNonPublicDestinations(t *testing.T) {
 	}
 	if !publicMediaIP(net.ParseIP("8.8.8.8")) {
 		t.Fatal("public destination rejected")
+	}
+}
+
+func TestWebPublicationArchivesImagesOnly(t *testing.T) {
+	png := []byte("\x89PNG\r\n\x1a\n" + strings.Repeat("\x00", 32))
+	s := &memoryStore{files: map[string][]byte{"bot/data/a.png": png, "bot/data/report.txt": []byte("report")}}
+	bindings := Resolve(context.Background(), s, "bot", "![a](/data/a.png) [report](/data/report.txt)", Options{})
+	if len(bindings) != 1 || !bindings[0].Image || bindings[0].ErrorCode != "" || s.reads != 1 {
+		t.Fatalf("bindings=%+v reads=%d", bindings, s.reads)
+	}
+}
+
+func TestReferenceLimitFailsLaterTargetsWithoutReading(t *testing.T) {
+	s := &memoryStore{files: map[string][]byte{}}
+	var source strings.Builder
+	for i := 0; i < MaxReferences+2; i++ {
+		name := fmt.Sprintf("/data/f%d.txt", i)
+		s.files["bot"+name] = []byte(name)
+		fmt.Fprintf(&source, "[f](%s) ", name)
+	}
+	bindings := Resolve(context.Background(), s, "bot", source.String(), Options{Links: true})
+	if len(bindings) != MaxReferences+2 || s.reads != MaxReferences {
+		t.Fatalf("bindings=%d reads=%d", len(bindings), s.reads)
+	}
+	for _, b := range bindings[MaxReferences:] {
+		if b.ErrorCode == "" {
+			t.Fatalf("reference over the limit was published: %+v", b)
+		}
+	}
+}
+
+func TestImageMustBeImageBytes(t *testing.T) {
+	s := &memoryStore{files: map[string][]byte{"bot/data/x.png": []byte("<html><script>alert(1)</script>")}}
+	if b := Resolve(context.Background(), s, "bot", "![x](/data/x.png)", Options{})[0]; b.ErrorCode == "" {
+		t.Fatalf("non-image bytes published as an image: %+v", b)
 	}
 }

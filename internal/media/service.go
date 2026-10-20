@@ -1,6 +1,7 @@
 package media
 
 import (
+	"bufio"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -8,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net/http"
 	"os"
 	"path"
 	"strings"
@@ -391,5 +393,16 @@ func (s *Service) IngestWorkspaceFile(ctx context.Context, botID, containerPath 
 	}
 	defer func() { _ = file.Close() }()
 	ext := path.Ext(containerPath)
-	return s.Ingest(ctx, IngestInput{BotID: botID, Mime: mimeFromExtension(ext), Reader: file, OriginalExt: ext})
+	mime := mimeFromExtension(ext)
+	// The stored type decides how the asset is served later. An image is
+	// stored as the image its bytes are, and an extension claiming an image
+	// for other bytes must not make them servable as one.
+	body := bufio.NewReaderSize(file, 512)
+	prefix, _ := body.Peek(512)
+	if detected := http.DetectContentType(prefix); strings.HasPrefix(detected, "image/") {
+		mime, ext = detected, ""
+	} else if strings.HasPrefix(mime, "image/") {
+		mime, ext = "application/octet-stream", ""
+	}
+	return s.Ingest(ctx, IngestInput{BotID: botID, Mime: mime, Reader: body, OriginalExt: ext})
 }

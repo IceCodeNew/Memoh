@@ -43,3 +43,19 @@ func TestHistoryRendersMediaBeforeNormalizingSource(t *testing.T) {
 		}
 	}
 }
+
+func TestHistoryKeepsLinkedFilesAsWorkspaceLinks(t *testing.T) {
+	source := "see [report](/data/r.txt) and ![chart](/data/c.png)"
+	refs := markdownmedia.Parse(source)
+	bindings := []markdownmedia.Binding{
+		{Reference: refs[0], Asset: media.Asset{BotID: "bot-1", ContentHash: strings.Repeat("b", 64)}},
+		{Reference: refs[1], Asset: media.Asset{BotID: "bot-1", ContentHash: strings.Repeat("c", 64)}},
+	}
+	metadata, _ := json.Marshal(map[string]any{markdownmedia.MetadataKey: bindings, "markdown_media_source": source})
+	content, _ := json.Marshal(map[string]any{"role": "assistant", "content": []map[string]any{{"type": "text", "text": source}}})
+	turns := convertTestMessagesToUITurns([]messagepkg.Message{{ID: "assistant-1", Role: "assistant", Content: content, RawMetadata: metadata}})
+	data, _ := json.Marshal(turns)
+	if !strings.Contains(string(data), "[report](/data/r.txt)") || strings.Contains(string(data), strings.Repeat("b", 64)) || !strings.Contains(string(data), "![chart](/bots/bot-1/media/"+strings.Repeat("c", 64)+")") {
+		t.Fatalf("history=%s", data)
+	}
+}

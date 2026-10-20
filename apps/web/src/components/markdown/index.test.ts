@@ -76,9 +76,9 @@ describe('chat Markdown media', () => {
     expect(host.querySelector('img')).toBeNull()
   })
 
-  it('keeps a pending workspace file unclickable', async () => {
-    const host = await renderChatMarkdown('[report](/data/report.pdf)')
-    expect(host.querySelector('a[href="/data/report.pdf"]')).toBeNull()
-    expect(host.textContent).toContain('chat.mediaPreparing')
+  it('opens an image without an archived copy in the workspace', async () => {
+    const host = await renderChatMarkdown('![chart](/data/chart.png)')
+    expect(host.querySelector('img')).toBeNull()
+    expect(host.querySelector('a[href="/data/chart.png"]')?.textContent).toContain('chart')
   })
 })

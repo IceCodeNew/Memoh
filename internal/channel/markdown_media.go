@@ -9,15 +9,23 @@ import (
 	"github.com/felinics/memoh/internal/markdownmedia"
 )
 
+// ResolveMarkdownMessage archives the media a message references, for an IM
+// destination. The agent server calls it before handing a message to the
+// Channel process, which may not reach the bot workspace.
+func ResolveMarkdownMessage(ctx context.Context, store OutboundAttachmentStore, botID string, channelType ChannelType, msg Message) Message {
+	return resolveMarkdownMessage(ctx, store, ChannelConfig{BotID: botID, ChannelType: channelType}, msg)
+}
+
 func resolveMarkdownMessage(ctx context.Context, store OutboundAttachmentStore, cfg ChannelConfig, msg Message) Message {
-	if msg.Format == MessageFormatPlain {
+	// Web and Desktop render Markdown from history and open workspace links.
+	if msg.Format == MessageFormatPlain || isLocalChannel(cfg.ChannelType) {
 		return msg
 	}
 	if _, prepared := msg.Metadata[markdownmedia.MetadataKey]; prepared {
 		return msg
 	}
 	mediaStore, _ := store.(markdownmedia.Store)
-	bindings := markdownmedia.Resolve(ctx, mediaStore, cfg.BotID, msg.Text)
+	bindings := markdownmedia.Resolve(ctx, mediaStore, cfg.BotID, msg.Text, markdownmedia.Options{Links: true})
 	if len(bindings) == 0 {
 		return msg
 	}
@@ -39,6 +47,7 @@ func expandMarkdownMessage(msg OutboundMessage) ([]OutboundMessage, bool) {
 	base := msg.Message
 	base.Metadata = maps.Clone(base.Metadata)
 	delete(base.Metadata, markdownmedia.MetadataKey)
+	delete(base.Metadata, markdownmedia.EarlierMetadataKey)
 	base.Text = ""
 	base.Attachments = nil
 	base.Parts = nil

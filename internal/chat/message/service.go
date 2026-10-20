@@ -166,13 +166,20 @@ func isTurnSequenceUniqueViolation(err error) bool {
 // -> assistant(final) round with one PostgreSQL statement. Unsupported stores
 // or non-matching inputs return handled=false so callers can use Persist.
 func (s *DBService) PersistToolTailRound(ctx context.Context, inputs []PersistInput) ([]Message, bool, error) {
-	for _, input := range inputs {
-		if input.Role == "assistant" && len(markdownmedia.Parse(markdownSource(input))) > 0 {
-			return nil, false, nil
-		}
-	}
 	if s == nil || s.queries == nil || !isToolTailRoundShape(inputs) {
 		return nil, false, nil
+	}
+	for _, input := range inputs {
+		if input.Role == "assistant" && len(markdownmedia.Parse(markdownSource(input))) > 0 {
+			// Published media adds message assets, which the single-statement
+			// write does not carry; keep the round atomic in a transaction.
+			prepared := append([]PersistInput(nil), inputs...)
+			for i := range prepared {
+				prepared[i] = s.prepareMarkdownMedia(ctx, prepared[i])
+			}
+			_, fenced := runtimefence.FromContext(ctx)
+			return s.persistRoundInTx(ctx, prepared, RoundPersistenceOptions{}, fenced, strings.TrimSpace(inputs[0].BotID), strings.TrimSpace(inputs[0].SessionID))
+		}
 	}
 	writer, ok := s.queries.(toolTailRoundWriter)
 	if !ok || !writer.SupportsAtomicDirectHistoryTurnWrites() {
@@ -306,6 +313,12 @@ func (s *DBService) PersistRound(ctx context.Context, inputs []PersistInput, opt
 		inputs[i] = s.prepareMarkdownMedia(ctx, inputs[i])
 	}
 
+	return s.persistRoundInTx(ctx, inputs, options, fenced, botID, sessionID)
+}
+
+// persistRoundInTx writes prepared round inputs in one transaction, retrying
+// turn sequence conflicts.
+func (s *DBService) persistRoundInTx(ctx context.Context, inputs []PersistInput, options RoundPersistenceOptions, fenced bool, botID, sessionID string) ([]Message, bool, error) {
 	const maxTurnSequenceRetries = 3
 	var lastErr error
 	for attempt := 0; attempt < maxTurnSequenceRetries; attempt++ {

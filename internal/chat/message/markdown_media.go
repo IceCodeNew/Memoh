@@ -21,7 +21,8 @@ func (s *DBService) prepareMarkdownMedia(ctx context.Context, input PersistInput
 		return input
 	}
 	source := strings.TrimSpace(markdownSource(input))
-	bindings := s.resolveMarkdownMedia(ctx, input.BotID, source)
+	platform, _ := input.Metadata["platform"].(string)
+	bindings := s.resolveMarkdownMedia(ctx, input.BotID, source, markdownmedia.Options{Links: deliversLinkedFiles(platform)})
 	if len(bindings) == 0 {
 		return input
 	}
@@ -43,13 +44,21 @@ func (s *DBService) prepareMarkdownMedia(ctx context.Context, input PersistInput
 			continue
 		}
 		seen[asset.ContentHash] = true
-		name := strings.TrimSpace(binding.Label)
-		if name == "" {
-			name = markdownmedia.Filename(binding.Target)
-		}
+		name := markdownmedia.Filename(binding.Target)
 		input.Assets = append(input.Assets, AssetRef{ContentHash: asset.ContentHash, Role: "markdown", Ordinal: len(input.Assets), Mime: asset.Mime, SizeBytes: asset.SizeBytes, StorageKey: asset.StorageKey, Name: name, Metadata: map[string]any{"source_path": binding.Target}})
 	}
 	return input
+}
+
+// deliversLinkedFiles reports whether a session's replies reach a surface
+// without the workspace. Web, Desktop and the CLI open linked workspace files
+// in place, so only IM sessions archive them.
+func deliversLinkedFiles(platform string) bool {
+	switch strings.ToLower(strings.TrimSpace(platform)) {
+	case "", "web", "cli", "local":
+		return false
+	}
+	return true
 }
 
 func markdownSource(input PersistInput) string {

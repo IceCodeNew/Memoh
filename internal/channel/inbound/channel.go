@@ -35,7 +35,6 @@ import (
 	"github.com/felinics/memoh/internal/errlog"
 	"github.com/felinics/memoh/internal/errs"
 	"github.com/felinics/memoh/internal/i18n"
-	"github.com/felinics/memoh/internal/markdownmedia"
 	"github.com/felinics/memoh/internal/media"
 	"github.com/felinics/memoh/internal/runtimekind"
 	skillset "github.com/felinics/memoh/internal/skills"
@@ -1353,11 +1352,21 @@ func (p *ChannelInboundProcessor) HandleInbound(ctx context.Context, cfg channel
 		return nil
 	}
 
-	if outMessage, ok := assistantReply(finalMessages, desc.Capabilities, sentTexts); ok {
-		if len(markdownmedia.Parse(outMessage.Text)) > 0 {
-			published := p.publishedMedia(ctx, sessionID, handle.RunID(), publicationStart.Add(-time.Minute))
-			outMessage = bindPublishedMedia(outMessage, &published, p.localizer(ctx, identity.BotID).Locale())
+	outMessage, hasReply := assistantReply(finalMessages, desc.Capabilities, sentTexts)
+	if !isLocalChannelType(msg.Channel) && runPublishesMarkdownMedia(finalMessages) {
+		published := p.publishedMedia(ctx, sessionID, handle.RunID(), publicationStart.Add(-time.Minute))
+		locale := p.localizer(ctx, identity.BotID).Locale()
+		if hasReply {
+			outMessage = bindPublishedMedia(outMessage, &published, locale)
 		}
+		// Media written before a tool call is published with the final, from
+		// the snapshots of those earlier steps.
+		if earlier := earlierPublishedMedia(published); len(earlier) > 0 {
+			outMessage = withEarlierMedia(outMessage, earlier, locale)
+			hasReply = true
+		}
+	}
+	if hasReply {
 		if outMessage.Reply == nil && sourceMessageID != "" {
 			outMessage.Reply = &channel.ReplyRef{
 				Target:    target,

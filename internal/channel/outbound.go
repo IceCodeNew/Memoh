@@ -12,7 +12,6 @@ import (
 
 	"github.com/felinics/memoh/internal/errs"
 	"github.com/felinics/memoh/internal/i18n"
-	"github.com/felinics/memoh/internal/markdownmedia"
 )
 
 // ChunkerMode selects the text chunking strategy.
@@ -800,22 +799,24 @@ func (s *managerReplySender) OpenStream(ctx context.Context, target string, opts
 // Push and Close must be called from a single goroutine; this type is not
 // safe for concurrent use.
 type managerOutboundStream struct {
-	manager             *Manager
-	config              ChannelConfig
-	stream              PreparedOutboundStream
-	channelType         ChannelType
-	target              string
-	reply               *ReplyRef
-	policy              OutboundPolicy // cached at open time; immutable after creation
-	sender              Sender
-	send                func(ctx context.Context, msg OutboundMessage) error
-	reopen              func(ctx context.Context) (PreparedOutboundStream, error)
-	deltaRunes          int
-	deltaText           strings.Builder
-	forwardedText       strings.Builder
-	splitCount          int
-	markdownText        strings.Builder
-	markdownPending     bool
+	manager     *Manager
+	config      ChannelConfig
+	stream      PreparedOutboundStream
+	channelType ChannelType
+	target      string
+	reply       *ReplyRef
+	policy      OutboundPolicy // cached at open time; immutable after creation
+	sender      Sender
+	send        func(ctx context.Context, msg OutboundMessage) error
+	reopen      func(ctx context.Context) (PreparedOutboundStream, error)
+	deltaRunes  int
+	deltaText   strings.Builder
+	splitCount  int
+	// Markdown media publication state; see markdown_stream.go.
+	segmentText         strings.Builder
+	heldText            strings.Builder
+	holdingMedia        bool
+	carried             []string
 	markdownFinalSource string
 	markdownFinalParts  []OutboundMessage
 	markdownFinalNext   int
@@ -824,9 +825,10 @@ type managerOutboundStream struct {
 func (s *managerOutboundStream) Push(ctx context.Context, event StreamEvent) (err error) {
 	defer func() {
 		if event.Type == StreamEventFinal && err == nil {
-			s.forwardedText.Reset()
-			s.markdownText.Reset()
-			s.markdownPending = false
+			s.segmentText.Reset()
+			s.heldText.Reset()
+			s.holdingMedia = false
+			s.carried = nil
 		}
 	}()
 	if s.manager == nil || s.stream == nil {
@@ -835,67 +837,10 @@ func (s *managerOutboundStream) Push(ctx context.Context, event StreamEvent) (er
 	if err := validateStreamEvent(s.manager.registry, s.channelType, event); err != nil {
 		return err
 	}
-
-	if event.Type == StreamEventDelta && event.Phase != StreamPhaseReasoning {
-		s.markdownFinalParts = nil
-		s.markdownFinalNext = 0
-		if s.markdownPending {
-			s.markdownText.WriteString(event.Delta)
-			return nil
-		}
-		if i := strings.IndexAny(event.Delta, "[!"); i >= 0 {
-			if i > 0 {
-				prefix := event
-				prefix.Delta = event.Delta[:i]
-				if err := s.pushDelta(ctx, prefix); err != nil {
-					return err
-				}
-			}
-			s.markdownText.WriteString(event.Delta[i:])
-			s.markdownPending = true
-			return nil
-		}
+	if handled, err := s.pushMarkdown(ctx, &event); handled || err != nil {
+		return err
 	}
 
-	if event.Type == StreamEventPhaseEnd && event.Phase == StreamPhaseText && len(markdownmedia.Parse(s.markdownText.String())) == 0 && s.markdownPending {
-		if err := s.pushDelta(ctx, StreamEvent{Type: StreamEventDelta, Delta: s.markdownText.String(), Phase: StreamPhaseText}); err != nil {
-			return err
-		}
-		s.markdownText.Reset()
-		s.markdownPending = false
-	}
-	if event.Type == StreamEventFinal && event.Final != nil {
-		final := *event.Final
-		if s.markdownFinalParts != nil && s.markdownFinalSource == final.Message.Text {
-			return s.deliverMarkdownFinal(ctx)
-		}
-		final.Message = resolveMarkdownMessage(ctx, s.manager.attachmentStore, s.config, final.Message)
-		if len(markdownmedia.Bindings(final.Message.Metadata)) > 0 && s.send != nil {
-			caps, hasCaps := s.manager.registry.GetOutboundCapabilities(s.channelType, s.config, s.target)
-			parts, err := s.prepareMarkdownFinal(final.Message, caps, hasCaps)
-			if err != nil {
-				return err
-			}
-			s.markdownFinalSource = final.Message.Text
-			s.markdownFinalParts = parts
-			s.markdownFinalNext = 0
-			if err := s.deliverMarkdownFinal(ctx); err != nil {
-				return err
-			}
-
-			s.markdownText.Reset()
-			s.markdownPending = false
-			return nil
-		}
-		if s.markdownPending {
-			if err := s.pushDelta(ctx, StreamEvent{Type: StreamEventDelta, Delta: s.markdownText.String(), Phase: StreamPhaseText}); err != nil {
-				return err
-			}
-			s.markdownText.Reset()
-			s.markdownPending = false
-		}
-		event.Final = &final
-	}
 	if event.Type == StreamEventError && strings.TrimSpace(event.Error) == "" {
 		return nil
 	}
@@ -985,14 +930,6 @@ const streamSplitSoftRatio = 4
 // the soft and hard limits it looks for natural break points (sentence ends,
 // line breaks) so messages don't get cut mid-sentence.
 func (s *managerOutboundStream) pushDelta(ctx context.Context, event StreamEvent) error {
-	if err := s.pushDeltaWithChunking(ctx, event); err != nil {
-		return err
-	}
-	s.forwardedText.WriteString(event.Delta)
-	return nil
-}
-
-func (s *managerOutboundStream) pushDeltaWithChunking(ctx context.Context, event StreamEvent) error {
 	policy := s.policy
 	if policy.TextChunkLimit <= 0 || s.reopen == nil {
 		s.deltaRunes += runeLen(event.Delta)
@@ -1372,53 +1309,4 @@ func sleepWithContext(ctx context.Context, d time.Duration) bool {
 	case <-timer.C:
 		return true
 	}
-}
-
-func (s *managerOutboundStream) prepareMarkdownFinal(msg Message, caps ChannelCapabilities, hasCaps bool) ([]OutboundMessage, error) {
-	outbound := OutboundMessage{Target: s.target, Message: msg}
-	if s.splitCount == 0 {
-		return buildOutboundMessagesWithCaps(outbound, s.policy, caps, hasCaps)
-	}
-	expanded, _ := expandMarkdownMessage(outbound)
-	if len(expanded) == 0 || len(expanded[0].Message.Attachments) > 0 {
-		return buildOutboundMessagesWithCaps(outbound, s.policy, caps, hasCaps)
-	}
-	// Finalize the adapter's buffer, then send only prose that was withheld
-	// while waiting for a complete reference. Do this before ordinary chunking
-	// so already streamed prose cannot reappear in later chunks.
-	buffer := expanded[0]
-	buffer.Message.Text = ""
-	buffer.Message.Actions = nil
-	expanded[0].Message.Text = strings.TrimPrefix(expanded[0].Message.Text, s.forwardedText.String())
-	parts, err := buildExpandedMarkdownMessages(expanded, s.policy, caps, hasCaps)
-	if err != nil {
-		return nil, err
-	}
-	return append([]OutboundMessage{buffer}, parts...), nil
-}
-
-// Keep progress across a retried final event so already acknowledged parts are
-// not republished. Platform transport retries retain their existing semantics.
-func (s *managerOutboundStream) deliverMarkdownFinal(ctx context.Context) error {
-	for s.markdownFinalNext < len(s.markdownFinalParts) {
-		part := s.markdownFinalParts[s.markdownFinalNext]
-		var err error
-		// Some adapters finalize text only (for example Discord). A leading
-		// attachment must use the ordinary sender, not a text final event.
-		if s.markdownFinalNext == 0 && len(part.Message.Attachments) == 0 {
-			first := StreamEvent{Type: StreamEventFinal, Final: &StreamFinalizePayload{Message: part.Message}}
-			if s.splitCount > 0 {
-				err = s.pushFinalAfterSplit(ctx, first, part.Message.PlainText())
-			} else {
-				err = s.pushPrepared(ctx, first)
-			}
-		} else {
-			err = s.send(ctx, part)
-		}
-		if err != nil {
-			return err
-		}
-		s.markdownFinalNext++
-	}
-	return nil
 }

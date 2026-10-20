@@ -458,8 +458,8 @@ func provideSessionService(log *slog.Logger, queries dbstore.Queries, hub *event
 
 func provideMessageService(log *slog.Logger, queries dbstore.Queries, hub *event.Hub, mediaService *media.Service) *message.DBService {
 	svc := message.NewService(log, queries, hub)
-	svc.SetMarkdownMediaResolver(func(ctx context.Context, botID, text string) []markdownmedia.Binding {
-		return markdownmedia.Resolve(ctx, mediaService, botID, text)
+	svc.SetMarkdownMediaResolver(func(ctx context.Context, botID, text string, opts markdownmedia.Options) []markdownmedia.Binding {
+		return markdownmedia.Resolve(ctx, mediaService, botID, text, opts)
 	})
 	return svc
 }
@@ -1594,6 +1594,13 @@ func (a *mediaAssetResolverAdapter) IngestContainerFile(ctx context.Context, bot
 		return messaging.AssetMeta{}, errors.New("media service not configured")
 	}
 	return a.media.IngestContainerFile(ctx, botID, containerPath)
+}
+
+func (a *mediaAssetResolverAdapter) IngestWorkspaceFile(ctx context.Context, botID, containerPath string) (media.Asset, error) {
+	if a == nil || a.media == nil {
+		return media.Asset{}, errors.New("media service not configured")
+	}
+	return a.media.IngestWorkspaceFile(ctx, botID, containerPath)
 }
 
 type gatewayAssetLoaderAdapter struct {

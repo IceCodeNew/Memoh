@@ -1,10 +1,10 @@
 package markdownmedia
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
 	"errors"
-	"io"
 	"net"
 	"net/http"
 	"net/netip"
@@ -19,6 +19,10 @@ import (
 
 const MetadataKey = "markdown_media"
 
+// EarlierMetadataKey carries the snapshots published by a run's earlier
+// steps on its final channel message, in publication order.
+const EarlierMetadataKey = "markdown_media_earlier"
+
 // ErrPartialDelivery means prose was published, but one or more media references failed.
 var ErrPartialDelivery = errors.New("media.partial_delivery")
 
@@ -31,18 +35,47 @@ type Binding struct {
 type Store interface {
 	IngestWorkspaceFile(context.Context, string, string) (media.Asset, error)
 	Ingest(context.Context, media.IngestInput) (media.Asset, error)
-	Open(context.Context, string, string) (io.ReadCloser, media.Asset, error)
 }
 
-type Resolver func(context.Context, string, string) []Binding
+type Resolver func(context.Context, string, string, Options) []Binding
+
+// WorkspaceRoot is the only directory model-authored references may publish.
+const WorkspaceRoot = "/data"
+
+// MaxReferences bounds the distinct targets archived for one message. Later
+// references fail individually instead of extending the publication.
+const MaxReferences = 20
+
+// Persistence publishes without the turn's cancellation, so one message's
+// archive work, including remote downloads, has to stop on its own.
+const resolveBudget = 60 * time.Second
+
+// Remote images are previews, not file transfers.
+const maxRemoteImageBytes int64 = 20 << 20
+
+type Options struct {
+	// Links also archives file links. Web and Desktop open linked workspace
+	// files in place, so only IM delivery needs their contents.
+	Links bool
+}
+
+var errReferenceLimit = errors.New("too many media references")
 
 // Resolve snapshots explicit media before publication. Failures are per-reference
 // and carry only stable public codes; storage errors never become message text.
-func Resolve(ctx context.Context, store Store, botID, source string) []Binding {
+func Resolve(ctx context.Context, store Store, botID, source string, opts Options) []Binding {
 	refs := Parse(source)
+	if len(refs) == 0 {
+		return nil
+	}
+	ctx, cancel := context.WithTimeout(ctx, resolveBudget)
+	defer cancel()
 	bindings := make([]Binding, 0, len(refs))
 	cache := map[string]Binding{}
 	for _, ref := range refs {
+		if !ref.Image && !opts.Links {
+			continue
+		}
 		cacheKey := strconv.FormatBool(ref.Image) + ":" + ref.Target
 		if cached, ok := cache[cacheKey]; ok {
 			cached.Reference = ref
@@ -50,24 +83,14 @@ func Resolve(ctx context.Context, store Store, botID, source string) []Binding {
 			continue
 		}
 		b := Binding{Reference: ref}
-		asset, err := archive(ctx, store, botID, ref.Target)
-		if err == nil && ref.Image {
-			var reader io.ReadCloser
-			reader, _, err = store.Open(ctx, botID, asset.ContentHash)
-			if err == nil {
-				prefix := make([]byte, 512)
-				n, readErr := io.ReadFull(reader, prefix)
-				_ = reader.Close()
-				if readErr != nil && readErr != io.EOF && readErr != io.ErrUnexpectedEOF {
-					err = readErr
-				}
-				detected := http.DetectContentType(prefix[:n])
-				if !strings.HasPrefix(detected, "image/") {
-					err = errors.New("invalid image")
-				} else {
-					asset.Mime = detected
-				}
-			}
+		asset, err := media.Asset{}, errReferenceLimit
+		if len(cache) < MaxReferences {
+			asset, err = archive(ctx, store, botID, ref.Target, ref.Image)
+		}
+		// The archive records the sniffed type for images, so the stored
+		// asset is served as the image it was validated to be.
+		if err == nil && ref.Image && !IsImageMIME(asset.Mime) {
+			err = errors.New("invalid image")
 		}
 		if err != nil {
 			b.ErrorCode = "media.reference_unavailable"
@@ -80,16 +103,24 @@ func Resolve(ctx context.Context, store Store, botID, source string) []Binding {
 	return bindings
 }
 
-func archive(ctx context.Context, store Store, botID, target string) (media.Asset, error) {
+// IsImageMIME excludes SVG: it is active content when opened directly.
+func IsImageMIME(mime string) bool {
+	return strings.HasPrefix(mime, "image/") && mime != "image/svg+xml"
+}
+
+func archive(ctx context.Context, store Store, botID, target string, image bool) (media.Asset, error) {
 	if store == nil {
 		return media.Asset{}, errors.New("media store unavailable")
 	}
 	if strings.HasPrefix(target, "/") {
 		clean := path.Clean(target)
-		if !strings.HasPrefix(clean, "/data/") {
+		if !strings.HasPrefix(clean, WorkspaceRoot+"/") {
 			return media.Asset{}, errors.New("outside workspace")
 		}
 		return store.IngestWorkspaceFile(ctx, botID, clean)
+	}
+	if !image {
+		return media.Asset{}, errors.New("remote files are not published")
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, target, nil)
 	if err != nil {
@@ -106,7 +137,14 @@ func archive(ctx context.Context, store Store, botID, target string) (media.Asse
 	if res.StatusCode != http.StatusOK {
 		return media.Asset{}, errors.New("media download failed")
 	}
-	return store.Ingest(ctx, media.IngestInput{BotID: botID, Mime: res.Header.Get("Content-Type"), Reader: res.Body, OriginalExt: path.Ext(req.URL.Path)})
+	// Trust the bytes, not the remote Content-Type or URL extension.
+	body := bufio.NewReaderSize(res.Body, 512)
+	prefix, _ := body.Peek(512)
+	detected := http.DetectContentType(prefix)
+	if !IsImageMIME(detected) {
+		return media.Asset{}, errors.New("remote reference is not an image")
+	}
+	return store.Ingest(ctx, media.IngestInput{BotID: botID, Mime: detected, Reader: body, MaxBytes: maxRemoteImageBytes})
 }
 
 // Disable proxies so DNS/IP validation applies to the actual destination,
@@ -153,13 +191,6 @@ func Bindings(metadata map[string]any) []Binding {
 	return result
 }
 
-// Render replaces only validated source ranges, preserving all other Markdown.
-func Render(source string, bindings []Binding, replace func(Binding) string) string {
-	var out strings.Builder
-	visit(source, bindings, func(value string) { out.WriteString(value) }, func(b Binding) { out.WriteString(replace(b)) }, true)
-	return out.String()
-}
-
 func AssetURL(b Binding) string {
 	return "/bots/" + url.PathEscape(b.Asset.BotID) + "/media/" + url.PathEscape(b.Asset.ContentHash)
 }
@@ -197,4 +228,25 @@ var restrictedMediaPrefixes = []netip.Prefix{
 	netip.MustParsePrefix("198.51.100.0/24"), netip.MustParsePrefix("203.0.113.0/24"),
 	netip.MustParsePrefix("240.0.0.0/4"), netip.MustParsePrefix("2001::/32"),
 	netip.MustParsePrefix("2001:db8::/32"),
+}
+
+// Rebind binds references in text that was split off a published message to
+// that message's snapshot. Matching consumes earlier bindings in order, so a
+// path referenced again after its file changed gets the later snapshot. A
+// reference without a snapshot fails rather than rereading the file.
+func Rebind(text string, earlier *[]Binding) []Binding {
+	refs := Parse(text)
+	bindings := make([]Binding, 0, len(refs))
+	for _, ref := range refs {
+		b := Binding{Reference: ref, ErrorCode: "media.reference_unavailable"}
+		for i, candidate := range *earlier {
+			if candidate.Image == ref.Image && candidate.Target == ref.Target {
+				b.Asset, b.ErrorCode = candidate.Asset, candidate.ErrorCode
+				*earlier = append((*earlier)[:i:i], (*earlier)[i+1:]...)
+				break
+			}
+		}
+		bindings = append(bindings, b)
+	}
+	return bindings
 }

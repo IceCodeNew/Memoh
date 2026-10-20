@@ -346,7 +346,9 @@ func ConvertMessagesToUITurns(messages []messagepkg.Message) []UITurn {
 				}
 			}
 			text := extractPersistedMessageText(raw, &modelMessage)
-			bindings := markdownmedia.Bindings(raw.Metadata)
+			// Web and Desktop show archived images; linked files stay workspace
+			// links that open in place, as the reply wrote them.
+			bindings := imageBindings(markdownmedia.Bindings(raw.Metadata))
 			if len(bindings) > 0 {
 				// Binding offsets belong to the publication source, before tag
 				// removal or whitespace normalization changes its byte positions.
@@ -361,11 +363,7 @@ func ConvertMessagesToUITurns(messages []messagepkg.Message) []UITurn {
 				if b.ErrorCode != "" {
 					target = "memoh-media-error:" + b.ErrorCode
 				}
-				prefix := ""
-				if b.Image {
-					prefix = "!"
-				}
-				return prefix + "[" + label + "](" + target + ")"
+				return "![" + label + "](" + target + ")"
 			})
 			text = strings.TrimSpace(stripPersistedAgentTags(text))
 			reasonings := extractPersistedReasoning(&modelMessage)
@@ -1797,4 +1795,14 @@ func ConvertSessionMessagesToUITurns(messages []messagepkg.Message, runtimeType 
 		turns[i].RuntimeForkable = turns[i].RuntimeForkable && allowed[turns[i].TurnID]
 	}
 	return turns
+}
+
+func imageBindings(bindings []markdownmedia.Binding) []markdownmedia.Binding {
+	images := bindings[:0:0]
+	for _, b := range bindings {
+		if b.Image {
+			images = append(images, b)
+		}
+	}
+	return images
 }

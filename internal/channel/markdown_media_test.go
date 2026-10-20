@@ -10,11 +10,12 @@ import (
 
 	"github.com/felinics/memoh/internal/channel/channeltest"
 	"github.com/felinics/memoh/internal/markdownmedia"
+	"github.com/felinics/memoh/internal/media"
 )
 
 func TestMarkdownMediaAcrossChannelPreparation(t *testing.T) {
 	png, _ := base64.StdEncoding.DecodeString("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+a2ioAAAAASUVORK5CYII=")
-	for _, platform := range []string{"discord", "telegram", "feishu", "dingtalk", "qq", "slack", "matrix", "misskey", "line", "wecom", "weixin", "wechatoa", "web", "cli"} {
+	for _, platform := range []string{"discord", "telegram", "feishu", "dingtalk", "qq", "slack", "matrix", "misskey", "line", "wecom", "weixin", "wechatoa"} {
 		t.Run(platform, func(t *testing.T) {
 			ctx := context.Background()
 			store := channeltest.NewMemoryAttachmentStore()
@@ -89,7 +90,7 @@ func TestFailedMediaPreservesRemainingContent(t *testing.T) {
 	msg := Message{Format: MessageFormatMarkdown, Text: "before ![missing](/data/missing.png) after"}
 	msg = resolveMarkdownMessage(context.Background(), nil, ChannelConfig{BotID: "bot"}, msg)
 	parts, ok := expandMarkdownMessage(OutboundMessage{Message: msg})
-	if !ok || len(parts) != 3 || !strings.Contains(parts[1].Message.Text, "could not be shared") {
+	if !ok || len(parts) != 2 || parts[0].Message.Text != "before after" || !strings.Contains(parts[1].Message.Text, "could not be shared") {
 		t.Fatalf("parts=%+v", parts)
 	}
 	if len(markdownmedia.Bindings(parts[1].Message.Metadata)) != 0 {
@@ -209,7 +210,7 @@ func TestMarkdownFinalRetryClearsPendingText(t *testing.T) {
 	if err := stream.Push(ctx, final); err != nil {
 		t.Fatal(err)
 	}
-	if len(*sent) != 2 {
+	if len(*sent) != 1 || len((*sent)[0].Message.Attachments) != 1 {
 		t.Fatalf("sent=%+v", *sent)
 	}
 	if err := stream.Push(ctx, StreamEvent{Type: StreamEventDelta, Delta: "next reply"}); err != nil {
@@ -223,32 +224,150 @@ func TestMarkdownFinalRetryClearsPendingText(t *testing.T) {
 
 func TestSplitMarkdownFinalWithFullyStreamedProse(t *testing.T) {
 	ctx := context.Background()
-	for _, attachmentsSupported := range []bool{false, true} {
-		stream, _, sent := newDeltaSplitTestStream(t, 4096, 2)
-		store := stream.manager.attachmentStore.(*channeltest.MemoryAttachmentStore)
-		store.SeedContainerFile("bot-1", "/data/report.txt", []byte("snapshot"), "text/plain", "report.txt")
-		prefix := strings.Repeat("a", 3072) + "\n"
-		if err := stream.Push(ctx, StreamEvent{Type: StreamEventDelta, Delta: prefix}); err != nil {
+	stream, _, sent := newDeltaSplitTestStream(t, 4096, 2)
+	store := stream.manager.attachmentStore.(*channeltest.MemoryAttachmentStore)
+	store.SeedContainerFile("bot-1", "/data/report.txt", []byte("snapshot"), "text/plain", "report.txt")
+	prefix := strings.Repeat("a", 3072) + "\n"
+	if err := stream.Push(ctx, StreamEvent{Type: StreamEventDelta, Delta: prefix}); err != nil {
+		t.Fatal(err)
+	}
+	if stream.splitCount == 0 {
+		t.Fatal("expected the prefix to split the stream")
+	}
+	final := Message{Text: prefix + "[report](/data/report.txt)", Format: MessageFormatMarkdown}
+	if err := stream.Push(ctx, StreamEvent{Type: StreamEventFinal, Final: &StreamFinalizePayload{Message: final}}); err != nil {
+		t.Fatal(err)
+	}
+	// The link label stays in its paragraph; only the unstreamed rest is sent.
+	if len(*sent) != 2 || (*sent)[0].Message.Text != "report" || len((*sent)[1].Message.Attachments) != 1 {
+		t.Fatalf("sent=%+v", *sent)
+	}
+}
+
+func TestUnsupportedAttachmentsDegradeToNotice(t *testing.T) {
+	store := channeltest.NewMemoryAttachmentStore()
+	store.SeedContainerFile("bot-1", "/data/report.txt", []byte("snapshot"), "text/plain", "report.txt")
+	msg := resolveMarkdownMessage(context.Background(), store, ChannelConfig{BotID: "bot-1", ChannelType: ChannelTypeTelegram}, Message{Text: "[report](/data/report.txt)", Format: MessageFormatMarkdown})
+	parts, _ := expandMarkdownMessage(OutboundMessage{Message: msg})
+	built, err := buildExpandedMarkdownMessages(parts, OutboundPolicy{}, ChannelCapabilities{Text: true}, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	last := built[len(built)-1].Message
+	if len(last.Attachments) != 0 || !strings.Contains(last.Text, "could not be shared") {
+		t.Fatalf("built=%+v", built)
+	}
+}
+
+func pushDeltas(t *testing.T, stream *managerOutboundStream, deltas ...string) {
+	t.Helper()
+	for _, delta := range deltas {
+		if err := stream.Push(context.Background(), StreamEvent{Type: StreamEventDelta, Delta: delta}); err != nil {
 			t.Fatal(err)
 		}
-		msg := resolveMarkdownMessage(ctx, store, stream.config, Message{Text: prefix + "[report](/data/report.txt)", Format: MessageFormatMarkdown})
-		parts, err := stream.prepareMarkdownFinal(msg, ChannelCapabilities{Attachments: attachmentsSupported, Media: attachmentsSupported}, true)
-		if err != nil {
+	}
+}
+
+func streamedText(reo *reopenableStream) string {
+	var text strings.Builder
+	for _, recording := range reo.streams {
+		for _, event := range recording.Events() {
+			text.WriteString(event.Delta)
+		}
+	}
+	return text.String()
+}
+
+func TestOrdinaryMarkdownKeepsStreaming(t *testing.T) {
+	stream, reo, _ := newDeltaSplitTestStream(t, 4096, 1)
+	pushDeltas(t, stream, "Hello! ", "this ", "[site](https://example.com) ", "- [ ] task ", "is streamed")
+	if got := streamedText(reo); got != "Hello! this [site](https://example.com) - [ ] task is streamed" {
+		t.Fatalf("streamed=%q", got)
+	}
+}
+
+func TestResetDiscardsWithheldText(t *testing.T) {
+	stream, reo, _ := newDeltaSplitTestStream(t, 4096, 1)
+	pushDeltas(t, stream, "Attempt one [x")
+	if err := stream.Push(context.Background(), StreamEvent{Type: StreamEventReset}); err != nil {
+		t.Fatal(err)
+	}
+	pushDeltas(t, stream, "Second attempt")
+	if err := stream.Push(context.Background(), StreamEvent{Type: StreamEventPhaseEnd, Phase: StreamPhaseText}); err != nil {
+		t.Fatal(err)
+	}
+	if got := streamedText(reo); got != "Attempt one Second attempt" {
+		t.Fatalf("streamed=%q", got)
+	}
+}
+
+func TestEarlierStepMediaIsPublishedFromItsSnapshot(t *testing.T) {
+	ctx := context.Background()
+	stream, reo, sent := newDeltaSplitTestStream(t, 4096, 2)
+	pushDeltas(t, stream, "Created [report](/data/r.txt), now checking.")
+	for _, event := range []StreamEvent{{Type: StreamEventPhaseEnd, Phase: StreamPhaseText}, {Type: StreamEventSegmentEnd}} {
+		if err := stream.Push(ctx, event); err != nil {
 			t.Fatal(err)
 		}
-		stream.markdownFinalParts = parts
-		if err := stream.deliverMarkdownFinal(ctx); err != nil {
-			t.Fatal(err)
+	}
+	pushDeltas(t, stream, "All tests pass.")
+	ref := markdownmedia.Parse("[report](/data/r.txt)")[0]
+	earlier := []markdownmedia.Binding{{Reference: ref, Asset: media.Asset{BotID: "bot-1", ContentHash: "snapshot-hash", Mime: "text/plain"}}}
+	final := Message{Text: "All tests pass.", Format: MessageFormatMarkdown, Metadata: map[string]any{markdownmedia.EarlierMetadataKey: earlier}}
+	if err := stream.Push(ctx, StreamEvent{Type: StreamEventFinal, Final: &StreamFinalizePayload{Message: final}}); err != nil {
+		t.Fatal(err)
+	}
+	if got := streamedText(reo); got != "Created " {
+		t.Fatalf("streamed=%q", got)
+	}
+	var texts []string
+	hash := ""
+	for _, part := range *sent {
+		if strings.Contains(part.Message.Text, "/data/") {
+			t.Fatalf("workspace path leaked: %+v", part)
 		}
-		if len(*sent) != 1 {
-			t.Fatalf("attachmentsSupported=%v sent=%+v", attachmentsSupported, *sent)
+		if _, ok := part.Message.Metadata[markdownmedia.EarlierMetadataKey]; ok {
+			t.Fatalf("publication metadata reached the adapter: %+v", part)
 		}
-		got := (*sent)[0].Message
-		if attachmentsSupported && len(got.Attachments) != 1 {
-			t.Fatalf("missing attachment: %+v", got)
+		if len(part.Message.Attachments) == 1 {
+			hash = part.Message.Attachments[0].ContentHash
+			texts = append(texts, "<file>")
+			continue
 		}
-		if !attachmentsSupported && (len(got.Attachments) != 0 || !strings.Contains(got.Text, "could not be shared")) {
-			t.Fatalf("unsupported attachments did not degrade: %+v", got)
+		texts = append(texts, strings.TrimSpace(part.Message.Text))
+	}
+	if strings.Join(texts, "|") != "report, now checking.|<file>|All tests pass." || hash != "snapshot-hash" {
+		t.Fatalf("sent=%q hash=%q", texts, hash)
+	}
+}
+
+func TestReleasedTextRespectsChunkLimit(t *testing.T) {
+	stream, reo, _ := newDeltaSplitTestStream(t, 100, 10)
+	label := strings.Repeat("b", 300)
+	pushDeltas(t, stream, "Hi [", label, "] end")
+	if got := streamedText(reo); got != "Hi ["+label+"] end" {
+		t.Fatalf("streamed=%q", got)
+	}
+	for _, recording := range reo.streams {
+		for _, event := range recording.Events() {
+			if runeLen(event.Delta) > 100 {
+				t.Fatalf("delta over the platform limit: %d runes", runeLen(event.Delta))
+			}
 		}
+	}
+}
+
+func TestLocalChannelsStreamMarkdownUnchanged(t *testing.T) {
+	stream, reo, sent := newDeltaSplitTestStreamFor(t, "web", 4096, 1)
+	text := "see ![a](/data/a.png) and [r](/data/r.txt)"
+	pushDeltas(t, stream, text)
+	if err := stream.Push(context.Background(), StreamEvent{Type: StreamEventFinal, Final: &StreamFinalizePayload{Message: Message{Text: text, Format: MessageFormatMarkdown}}}); err != nil {
+		t.Fatal(err)
+	}
+	if streamedText(reo) != text || len(*sent) != 0 {
+		t.Fatalf("streamed=%q sent=%+v", streamedText(reo), *sent)
+	}
+	if msg := resolveMarkdownMessage(context.Background(), stream.manager.attachmentStore, ChannelConfig{BotID: "bot-1", ChannelType: "web"}, Message{Text: text, Format: MessageFormatMarkdown}); msg.Metadata != nil {
+		t.Fatalf("local channel archived references: %+v", msg)
 	}
 }

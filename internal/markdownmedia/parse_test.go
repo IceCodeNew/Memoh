@@ -62,7 +62,8 @@ func TestLinkedImagePreservesArchivedImageAndDestination(t *testing.T) {
 	var prose strings.Builder
 	mediaCount := 0
 	Visit(source, bindings, func(text string) { prose.WriteString(text) }, func(Binding) { mediaCount++ })
-	if mediaCount != 1 || prose.String() != "before  [preview](<https://example.com>) after" {
+	// IM publishes the image after its paragraph; the link keeps its label.
+	if mediaCount != 1 || prose.String() != "before [preview](<https://example.com>) after" {
 		t.Fatalf("media=%d prose=%q", mediaCount, prose.String())
 	}
 }
@@ -81,7 +82,29 @@ func TestReferenceLinkContainingImageRetainsLabelAndDestination(t *testing.T) {
 	var prose strings.Builder
 	images := 0
 	Visit(source, bindings, func(text string) { prose.WriteString(text) }, func(Binding) { images++ })
-	if images != 1 || !strings.Contains(prose.String(), "before **open** ") || !strings.Contains(prose.String(), " here [open preview here](<https://example.com>) after") {
+	if images != 1 || !strings.Contains(prose.String(), "before [open preview here](<https://example.com>) after") || strings.Contains(prose.String(), "[site]") {
 		t.Fatalf("images=%d prose=%q", images, prose.String())
+	}
+}
+
+func TestVisitPublishesMediaAfterItsBlock(t *testing.T) {
+	source := "Intro **see ![a](/data/a.png) here** now.\n\n- [report](/data/r.txt)\n- [missing](/data/m.txt)\n\n```md\n![code](/data/c.png)\n```\n\nOutro"
+	refs := Parse(source)
+	if len(refs) != 3 {
+		t.Fatalf("refs=%+v", refs)
+	}
+	bindings := []Binding{{Reference: refs[0]}, {Reference: refs[1]}, {Reference: refs[2], ErrorCode: "media.reference_unavailable"}}
+	var events []string
+	Visit(source, bindings, func(text string) { events = append(events, "prose:"+text) }, func(b Binding) { events = append(events, "media:"+b.Target) })
+	want := []string{
+		"prose:Intro **see here** now.\n\n",
+		"media:/data/a.png",
+		"prose:- report\n- missing\n\n",
+		"media:/data/r.txt",
+		"media:/data/m.txt",
+		"prose:```md\n![code](/data/c.png)\n```\n\nOutro",
+	}
+	if strings.Join(events, "|") != strings.Join(want, "|") {
+		t.Fatalf("events=%q\nwant  =%q", events, want)
 	}
 }

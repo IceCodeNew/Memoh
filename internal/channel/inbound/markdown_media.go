@@ -7,6 +7,7 @@ import (
 	"maps"
 	"time"
 
+	"github.com/felinics/memoh/internal/agent/turn"
 	"github.com/felinics/memoh/internal/channel"
 	messagepkg "github.com/felinics/memoh/internal/chat/message"
 	"github.com/felinics/memoh/internal/markdownmedia"
@@ -65,5 +66,37 @@ func bindPublishedMedia(msg channel.Message, published *[]messagepkg.Message, lo
 		failed = append(failed, markdownmedia.Binding{Reference: ref, ErrorCode: "media.reference_unavailable"})
 	}
 	msg.Metadata[markdownmedia.MetadataKey] = failed
+	return msg
+}
+
+// runPublishesMarkdownMedia reports whether any assistant message of the run,
+// including text written before a tool call, references media, so the
+// published snapshots are worth loading.
+func runPublishesMarkdownMedia(messages []turn.ModelMessage) bool {
+	for _, msg := range messages {
+		if msg.Role == "assistant" && len(markdownmedia.Parse(msg.TextContent())) > 0 {
+			return true
+		}
+	}
+	return false
+}
+
+// earlierPublishedMedia flattens the snapshots left after the final reply
+// claimed its own, in publication order.
+func earlierPublishedMedia(published []messagepkg.Message) []markdownmedia.Binding {
+	var bindings []markdownmedia.Binding
+	for _, msg := range published {
+		bindings = append(bindings, markdownmedia.Bindings(msg.Metadata)...)
+	}
+	return bindings
+}
+
+func withEarlierMedia(msg channel.Message, earlier []markdownmedia.Binding, locale string) channel.Message {
+	msg.Metadata = maps.Clone(msg.Metadata)
+	if msg.Metadata == nil {
+		msg.Metadata = map[string]any{}
+	}
+	msg.Metadata["locale"] = locale
+	msg.Metadata[markdownmedia.EarlierMetadataKey] = earlier
 	return msg
 }

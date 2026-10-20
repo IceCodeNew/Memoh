@@ -4,6 +4,7 @@ package markdownmedia
 
 import (
 	"net/url"
+	"path"
 	"sort"
 	"strings"
 
@@ -91,7 +92,12 @@ func isMediaTarget(target string, image bool) bool {
 		if i := strings.LastIndexByte(target, ':'); i >= 0 && i+1 < len(target) && target[i+1] >= '0' && target[i+1] <= '9' {
 			return false
 		}
-		return true
+		// Only files inside the workspace are media. Application routes,
+		// directories and paths that clean to outside /data stay links.
+		if decoded, err := url.PathUnescape(target); err == nil {
+			target = decoded
+		}
+		return strings.HasPrefix(path.Clean(target), WorkspaceRoot+"/") && !strings.HasSuffix(target, "/")
 	}
 	u, err := url.Parse(target)
 	return image && err == nil && (u.Scheme == "https" || u.Scheme == "http") && u.Host != ""

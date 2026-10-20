@@ -1710,7 +1710,11 @@ func (r *reopenableStream) reopen(_ context.Context) (PreparedOutboundStream, er
 
 func newDeltaSplitTestStream(t *testing.T, chunkLimit int, streamCount int) (*managerOutboundStream, *reopenableStream, *[]OutboundMessage) {
 	t.Helper()
-	channelType := ChannelType("telegram")
+	return newDeltaSplitTestStreamFor(t, ChannelType("telegram"), chunkLimit, streamCount)
+}
+
+func newDeltaSplitTestStreamFor(t *testing.T, channelType ChannelType, chunkLimit int, streamCount int) (*managerOutboundStream, *reopenableStream, *[]OutboundMessage) {
+	t.Helper()
 	registry := NewRegistry()
 	adapter := &streamValidationAdapter{
 		channelType:    channelType,
