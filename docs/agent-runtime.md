@@ -239,6 +239,44 @@ the chain) is `agent.provider_unreachable`. Anything else is
 `agent.response_interrupted`. Published events carry the code and its catalog
 detail; the cause stays in the run's result record.
 
+## Auxiliary loading failures
+
+Before a native chat turn calls the model it reads the workspace's hooks
+configuration (`/data/.memoh/hooks.json`), skills and instruction files. None of
+these reads has a deadline of its own: a slow workspace is waited for. A
+workspace that cannot be reached is the bridge's `Unavailable`, an
+`Unavailable` status a provider passes through, or a `DeadlineExceeded` the
+provider reports; a stalled local bridge is caught by the gRPC keepalive. Once
+one read of a turn finds the workspace unreachable, the turn skips the rest.
+
+What the turn does with each failure:
+
+- **Workspace unreachable or not ready**: the turn keeps the target's identity
+  and answers without tools; the system prompt says the workspace is
+  unavailable.
+- **Hooks configuration cannot be parsed or read**: the turn answers without
+  tools and the system prompt says hooks did not run. `UserMessageReceived` and
+  `BeforeModelCall` hooks are skipped for that turn, so a rule that checks
+  messages before they reach the model does not run either. `PreToolUse` and
+  `BeforeApprovalCreate` still refuse their operation. A missing file means no
+  hooks. This is not configurable; `hooks.json` is writable by the agent
+  itself, so continuing does not widen what it can already change.
+- **Skills or an instruction file cannot be read**: the system prompt says so,
+  instead of passing the content off as empty.
+- **Anything else** fails the turn as before: identity, permission and
+  database errors, a caller's own expired deadline, and a workspace runtime
+  that refused the request for a reason of its own (removed, over quota,
+  conflict).
+
+A turn that answers without its tools records why in
+`RunConfig.ToolsWithheld` and on the turn span (`agent.turn.tools_withheld`).
+Its requests replay earlier tool calls and results as text, since providers
+reject tool blocks in a request that defines no tools; a replayed result is
+wrapped in `<tool-result>` and marked as data, not as something the user said.
+The stored history keeps its tool blocks. Discuss turns never answer without
+tools: the bot speaks there only through its messaging tools, so the turn is
+rejected instead.
+
 ## Graceful shutdown and session resume
 
 Server shutdown closes admission and records `session_runtime.interrupted` on

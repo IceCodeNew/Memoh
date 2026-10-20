@@ -383,14 +383,6 @@ type AgentConfig struct {
 	// Admission recovery can compact in shadow or active mode when enabled;
 	// off disables recovery. Pressure includes raw history and active summaries.
 	SyncCompaction string `toml:"sync_compaction"`
-	// HooksConfigUnavailable decides what a chat turn does when the bot's
-	// hooks configuration cannot be loaded (the file cannot be parsed or
-	// read, or the workspace cannot be reached): "continue" (default) runs
-	// the turn without tools and skips the UserMessageReceived and
-	// BeforeModelCall hooks; "deny" rejects the turn, keeping those hooks
-	// fail-closed. PreToolUse and approval hooks refuse their operation
-	// either way.
-	HooksConfigUnavailable string `toml:"hooks_config_unavailable"`
 }
 
 // EffectiveContextAbsoluteMaxTokens resolves the server-wide context
@@ -427,26 +419,6 @@ func (c AgentConfig) EffectiveSyncCompactionMode() (mode string, recognized bool
 		return value, true
 	default:
 		return SyncCompactionModeShadow, false
-	}
-}
-
-const (
-	HooksConfigUnavailableContinue = "continue"
-	HooksConfigUnavailableDeny     = "deny"
-)
-
-// EffectiveHooksConfigUnavailable normalizes what a turn does when the hooks
-// configuration cannot be loaded. Empty defaults to continue. recognized is
-// false when a non-empty value does not match continue/deny.
-func (c AgentConfig) EffectiveHooksConfigUnavailable() (mode string, recognized bool) {
-	value := strings.TrimSpace(strings.ToLower(c.HooksConfigUnavailable))
-	switch value {
-	case "":
-		return HooksConfigUnavailableContinue, true
-	case HooksConfigUnavailableContinue, HooksConfigUnavailableDeny:
-		return value, true
-	default:
-		return HooksConfigUnavailableContinue, false
 	}
 }
 

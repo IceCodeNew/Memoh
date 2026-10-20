@@ -29,10 +29,6 @@ type workspaceTargetIDResolver interface {
 type Service struct {
 	logger   *slog.Logger
 	provider bridge.Provider
-	// denyWhenConfigUnavailable keeps the stricter rule for a configuration
-	// that cannot be loaded: the hook event fails like any other hook
-	// failure, so the turn is rejected instead of continuing without tools.
-	denyWhenConfigUnavailable bool
 }
 
 var emptyConfigFile = []byte("{\n  \"version\": 1,\n  \"enabled\": true,\n  \"hooks\": []\n}\n")
@@ -50,16 +46,6 @@ func NewService(log *slog.Logger, provider bridge.Provider) *Service {
 	return &Service{
 		logger:   log.With(slog.String("service", "hooks")),
 		provider: provider,
-	}
-}
-
-// SetDenyWhenConfigUnavailable makes a hooks configuration that cannot be
-// loaded fail the hook event instead of reporting ErrConfigUnavailable. A
-// deployment whose hooks guard what reaches the model (UserMessageReceived,
-// BeforeModelCall) uses it to keep those guards fail-closed.
-func (s *Service) SetDenyWhenConfigUnavailable(deny bool) {
-	if s != nil {
-		s.denyWhenConfigUnavailable = deny
 	}
 }
 
@@ -96,8 +82,7 @@ func (s *Service) Load(ctx context.Context, botID string) (Config, bool, error) 
 
 // LoadEffective returns the configuration hooks run with. A file that cannot
 // be parsed or read, or a workspace that cannot be reached, is
-// ErrConfigUnavailable (unless SetDenyWhenConfigUnavailable is on). Any other
-// failure is returned as is, so the turn fails with its cause: failing to
+// ErrConfigUnavailable. Any other failure is returned as is, so the turn fails with its cause: failing to
 // identify the bot's workspace target (a database error, for example), or a
 // workspace runtime that refused the request for a reason of its own, such as
 // one that was removed or is over quota. Within a turn scoped by
@@ -120,7 +105,7 @@ func (s *Service) LoadEffective(ctx context.Context, botID string) (Config, bool
 
 func (s *Service) loadEffective(ctx context.Context, botID string) (Config, bool, error) {
 	if bridge.WorkspaceUnavailableFromContext(ctx) {
-		return Config{}, false, s.configUnavailable(bridge.ErrUnavailable)
+		return Config{}, false, fmt.Errorf("%w: %w", ErrConfigUnavailable, bridge.ErrUnavailable)
 	}
 	userCfg, exists, err := s.Load(ctx, botID)
 	if err != nil {
@@ -129,7 +114,7 @@ func (s *Service) loadEffective(ctx context.Context, botID string) (Config, bool
 		if !exists && !unreadable(err) {
 			return Config{}, exists, err
 		}
-		return Config{}, exists, s.configUnavailable(err)
+		return Config{}, exists, fmt.Errorf("%w: %w", ErrConfigUnavailable, err)
 	}
 	userCfg.applyDefaults()
 
@@ -146,15 +131,6 @@ func (s *Service) loadEffective(ctx context.Context, botID string) (Config, bool
 		}
 	}
 	return effective, exists, nil
-}
-
-// configUnavailable reports a configuration that could not be loaded:
-// ErrConfigUnavailable, or a plain failure under the deny policy.
-func (s *Service) configUnavailable(err error) error {
-	if s != nil && s.denyWhenConfigUnavailable {
-		return fmt.Errorf("hooks configuration unavailable (policy: deny): %w", err)
-	}
-	return fmt.Errorf("%w: %w", ErrConfigUnavailable, err)
 }
 
 // unreadable reports whether err, from reading the configuration file, shows

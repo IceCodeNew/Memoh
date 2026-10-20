@@ -114,18 +114,13 @@ func TestUnavailableHooksConfigAllowsTextOnlyTurn(t *testing.T) {
 	}
 }
 
-// Under the deny policy, or when the workspace refused the read for a reason
-// of its own, the user message is rejected as before: the turn does not
-// continue without its hooks.
-func TestHooksConfigFailuresThatStillRejectTheMessage(t *testing.T) {
-	strict := hooks.NewService(nil, failingHooksProvider{err: fmt.Errorf("read hooks.json: %w", bridge.ErrForbidden)})
-	strict.SetDenyWhenConfigUnavailable(true)
-	refused := hooks.NewService(nil, failingHooksProvider{err: fmt.Errorf("workspace client: %w", ctr.ErrConflict)})
-	for name, service := range map[string]*hooks.Service{"deny policy": strict, "workspace refused": refused} {
-		s := &Service{hookService: service}
-		if _, err := s.applyUserMessageHook(hooks.WithAuxiliaryTurn(t.Context()), ChatRequest{BotID: "bot-1", Query: "hello"}); err == nil {
-			t.Errorf("%s: the user message passed without its hooks", name)
-		}
+// A workspace that refused the read for a reason of its own is not a hooks
+// configuration that could not be read: the user message is rejected with
+// that cause instead of continuing without its hooks.
+func TestWorkspaceRefusalStillRejectsTheMessage(t *testing.T) {
+	s := &Service{hookService: hooks.NewService(nil, failingHooksProvider{err: fmt.Errorf("workspace client: %w", ctr.ErrConflict)})}
+	if _, err := s.applyUserMessageHook(hooks.WithAuxiliaryTurn(t.Context()), ChatRequest{BotID: "bot-1", Query: "hello"}); !errors.Is(err, ctr.ErrConflict) {
+		t.Fatalf("applyUserMessageHook error = %v, want the workspace refusal", err)
 	}
 }
 

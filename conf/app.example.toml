@@ -92,14 +92,6 @@ system_files_max_bytes = 32768
 # Budget admission recovery can compact in shadow or active mode when compaction
 # is enabled for the bot; off disables this recovery.
 # sync_compaction = "shadow"
-# What a chat turn does when the bot's hooks configuration (hooks.json) cannot
-# be loaded: the file cannot be parsed or read, or the workspace cannot be
-# reached. continue (default) answers the turn without tools and tells the
-# model that hooks did not run; UserMessageReceived and BeforeModelCall hooks
-# are skipped for that turn. deny rejects the turn instead, for deployments
-# whose hooks must check every message before it reaches the model. Tool and
-# approval hooks refuse their operation in both modes.
-# hooks_config_unavailable = "continue"
 
 [session_runtime]
 # Stores live run snapshots for WebSocket attach/reconnect. memory is best for

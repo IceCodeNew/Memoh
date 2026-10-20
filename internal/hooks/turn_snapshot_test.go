@@ -269,29 +269,3 @@ func TestWorkspaceRefusalIsNotConfigUnavailable(t *testing.T) {
 		}
 	}
 }
-
-// Under the deny policy a configuration that cannot be loaded fails the hook
-// event like any other hook failure: the turn is rejected rather than
-// continuing without tools.
-func TestDenyPolicyFailsClosedWhenConfigUnavailable(t *testing.T) {
-	t.Parallel()
-
-	service, _ := newCountingHookService(t, `{"version": 1, "hooks": [`)
-	service.SetDenyWhenConfigUnavailable(true)
-	_, err := service.Run(WithAuxiliaryTurn(t.Context()), Request{Event: EventUserMessageReceived, BotID: "bot-1"}, nil)
-	if err == nil || errors.Is(err, ErrConfigUnavailable) {
-		t.Fatalf("Run error = %v, want a failure that is not ErrConfigUnavailable", err)
-	}
-
-	unavailable := WithAuxiliaryTurn(t.Context())
-	bridge.MarkWorkspaceUnavailable(unavailable)
-	if _, _, err := service.LoadEffective(unavailable, "bot-1"); err == nil || errors.Is(err, ErrConfigUnavailable) {
-		t.Fatalf("LoadEffective error = %v for an unavailable workspace, want a plain failure", err)
-	}
-
-	missing, _ := newCountingHookService(t, "")
-	missing.SetDenyWhenConfigUnavailable(true)
-	if _, err := missing.Run(WithAuxiliaryTurn(t.Context()), Request{Event: EventUserMessageReceived, BotID: "bot-1"}, nil); err != nil {
-		t.Fatalf("a missing config failed under the deny policy: %v", err)
-	}
-}
