@@ -245,10 +245,13 @@ func (p failingClientHookProvider) MCPClient(context.Context, string) (*bridge.C
 	return nil, p.err
 }
 
-// Only a configuration the turn cannot read is ErrConfigUnavailable. A
-// workspace runtime that refused the request for a reason of its own (it was
-// removed, is over quota, or reports a conflict) is reported as itself, so
-// the turn fails with that cause instead of claiming the hooks did not run.
+// Only a configuration that cannot be parsed, or a workspace that cannot be
+// reached, is ErrConfigUnavailable. Any other failure is reported as itself,
+// so the turn fails with that cause instead of claiming the hooks did not
+// run: a workspace runtime that refused the request for a reason of its own
+// (removed, over quota, conflict), a container the runtime does not know (a
+// chat turn resolves its target first and finds that one unavailable there),
+// or a permission failure.
 func TestWorkspaceRefusalIsNotConfigUnavailable(t *testing.T) {
 	t.Parallel()
 
@@ -258,7 +261,8 @@ func TestWorkspaceRefusalIsNotConfigUnavailable(t *testing.T) {
 	}{
 		"bridge down":       {fmt.Errorf("mcp client: %w", bridge.ErrUnavailable), true},
 		"provider down":     {fmt.Errorf("workspace client: %w", status.Error(codes.Unavailable, "runtime unreachable")), true},
-		"container missing": {fmt.Errorf("workspace client: %w", ctr.ErrNotFound), true},
+		"container missing": {fmt.Errorf("workspace client: %w", ctr.ErrNotFound), false},
+		"permission denied": {fmt.Errorf("read hooks.json: %w", bridge.ErrForbidden), false},
 		"runtime refused":   {fmt.Errorf("workspace client: %w", ctr.ErrConflict), false},
 		"unclassified":      {errors.New("workspace operation failed"), false},
 	} {
@@ -267,5 +271,18 @@ func TestWorkspaceRefusalIsNotConfigUnavailable(t *testing.T) {
 		if !errors.Is(err, tc.err) || errors.Is(err, ErrConfigUnavailable) != tc.unavailable {
 			t.Errorf("%s: LoadEffective error = %v, want ErrConfigUnavailable = %v", name, err, tc.unavailable)
 		}
+	}
+}
+
+// A read cut short by the caller's own context is not the workspace's answer:
+// it is reported as itself, not as a configuration that could not be loaded.
+func TestCallerDeadlineIsNotConfigUnavailable(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := context.WithCancel(WithAuxiliaryTurn(t.Context()))
+	cancel()
+	service := NewService(nil, failingClientHookProvider{err: status.Error(codes.DeadlineExceeded, "context deadline exceeded")})
+	if _, _, err := service.LoadEffective(ctx, "bot-1"); err == nil || errors.Is(err, ErrConfigUnavailable) {
+		t.Fatalf("LoadEffective error = %v, want the caller's failure and not ErrConfigUnavailable", err)
 	}
 }

@@ -177,12 +177,12 @@ Unknown or empty decisions normalize to `allow`.
 
 ## When The Config Cannot Be Loaded
 
-A missing `hooks.json` means no hooks. A file that is not valid JSON, fails validation, or cannot be read is different: no hook in it runs, and Memoh cannot tell which rules it would enforce.
+A missing `hooks.json` means no hooks. A file that is not valid JSON or fails validation is different, and so is a workspace that cannot be reached to read it: no hook runs, and Memoh cannot tell which rules the file would enforce.
 
 - A chat turn still gets a reply, but without tools, and the system prompt says hooks did not run.
 - `UserMessageReceived` and `BeforeModelCall` hooks are skipped for that turn, so a rule that inspects messages before they reach the model does not run.
 - `PreToolUse` and `BeforeApprovalCreate` still refuse their operation.
-- A discuss turn is rejected instead: there the bot speaks only through tools.
+- A discuss turn or a scheduled run is rejected instead: its plain text reaches nobody, so it can only act through tools.
 
 The file is read once per turn, so an edit takes effect from the next message. Validate the file after every edit; a broken file turns off every guard in it until it is fixed.
 

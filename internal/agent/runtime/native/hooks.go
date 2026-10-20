@@ -198,6 +198,25 @@ func (a *Agent) runTurnHook(ctx context.Context, cfg RunConfig, eventName, errMs
 	}
 }
 
+// withholdToolsIfHooksUnavailable withholds a run's tools before they are
+// assembled when its hooks configuration cannot be loaded, and tells the model
+// why. A chat turn has decided that while preparing its prompt; a run that
+// reads the configuration on its own, such as a background task, decides it
+// here. The configuration is read through the run's scope, so the hook events
+// that follow reuse the result.
+func (a *Agent) withholdToolsIfHooksUnavailable(ctx context.Context, cfg *RunConfig) {
+	if a == nil || a.hookService == nil || !cfg.SupportsToolCall || cfg.ToolsWithheld != "" {
+		return
+	}
+	if _, _, err := a.hookService.LoadEffective(ctx, cfg.Identity.BotID); !errors.Is(err, hooks.ErrConfigUnavailable) {
+		return
+	}
+	WithholdTools(ctx, cfg, ToolsWithheldHooksUnavailable)
+	if notice := buildLoadStatusText(SystemPromptParams{LoadNotices: []string{HooksUnavailableNotice}}); !strings.Contains(cfg.System, HooksUnavailableNotice) {
+		cfg.System = strings.TrimSpace(strings.TrimSpace(cfg.System) + "\n\n" + notice)
+	}
+}
+
 func (a *Agent) applyBeforeModelCallHook(ctx context.Context, cfg RunConfig, step int) (RunConfig, error) {
 	if a == nil || a.hookService == nil {
 		return cfg, nil
@@ -210,11 +229,9 @@ func (a *Agent) applyBeforeModelCallHook(ctx context.Context, cfg RunConfig, ste
 			return cfg, fmt.Errorf("%w: %s", hooks.ErrDenied, firstHookText(res.Reason, err.Error()))
 		}
 		if errors.Is(err, hooks.ErrConfigUnavailable) {
-			// A configuration that cannot be read does not block the call,
-			// but the policy it would enforce on tool use is unknown, so the
-			// run goes on without tools. A chat turn has withheld them
-			// already; a run that read the configuration on its own, such
-			// as a background task, withholds them here.
+			// A configuration that cannot be read does not block the call.
+			// The run's tools were withheld before they were assembled
+			// (withholdToolsIfHooksUnavailable); this only makes sure.
 			WithholdTools(ctx, &cfg, ToolsWithheldHooksUnavailable)
 			if a.logger != nil {
 				a.logger.WarnContext(ctx, "before model call hook skipped: hooks configuration unavailable",

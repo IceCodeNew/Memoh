@@ -4,17 +4,22 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net"
 	"strings"
 	"sync/atomic"
 	"testing"
 
 	sdk "github.com/felinics/twilight/sdk"
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/test/bufconn"
 
 	"github.com/felinics/memoh/internal/agent/runtime/native"
 	ctr "github.com/felinics/memoh/internal/container"
 	"github.com/felinics/memoh/internal/hooks"
 	"github.com/felinics/memoh/internal/workspace"
 	"github.com/felinics/memoh/internal/workspace/bridge"
+	pb "github.com/felinics/memoh/internal/workspace/bridgepb"
 )
 
 type stubWorkspaceTargets struct {
@@ -95,10 +100,43 @@ func (p failingHooksProvider) MCPClient(context.Context, string) (*bridge.Client
 	return nil, p.err
 }
 
+// brokenHooksServer serves a hooks.json that cannot be parsed.
+type brokenHooksServer struct {
+	pb.UnimplementedContainerServiceServer
+}
+
+func (brokenHooksServer) ReadRaw(_ *pb.ReadRawRequest, stream pb.ContainerService_ReadRawServer) error {
+	return stream.Send(&pb.DataChunk{Data: []byte(`{"version": 1, "hooks": [`)})
+}
+
+type brokenHooksProvider struct{ client *bridge.Client }
+
+func (p brokenHooksProvider) MCPClient(context.Context, string) (*bridge.Client, error) {
+	return p.client, nil
+}
+
+func newBrokenHooksProvider(t *testing.T) brokenHooksProvider {
+	t.Helper()
+	listener := bufconn.Listen(1 << 20)
+	server := grpc.NewServer()
+	pb.RegisterContainerServiceServer(server, brokenHooksServer{})
+	go func() { _ = server.Serve(listener) }()
+	t.Cleanup(server.Stop)
+	conn, err := grpc.NewClient("passthrough://bufnet",
+		grpc.WithContextDialer(func(ctx context.Context, _ string) (net.Conn, error) { return listener.DialContext(ctx) }),
+		grpc.WithTransportCredentials(insecure.NewCredentials()),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = conn.Close() })
+	return brokenHooksProvider{client: bridge.NewClientFromConn(conn)}
+}
+
 // When the hooks configuration cannot be loaded the user message is still
 // answered, but the policy the hooks enforce is unknown, so no tools run.
 func TestUnavailableHooksConfigAllowsTextOnlyTurn(t *testing.T) {
-	s := &Service{hookService: hooks.NewService(nil, failingHooksProvider{err: fmt.Errorf("read hooks.json: %w", bridge.ErrForbidden)})}
+	s := &Service{hookService: hooks.NewService(nil, newBrokenHooksProvider(t))}
 	ctx := hooks.WithAuxiliaryTurn(t.Context())
 	req := ChatRequest{BotID: "bot-1", Query: "hello"}
 	got, err := s.applyUserMessageHook(ctx, req)
@@ -221,7 +259,10 @@ func TestDegradedTurnWithholdsToolsAndKeepsHistory(t *testing.T) {
 // instead of waiting on the workspace once more.
 func TestAlreadyUnavailableTurnReusesResolvedTarget(t *testing.T) {
 	calls := 0
-	s := &Service{workspaceTargets: stubWorkspaceTargets{target: nativeTarget, calls: &calls}}
+	s := &Service{
+		workspaceTargets: stubWorkspaceTargets{target: nativeTarget, calls: &calls},
+		botPermissions:   workspaceRequestPermission(true),
+	}
 	ctx := hooks.WithAuxiliaryTurn(t.Context())
 	bridge.MarkWorkspaceUnavailable(ctx)
 	prior := &WorkspaceTarget{TargetID: workspace.WorkspaceTargetNative, Kind: workspace.WorkspaceTargetNative, Name: "Server Workspace"}
@@ -240,7 +281,7 @@ func TestAlreadyUnavailableTurnReusesResolvedTarget(t *testing.T) {
 		t.Fatal("another session adopted the prepared target")
 	}
 	// A different explicit target is still resolved.
-	if _, _, err := s.prepareWorkspaceRequest(ctx, ChatRequest{BotID: "bot-1", UserID: "u", WorkspaceTarget: prior, WorkspaceTargetID: "other"}); err == nil && calls == 0 {
-		t.Fatal("an explicit different target skipped resolution")
+	if _, _, err := s.prepareWorkspaceRequest(ctx, ChatRequest{BotID: "bot-1", UserID: "u", WorkspaceTarget: prior, WorkspaceTargetID: "other"}); err != nil || calls != 1 {
+		t.Fatalf("err=%v calls=%d, want an explicit different target resolved once", err, calls)
 	}
 }

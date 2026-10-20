@@ -3,6 +3,7 @@ package native
 import (
 	"context"
 	"fmt"
+	"regexp"
 	"strings"
 
 	sdk "github.com/felinics/twilight/sdk"
@@ -96,6 +97,10 @@ func textOnlyMessages(messages []sdk.Message) []sdk.Message {
 	return out
 }
 
+// toolResultClosingTag matches anything a model could read as the end of the
+// envelope, whatever its case or spacing.
+var toolResultClosingTag = regexp.MustCompile(`(?i)<\s*/\s*tool-result`)
+
 // toolResultText wraps a tool result in an envelope that marks it as
 // untrusted data. A would-be closing tag in the result is escaped so the
 // content cannot break out of the envelope.
@@ -104,7 +109,7 @@ func toolResultText(p sdk.ToolResultPart) string {
 	if p.IsError {
 		status = "error"
 	}
-	content := strings.ReplaceAll(strings.TrimSpace(p.Result.String()), "</tool-result", "<\\/tool-result")
+	content := toolResultClosingTag.ReplaceAllString(strings.TrimSpace(p.Result.String()), `<\/tool-result`)
 	return fmt.Sprintf("<tool-result tool=%q status=%q>\n%s\n%s\n</tool-result>", strings.TrimSpace(p.ToolName), status, toolResultPreamble, content)
 }
 

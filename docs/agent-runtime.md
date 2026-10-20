@@ -247,20 +247,23 @@ these reads has a deadline of its own: a slow workspace is waited for. A
 workspace that cannot be reached is the bridge's `Unavailable`, an
 `Unavailable` status a provider passes through, or a `DeadlineExceeded` the
 provider reports; a stalled local bridge is caught by the gRPC keepalive. Once
-one read of a turn finds the workspace unreachable, the turn skips the rest.
+one read of a turn finds the workspace unreachable, the turn skips the rest,
+including the memory overview refresh.
 
 What the turn does with each failure:
 
 - **Workspace unreachable or not ready**: the turn keeps the target's identity
   and answers without tools; the system prompt says the workspace is
   unavailable.
-- **Hooks configuration cannot be parsed or read**: the turn answers without
-  tools and the system prompt says hooks did not run. `UserMessageReceived` and
+- **Hooks configuration cannot be parsed, or its workspace cannot be
+  reached**: the turn answers without tools and the system prompt says hooks did not run. `UserMessageReceived` and
   `BeforeModelCall` hooks are skipped for that turn, so a rule that checks
   messages before they reach the model does not run either. `PreToolUse` and
   `BeforeApprovalCreate` still refuse their operation. A missing file means no
   hooks. This is not configurable; `hooks.json` is writable by the agent
-  itself, so continuing does not widen what it can already change.
+  itself, so continuing does not widen what it can already change. A run that
+  reads the configuration on its own, such as a background task, withholds its
+  tools before assembling them and gets the same notice.
 - **Skills or an instruction file cannot be read**: the system prompt says so,
   instead of passing the content off as empty.
 - **Anything else** fails the turn as before: identity, permission and
@@ -273,9 +276,14 @@ A turn that answers without its tools records why in
 Its requests replay earlier tool calls and results as text, since providers
 reject tool blocks in a request that defines no tools; a replayed result is
 wrapped in `<tool-result>` and marked as data, not as something the user said.
-The stored history keeps its tool blocks. Discuss turns never answer without
-tools: the bot speaks there only through its messaging tools, so the turn is
-rejected instead.
+The stored history keeps its tool blocks.
+
+Some turns never answer without tools, because their plain text reaches nobody:
+a discuss bot speaks only through its messaging tools, and a scheduled run's
+text is logged only. Such a turn, or a tool-approval or `ask_user`
+continuation in such a session, is rejected instead, with
+`workspace.unreachable` or the hooks configuration error. An approved tool is
+not executed in a turn that withheld its tools either.
 
 ## Graceful shutdown and session resume
 

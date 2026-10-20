@@ -407,6 +407,11 @@ func (s *Service) executeApprovedTool(ctx context.Context, req toolapproval.Requ
 	if err != nil {
 		return sdk.ToolResultPart{}, nil, err
 	}
+	if reason := resolved.RunConfig.ToolsWithheld; reason != "" {
+		// The turn runs no tools while its workspace or its hooks policy is
+		// unavailable; an approval does not override that.
+		return sdk.ToolResultPart{}, nil, toolsWithheldError("approved tool cannot run", reason)
+	}
 	resolved.RunConfig.RunID = runIDForChatRequest(runID)
 	if fence, ok := runtimefence.FromContext(ctx); ok {
 		var count int64
@@ -505,6 +510,9 @@ func (s *Service) continueToolApprovalSession(
 		approval.ConversationType,
 		input.ChatToken,
 	)
+	if err == nil {
+		err = requireToolsFor(resolved.RunConfig.SessionType, resolved.RunConfig)
+	}
 	if err != nil {
 		return err
 	}

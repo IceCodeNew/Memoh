@@ -414,6 +414,9 @@ func (s *Service) continueUserInputSession(
 		req.ConversationType,
 		input.ChatToken,
 	)
+	if err == nil {
+		err = requireToolsFor(resolved.RunConfig.SessionType, resolved.RunConfig)
+	}
 	if err != nil {
 		return err
 	}

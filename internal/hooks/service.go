@@ -13,7 +13,6 @@ import (
 	"strings"
 	"time"
 
-	ctr "github.com/felinics/memoh/internal/container"
 	"github.com/felinics/memoh/internal/prune"
 	"github.com/felinics/memoh/internal/workspace/bridge"
 )
@@ -109,9 +108,11 @@ func (s *Service) loadEffective(ctx context.Context, botID string) (Config, bool
 	}
 	userCfg, exists, err := s.Load(ctx, botID)
 	if err != nil {
-		bridge.MarkWorkspaceUnavailableOn(ctx, err)
-		// Load reports exists only for a file it read but could not parse.
-		if !exists && !unreadable(err) {
+		// Load reports exists only for a file it read but could not parse. A
+		// read that failed counts only when the workspace itself could not be
+		// reached, as for every other auxiliary read of the turn, and never
+		// when the caller's own context ended it.
+		if ctx.Err() != nil || (!exists && !bridge.MarkWorkspaceUnavailableOn(ctx, err)) {
 			return Config{}, exists, err
 		}
 		return Config{}, exists, fmt.Errorf("%w: %w", ErrConfigUnavailable, err)
@@ -131,15 +132,6 @@ func (s *Service) loadEffective(ctx context.Context, botID string) (Config, bool
 		}
 	}
 	return effective, exists, nil
-}
-
-// unreadable reports whether err, from reading the configuration file, shows
-// that the file or the workspace holding it cannot be read right now.
-func unreadable(err error) bool {
-	return bridge.IsUnreachable(err) ||
-		errors.Is(err, bridge.ErrForbidden) ||
-		errors.Is(err, ctr.ErrUnavailable) ||
-		ctr.IsNotFound(err)
 }
 
 func (s *Service) currentWorkspaceTargetID(ctx context.Context, botID string) (string, error) {

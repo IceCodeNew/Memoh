@@ -137,6 +137,9 @@ func (s *Service) TriggerSchedule(ctx context.Context, botID string, payload sch
 	})
 	cfg = attachCurrentTurnPrompt(cfg, schedulePrompt)
 	cfg = s.prepareRunConfig(ctx, cfg)
+	if err := requireToolsFor(sessionmode.Schedule, cfg); err != nil {
+		return schedule.TriggerResult{}, err
+	}
 	terminal := s.contextLifecycleTerminal(ctx, cfg)
 	var lifecycleCause error
 	defer func() { terminal(lifecycleCause) }()

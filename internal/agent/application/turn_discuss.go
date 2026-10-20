@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"log/slog"
 	"slices"
 	"strings"
@@ -157,6 +156,11 @@ func (s *Service) pumpDiscuss(ctx context.Context, cmd turn.StartTurnCommand, h 
 	resolved, err := s.resolveDiscussRunConfig(ctx,
 		cmd.BotID, cmd.ThreadID, cmd.SourceChannelIdentityID,
 		cmd.CurrentChannel, cmd.ReplyTarget, cmd.ConversationType, cmd.SessionToken)
+	if err == nil {
+		// Checked before compaction, so a turn that is going to be refused
+		// does not pay for a summarizer call first.
+		err = requireToolsFor(sessionpkg.TypeDiscuss, resolved.RunConfig)
+	}
 	if err != nil {
 		h.emitErr(err)
 		return
@@ -194,22 +198,7 @@ func (s *Service) pumpDiscuss(ctx context.Context, cmd turn.StartTurnCommand, h 
 		s.pumpDiscussAgent(ctx, cmd, h)
 		return
 	}
-	if reason := resolved.RunConfig.ToolsWithheld; reason != "" {
-		h.emitErr(discussToolsWithheldError(reason))
-		return
-	}
 	s.pumpDiscussNative(ctx, cmd, h, resolved)
-}
-
-// discussToolsWithheldError rejects a discuss turn that would run without
-// tools. A discuss bot speaks only through its messaging tools, so the
-// text-only answer a chat turn falls back to would reach nobody: the turn
-// fails instead, as it did before chat turns could continue without tools.
-func discussToolsWithheldError(reason native.ToolsWithheldReason) error {
-	if reason == native.ToolsWithheldWorkspaceUnavailable {
-		return apperror.New(apperror.CodeWorkspaceUnreachable, nil)
-	}
-	return fmt.Errorf("discuss turn cannot run without tools: %w", hooks.ErrConfigUnavailable)
 }
 
 func (s *Service) pumpDiscussNative(ctx context.Context, cmd turn.StartTurnCommand, h *discussHandle, resolved ResolveRunConfigResult) {
