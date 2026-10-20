@@ -72,9 +72,13 @@ func IsNotReady(err error) bool {
 var ErrCapabilityUnavailable = errors.New("workspace capability unavailable")
 
 // nativeTargetFailure keeps the native target's identity when its runtime is
-// not ready or timed out, so a caller can continue without the workspace.
+// not ready or cannot be reached, so a caller can continue without the
+// workspace. Every other failure is returned unchanged: a caller's own
+// expired deadline (a database query, for example), or a runtime that
+// refused the request for a reason of its own, such as one that was removed
+// or is over quota.
 func nativeTargetFailure(target ResolvedWorkspaceTarget, err error) (ResolvedWorkspaceTarget, error) {
-	if IsNotReady(err) || bridge.IsDeadlineExceeded(err) {
+	if IsNotReady(err) || bridge.IsUnreachable(err) || errors.Is(err, ctr.ErrUnavailable) {
 		return target, fmt.Errorf("%w: %w", ErrCapabilityUnavailable, err)
 	}
 	return ResolvedWorkspaceTarget{}, err

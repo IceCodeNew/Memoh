@@ -9,6 +9,7 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
+	ctr "github.com/felinics/memoh/internal/container"
 	"github.com/felinics/memoh/internal/workspace/bridge"
 )
 
@@ -20,8 +21,11 @@ func TestNativeTargetFailureKeepsIdentityOnlyForUnavailableRuntime(t *testing.T)
 	}{
 		"container missing": {ErrContainerNotFound, true},
 		"bridge down":       {fmt.Errorf("mcp client: %w", bridge.ErrUnavailable), true},
-		"caller deadline":   {fmt.Errorf("workspace info: %w", context.DeadlineExceeded), true},
 		"provider timeout":  {fmt.Errorf("workspace info: %w", status.Error(codes.DeadlineExceeded, "sandbox provider timed out")), true},
+		"provider down":     {fmt.Errorf("workspace client: %w", status.Error(codes.Unavailable, "runtime unreachable")), true},
+		"runtime down":      {fmt.Errorf("workspace client: %w", ctr.ErrUnavailable), true},
+		"caller deadline":   {fmt.Errorf("load bot container: %w", context.DeadlineExceeded), false},
+		"runtime refused":   {fmt.Errorf("workspace client: %w", ctr.ErrConflict), false},
 		"other failure":     {errors.New("permission denied"), false},
 	} {
 		got, err := nativeTargetFailure(target, tc.err)

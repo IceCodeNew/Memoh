@@ -659,6 +659,29 @@ func TestAgentConfigEffectiveContextLoopReselectMode(t *testing.T) {
 	}
 }
 
+func TestAgentConfigEffectiveHooksConfigUnavailable(t *testing.T) {
+	cases := []struct {
+		name           string
+		value          string
+		wantMode       string
+		wantRecognized bool
+	}{
+		{"empty defaults to continue", "", HooksConfigUnavailableContinue, true},
+		{"continue", "continue", HooksConfigUnavailableContinue, true},
+		{"deny", "deny", HooksConfigUnavailableDeny, true},
+		{"case and whitespace", "  DENY ", HooksConfigUnavailableDeny, true},
+		{"unknown normalizes to continue", "block", HooksConfigUnavailableContinue, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			gotMode, gotRecognized := (AgentConfig{HooksConfigUnavailable: tc.value}).EffectiveHooksConfigUnavailable()
+			if gotMode != tc.wantMode || gotRecognized != tc.wantRecognized {
+				t.Fatalf("EffectiveHooksConfigUnavailable() = (%q, %v), want (%q, %v)", gotMode, gotRecognized, tc.wantMode, tc.wantRecognized)
+			}
+		})
+	}
+}
+
 func TestAgentConfigEffectiveSyncCompactionMode(t *testing.T) {
 	cases := []struct {
 		name           string

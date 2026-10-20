@@ -8,6 +8,7 @@ Use this reference when configuring `/data/.memoh/hooks.json`.
 - Matching and priority
 - Actions
 - Decisions
+- When the config cannot be loaded
 - Event catalog
 - Request payload
 - Examples
@@ -173,6 +174,16 @@ Unknown or empty decisions normalize to `allow`.
 - `ignore`: log and continue.
 - `fail`: return the action error.
 - `block`: convert the error into a deny decision.
+
+## When The Config Cannot Be Loaded
+
+A missing `hooks.json` means no hooks. A file that is not valid JSON, fails validation, or cannot be read is different: no hook in it runs, and Memoh cannot tell which rules it would enforce.
+
+- With the server default (`[agent] hooks_config_unavailable = "continue"`), a chat turn still gets a reply, but without tools, and the system prompt says hooks did not run. `UserMessageReceived` and `BeforeModelCall` hooks are skipped for that turn, so a rule that inspects messages before they reach the model does not run.
+- When the server sets `hooks_config_unavailable = "deny"`, the turn is rejected instead.
+- `PreToolUse` and `BeforeApprovalCreate` refuse their operation either way.
+
+The file is read once per turn, so an edit takes effect from the next message. Validate the file after every edit; a broken file turns off every guard in it until it is fixed.
 
 ## Event Catalog
 
@@ -342,7 +353,7 @@ Because the request JSON is stdin, `cat >> file` records one JSON object per lin
 
 ## Validation Checklist
 
-- The file is valid JSON.
+- The file is valid JSON. A file that cannot be parsed disables every hook in it (see "When the config cannot be loaded").
 - `version` is `1`.
 - Every hook has a supported `event`.
 - Every `matcher` compiles as a regular expression.

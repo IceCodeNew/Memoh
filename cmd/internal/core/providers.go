@@ -387,8 +387,14 @@ func (p nativeWorkspaceBridgeProvider) MCPClient(ctx context.Context, botID stri
 	return p.manager.NativeMCPClient(ctx, botID)
 }
 
-func provideHooksService(log *slog.Logger, provider bridge.Provider) *hookspkg.Service {
-	return hookspkg.NewService(log, provider)
+func provideHooksService(log *slog.Logger, provider bridge.Provider, cfg config.Config) *hookspkg.Service {
+	service := hookspkg.NewService(log, provider)
+	mode, recognized := cfg.Agent.EffectiveHooksConfigUnavailable()
+	if !recognized {
+		log.Warn("unrecognized agent.hooks_config_unavailable value; defaulting to continue", slog.String("value", cfg.Agent.HooksConfigUnavailable))
+	}
+	service.SetDenyWhenConfigUnavailable(mode == config.HooksConfigUnavailableDeny)
+	return service
 }
 
 func provideWorkspaceManager(log *slog.Logger, service ctr.Service, networkController netctl.Controller, cfg config.Config, conn *pgxpool.Pool, queries dbstore.Queries, remote *workspace.RemoteWorkspaceService) (*workspace.Manager, error) {

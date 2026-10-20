@@ -18,13 +18,17 @@ import (
 
 type contextFileService struct {
 	pb.UnimplementedContainerServiceServer
-	delay    time.Duration
-	failures map[string]error
-	reads    atomic.Int32
+	delay       time.Duration
+	failures    map[string]error
+	reads       atomic.Int32
+	deadlineSet atomic.Bool
 }
 
 func (s *contextFileService) ReadFile(ctx context.Context, req *pb.ReadFileRequest) (*pb.ReadFileResponse, error) {
 	s.reads.Add(1)
+	if _, ok := ctx.Deadline(); ok {
+		s.deadlineSet.Store(true)
+	}
 	if err := s.failures[req.GetPath()]; err != nil {
 		return nil, err
 	}
@@ -36,10 +40,11 @@ func (s *contextFileService) ReadFile(ctx context.Context, req *pb.ReadFileReque
 	return &pb.ReadFileResponse{Content: "content of " + req.GetPath()}, nil
 }
 
-// A slow but healthy workspace is waited for: well above the old 1200ms
-// budget, every file still loads and nothing is reported unavailable.
+// A slow but healthy workspace is waited for: the reads carry no deadline of
+// their own, every file loads and nothing is reported unavailable.
 func TestLoadSystemFilesWaitsForSlowHealthyWorkspace(t *testing.T) {
-	provider, cleanup := setupExecTestInfra(t, &contextFileService{delay: 1500 * time.Millisecond})
+	svc := &contextFileService{delay: 1500 * time.Millisecond}
+	provider, cleanup := setupExecTestInfra(t, svc)
 	defer cleanup()
 	ctx := bridge.WithWorkspaceAvailability(t.Context())
 	for _, file := range NewFSClient(provider, "bot", nil).LoadSystemFiles(ctx) {
@@ -49,6 +54,9 @@ func TestLoadSystemFilesWaitsForSlowHealthyWorkspace(t *testing.T) {
 	}
 	if bridge.WorkspaceUnavailableFromContext(ctx) {
 		t.Fatal("a slow workspace was marked unavailable")
+	}
+	if svc.deadlineSet.Load() {
+		t.Fatal("a context file read carried a deadline of its own")
 	}
 }
 
@@ -75,8 +83,8 @@ func TestLoadSystemFilesSeparatesMissingFromUnreadable(t *testing.T) {
 	}
 }
 
-// Once the workspace is found unreachable the remaining files are not read,
-// so a stalled workspace costs the turn one timeout, not one per file.
+// Once the workspace is found unreachable the remaining files are not read:
+// the turn asks an unreachable workspace once, not once per file.
 func TestLoadSystemFilesStopsReadingAnUnreachableWorkspace(t *testing.T) {
 	svc := &contextFileService{failures: map[string]error{
 		"/data/AGENTS.md": status.Error(codes.Unavailable, "bridge down"),

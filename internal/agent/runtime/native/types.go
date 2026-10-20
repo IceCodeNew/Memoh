@@ -207,7 +207,10 @@ type RunConfig struct {
 	SupportsImageInput           bool
 	SupportsFileInput            bool
 	SupportsToolCall             bool
-	InlineImages                 []sdk.ImagePart
+	// ToolsWithheld names why the turn runs without tools its model could
+	// call; see WithholdTools. Empty for an ordinary turn.
+	ToolsWithheld ToolsWithheldReason
+	InlineImages  []sdk.ImagePart
 	// InlineAttachments carries non-image native attachment parts (documents
 	// as sdk.FilePart, small text files as wrapped sdk.TextPart) appended to
 	// the current user message. Images stay in InlineImages, which also feeds

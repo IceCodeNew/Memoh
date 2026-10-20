@@ -94,7 +94,10 @@ var (
 	ErrDenied      = errors.New("hook denied action")
 	ErrUnsupported = errors.New("unsupported hook action")
 	// ErrConfigUnavailable means the hooks configuration could not be read
-	// or parsed, so which hooks apply is unknown.
+	// or parsed, so which hooks apply is unknown. Events that guard a turn
+	// (UserMessageReceived, BeforeModelCall) let it continue without tools;
+	// events that guard an operation (PreToolUse, BeforeApprovalCreate) still
+	// refuse it.
 	ErrConfigUnavailable = errors.New("hooks configuration unavailable")
 )
 

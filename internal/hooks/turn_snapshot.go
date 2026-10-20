@@ -63,10 +63,9 @@ func WithNewAuxiliaryTurn(ctx context.Context) context.Context {
 }
 
 // TurnWorkspaceInfo describes the workspace a hook request reports. Within a
-// turn the provider is asked at most once per bot and workspace target, the
-// read is bounded by the auxiliary timeout, and a workspace the turn already
-// found unavailable is not asked at all. Whatever cannot be read falls back
-// to the default container workspace.
+// turn the provider is asked at most once per bot and workspace target, and a
+// workspace the turn already found unavailable is not asked at all. Whatever
+// cannot be read falls back to the default container workspace.
 func TurnWorkspaceInfo(ctx context.Context, provider bridge.Provider, botID string) WorkspaceInfo {
 	info := WorkspaceInfo{
 		CWD:     DefaultWorkDir,
@@ -104,9 +103,7 @@ func loadWorkspaceInfo(ctx context.Context, resolver bridge.WorkspaceInfoProvide
 	if bridge.WorkspaceUnavailableFromContext(ctx) {
 		return bridge.WorkspaceInfo{}, bridge.ErrUnavailable
 	}
-	loadCtx, cancel := bridge.AuxiliaryContext(ctx)
-	defer cancel()
-	info, err := resolver.WorkspaceInfo(loadCtx, botID)
+	info, err := resolver.WorkspaceInfo(ctx, botID)
 	if err != nil {
 		bridge.MarkWorkspaceUnavailableOn(ctx, err)
 	}

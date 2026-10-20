@@ -27,9 +27,7 @@ func (s *Service) ValidateWorkspaceTarget(ctx context.Context, botID, targetID s
 	if s == nil || s.workspaceTargets == nil {
 		return errors.New("workspace target resolver not configured")
 	}
-	resolveCtx, cancel := bridge.AuxiliaryContext(ctx)
-	defer cancel()
-	target, err := s.workspaceTargets.ResolveWorkspaceTarget(resolveCtx, strings.TrimSpace(botID), targetID)
+	target, err := s.workspaceTargets.ResolveWorkspaceTarget(ctx, strings.TrimSpace(botID), targetID)
 	if workspaceCapabilityUnavailable(ctx, target, err) {
 		// The Computer exists; the turn itself degrades to text-only.
 		return nil
@@ -134,15 +132,14 @@ func preparedWorkspaceTargetFromContext(ctx context.Context, botID, sessionID st
 	return prepared.WorkspaceTarget, true
 }
 
-// resolveTurnWorkspaceTarget resolves the workspace target of a chat turn
-// within the auxiliary timeout. A known target whose runtime is not ready or
-// stopped responding is returned without error and the turn's workspace is
-// marked unavailable, so the turn continues as a text-only conversation.
-// Identity, permission and database failures are returned unchanged.
+// resolveTurnWorkspaceTarget resolves the workspace target of a chat turn. A
+// known target whose runtime is not ready, or whose provider gave up waiting
+// for it, is returned without error and the turn's workspace is marked
+// unavailable, so the turn continues as a text-only conversation. A slow
+// workspace is waited for. Identity, permission and database failures are
+// returned unchanged.
 func (s *Service) resolveTurnWorkspaceTarget(ctx context.Context, botID, targetID string) (workspace.ResolvedWorkspaceTarget, error) {
-	resolveCtx, cancel := bridge.AuxiliaryContext(ctx)
-	defer cancel()
-	target, err := s.workspaceTargets.ResolveWorkspaceTarget(resolveCtx, botID, targetID)
+	target, err := s.workspaceTargets.ResolveWorkspaceTarget(ctx, botID, targetID)
 	if workspaceCapabilityUnavailable(ctx, target, err) {
 		if s.logger != nil {
 			s.logger.WarnContext(ctx, "workspace unavailable, continuing chat turn without it",
@@ -164,10 +161,9 @@ func workspaceCapabilityUnavailable(ctx context.Context, target workspace.Resolv
 }
 
 // resolveWorkspaceTargetSnapshot describes the workspace target a stored turn
-// records. It resolves within the auxiliary timeout like the turn itself, so
-// a workspace that is not ready or stopped responding keeps its identity and
-// is marked unavailable for the rest of the turn instead of being waited on
-// again by the continuation that follows.
+// records. It resolves like the turn itself, so a workspace that is not ready
+// keeps its identity and is marked unavailable for the rest of the turn
+// instead of being asked again by the continuation that follows.
 func (s *Service) resolveWorkspaceTargetSnapshot(ctx context.Context, botID, targetID string) (*WorkspaceTarget, error) {
 	if s == nil || s.workspaceTargets == nil {
 		if strings.TrimSpace(targetID) == "" {

@@ -45,9 +45,8 @@ func (f *FSClient) ReadText(ctx context.Context, path string) (string, error) {
 
 // LoadSystemFiles loads the standard set of system files from the bot container.
 // A missing file is empty. A file that cannot be read is marked
-// SystemFileUnavailable instead of passing for an empty one. Each read waits
-// up to bridge.AuxiliaryLoadTimeout; once the workspace is found unreachable
-// the remaining files are not read.
+// SystemFileUnavailable instead of passing for an empty one. Once the
+// workspace is found unreachable the remaining files are not read.
 func (f *FSClient) LoadSystemFiles(ctx context.Context) []SystemFile {
 	home := "/data"
 	filenames := []string{
@@ -63,9 +62,7 @@ func (f *FSClient) LoadSystemFiles(ctx context.Context) []SystemFile {
 			files[i].LoadStatus = SystemFileUnavailable
 			continue
 		}
-		readCtx, cancel := bridge.AuxiliaryContext(ctx)
-		content, err := f.ReadText(readCtx, home+"/"+name)
-		cancel()
+		content, err := f.ReadText(ctx, home+"/"+name)
 		switch {
 		case err == nil:
 			files[i].Content = strings.TrimSpace(content)

@@ -210,8 +210,12 @@ func (a *Agent) applyBeforeModelCallHook(ctx context.Context, cfg RunConfig, ste
 			return cfg, fmt.Errorf("%w: %s", hooks.ErrDenied, firstHookText(res.Reason, err.Error()))
 		}
 		if errors.Is(err, hooks.ErrConfigUnavailable) {
-			// The turn runs without tools and its prompt says hooks did not
-			// run; a configuration that cannot be read does not block it.
+			// A configuration that cannot be read does not block the call,
+			// but the policy it would enforce on tool use is unknown, so the
+			// run goes on without tools. A chat turn has withheld them
+			// already; a run that read the configuration on its own, such
+			// as a background task, withholds them here.
+			WithholdTools(ctx, &cfg, ToolsWithheldHooksUnavailable)
 			if a.logger != nil {
 				a.logger.WarnContext(ctx, "before model call hook skipped: hooks configuration unavailable",
 					slog.String("bot_id", cfg.Identity.BotID),

@@ -3,9 +3,14 @@ package hooks
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sync/atomic"
 	"testing"
 
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
+
+	ctr "github.com/felinics/memoh/internal/container"
 	"github.com/felinics/memoh/internal/workspace/bridge"
 	pb "github.com/felinics/memoh/internal/workspace/bridgepb"
 )
@@ -229,5 +234,64 @@ func TestWorkspaceTargetResolutionFailureIsNotConfigUnavailable(t *testing.T) {
 	}
 	if _, err := service.Run(ctx, Request{Event: EventUserMessageReceived, BotID: "bot-1"}, nil); !errors.Is(err, dbErr) || errors.Is(err, ErrConfigUnavailable) {
 		t.Fatalf("Run error = %v, want %v and not ErrConfigUnavailable", err, dbErr)
+	}
+}
+
+type failingClientHookProvider struct {
+	err error
+}
+
+func (p failingClientHookProvider) MCPClient(context.Context, string) (*bridge.Client, error) {
+	return nil, p.err
+}
+
+// Only a configuration the turn cannot read is ErrConfigUnavailable. A
+// workspace runtime that refused the request for a reason of its own (it was
+// removed, is over quota, or reports a conflict) is reported as itself, so
+// the turn fails with that cause instead of claiming the hooks did not run.
+func TestWorkspaceRefusalIsNotConfigUnavailable(t *testing.T) {
+	t.Parallel()
+
+	for name, tc := range map[string]struct {
+		err         error
+		unavailable bool
+	}{
+		"bridge down":       {fmt.Errorf("mcp client: %w", bridge.ErrUnavailable), true},
+		"provider down":     {fmt.Errorf("workspace client: %w", status.Error(codes.Unavailable, "runtime unreachable")), true},
+		"container missing": {fmt.Errorf("workspace client: %w", ctr.ErrNotFound), true},
+		"runtime refused":   {fmt.Errorf("workspace client: %w", ctr.ErrConflict), false},
+		"unclassified":      {errors.New("workspace operation failed"), false},
+	} {
+		service := NewService(nil, failingClientHookProvider{err: tc.err})
+		_, _, err := service.LoadEffective(WithAuxiliaryTurn(t.Context()), "bot-1")
+		if !errors.Is(err, tc.err) || errors.Is(err, ErrConfigUnavailable) != tc.unavailable {
+			t.Errorf("%s: LoadEffective error = %v, want ErrConfigUnavailable = %v", name, err, tc.unavailable)
+		}
+	}
+}
+
+// Under the deny policy a configuration that cannot be loaded fails the hook
+// event like any other hook failure: the turn is rejected rather than
+// continuing without tools.
+func TestDenyPolicyFailsClosedWhenConfigUnavailable(t *testing.T) {
+	t.Parallel()
+
+	service, _ := newCountingHookService(t, `{"version": 1, "hooks": [`)
+	service.SetDenyWhenConfigUnavailable(true)
+	_, err := service.Run(WithAuxiliaryTurn(t.Context()), Request{Event: EventUserMessageReceived, BotID: "bot-1"}, nil)
+	if err == nil || errors.Is(err, ErrConfigUnavailable) {
+		t.Fatalf("Run error = %v, want a failure that is not ErrConfigUnavailable", err)
+	}
+
+	unavailable := WithAuxiliaryTurn(t.Context())
+	bridge.MarkWorkspaceUnavailable(unavailable)
+	if _, _, err := service.LoadEffective(unavailable, "bot-1"); err == nil || errors.Is(err, ErrConfigUnavailable) {
+		t.Fatalf("LoadEffective error = %v for an unavailable workspace, want a plain failure", err)
+	}
+
+	missing, _ := newCountingHookService(t, "")
+	missing.SetDenyWhenConfigUnavailable(true)
+	if _, err := missing.Run(WithAuxiliaryTurn(t.Context()), Request{Event: EventUserMessageReceived, BotID: "bot-1"}, nil); err != nil {
+		t.Fatalf("a missing config failed under the deny policy: %v", err)
 	}
 }

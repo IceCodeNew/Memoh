@@ -1054,9 +1054,8 @@ func (s *Service) buildBaseRunConfig(ctx context.Context, p baseRunConfigParams)
 	return cfg, chatModel, provider, nil
 }
 
-// loadTurnSkills lists the bot's skills within the auxiliary timeout. When
-// the listing fails the turn continues with no skills and a notice that the
-// installed set is unknown.
+// loadTurnSkills lists the bot's skills. When the listing fails the turn
+// continues with no skills and a notice that the installed set is unknown.
 func (s *Service) loadTurnSkills(ctx context.Context, botID string) ([]native.SkillEntry, []string) {
 	agentSkills := []native.SkillEntry{}
 	if s.skillLoader == nil {
@@ -1065,22 +1064,10 @@ func (s *Service) loadTurnSkills(ctx context.Context, botID string) ([]native.Sk
 	if bridge.WorkspaceUnavailableFromContext(ctx) {
 		return agentSkills, []string{native.SkillsUnavailableNotice}
 	}
-	skillCtx, cancel := bridge.AuxiliaryContext(ctx)
-	entries, err := s.skillLoader.LoadSkills(skillCtx, botID)
-	if err == nil && skillCtx.Err() != nil {
-		// Skill discovery treats files it cannot read as absent, so a listing
-		// cut short by the deadline comes back empty without an error.
-		err = skillCtx.Err()
-	}
-	cancel()
+	entries, err := s.skillLoader.LoadSkills(ctx, botID)
 	if err != nil {
 		s.logger.WarnContext(ctx, "failed to load skills", slog.String("bot_id", botID), slog.Any("error", err))
-		// Listing skills takes many bridge calls, so running out of time
-		// here does not show a stalled workspace; only an explicit
-		// unavailable answer does.
-		if errors.Is(err, bridge.ErrUnavailable) {
-			bridge.MarkWorkspaceUnavailable(ctx)
-		}
+		bridge.MarkWorkspaceUnavailableOn(ctx, err)
 		return agentSkills, []string{native.SkillsUnavailableNotice}
 	}
 	for _, e := range entries {
@@ -1505,17 +1492,12 @@ func (s *Service) prepareRunConfig(ctx context.Context, cfg native.RunConfig) na
 		for i := range files {
 			files[i].LoadStatus = ""
 		}
-		cfg.SupportsToolCall = false
+		native.WithholdTools(ctx, &cfg, native.ToolsWithheldWorkspaceUnavailable)
 	} else if hooksUnavailable {
 		// The prompt hook above already found the configuration unreadable;
 		// the policy it would enforce is unknown, so the turn runs no tools.
 		loadNotices = append(loadNotices, native.HooksUnavailableNotice)
-		cfg.SupportsToolCall = false
-	}
-	if !cfg.SupportsToolCall {
-		// A request without tools must not carry tool blocks from earlier
-		// turns; replay them as text instead.
-		cfg.Messages = textOnlyMessages(cfg.Messages)
+		native.WithholdTools(ctx, &cfg, native.ToolsWithheldHooksUnavailable)
 	}
 	systemParams := native.SystemPromptParams{
 		SessionType:               cfg.SessionType,

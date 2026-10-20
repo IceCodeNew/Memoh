@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	ctr "github.com/felinics/memoh/internal/container"
 	"github.com/felinics/memoh/internal/prune"
 	"github.com/felinics/memoh/internal/workspace/bridge"
 )
@@ -28,6 +29,10 @@ type workspaceTargetIDResolver interface {
 type Service struct {
 	logger   *slog.Logger
 	provider bridge.Provider
+	// denyWhenConfigUnavailable keeps the stricter rule for a configuration
+	// that cannot be loaded: the hook event fails like any other hook
+	// failure, so the turn is rejected instead of continuing without tools.
+	denyWhenConfigUnavailable bool
 }
 
 var emptyConfigFile = []byte("{\n  \"version\": 1,\n  \"enabled\": true,\n  \"hooks\": []\n}\n")
@@ -45,6 +50,16 @@ func NewService(log *slog.Logger, provider bridge.Provider) *Service {
 	return &Service{
 		logger:   log.With(slog.String("service", "hooks")),
 		provider: provider,
+	}
+}
+
+// SetDenyWhenConfigUnavailable makes a hooks configuration that cannot be
+// loaded fail the hook event instead of reporting ErrConfigUnavailable. A
+// deployment whose hooks guard what reaches the model (UserMessageReceived,
+// BeforeModelCall) uses it to keep those guards fail-closed.
+func (s *Service) SetDenyWhenConfigUnavailable(deny bool) {
+	if s != nil {
+		s.denyWhenConfigUnavailable = deny
 	}
 }
 
@@ -79,12 +94,15 @@ func (s *Service) Load(ctx context.Context, botID string) (Config, bool, error) 
 	return cfg, true, nil
 }
 
-// LoadEffective returns the configuration hooks run with. Failing to read or
-// parse it is ErrConfigUnavailable; failing to identify the bot's workspace
-// target (a database error, for example) is returned as is, since that is not
-// a workspace fault a turn may continue without. Within a turn scoped by
+// LoadEffective returns the configuration hooks run with. A file that cannot
+// be parsed or read, or a workspace that cannot be reached, is
+// ErrConfigUnavailable (unless SetDenyWhenConfigUnavailable is on). Any other
+// failure is returned as is, so the turn fails with its cause: failing to
+// identify the bot's workspace target (a database error, for example), or a
+// workspace runtime that refused the request for a reason of its own, such as
+// one that was removed or is over quota. Within a turn scoped by
 // WithTurnSnapshot the first result is reused, so every hook event of the
-// turn sees the same configuration and a stalled workspace is waited on at
+// turn sees the same configuration and an unreachable workspace is asked at
 // most once.
 func (s *Service) LoadEffective(ctx context.Context, botID string) (Config, bool, error) {
 	targetID, err := s.currentWorkspaceTargetID(ctx, botID)
@@ -102,14 +120,16 @@ func (s *Service) LoadEffective(ctx context.Context, botID string) (Config, bool
 
 func (s *Service) loadEffective(ctx context.Context, botID string) (Config, bool, error) {
 	if bridge.WorkspaceUnavailableFromContext(ctx) {
-		return Config{}, false, fmt.Errorf("%w: %w", ErrConfigUnavailable, bridge.ErrUnavailable)
+		return Config{}, false, s.configUnavailable(bridge.ErrUnavailable)
 	}
-	loadCtx, cancel := bridge.AuxiliaryContext(ctx)
-	userCfg, exists, err := s.Load(loadCtx, botID)
-	cancel()
+	userCfg, exists, err := s.Load(ctx, botID)
 	if err != nil {
 		bridge.MarkWorkspaceUnavailableOn(ctx, err)
-		return Config{}, exists, fmt.Errorf("%w: %w", ErrConfigUnavailable, err)
+		// Load reports exists only for a file it read but could not parse.
+		if !exists && !unreadable(err) {
+			return Config{}, exists, err
+		}
+		return Config{}, exists, s.configUnavailable(err)
 	}
 	userCfg.applyDefaults()
 
@@ -126,6 +146,24 @@ func (s *Service) loadEffective(ctx context.Context, botID string) (Config, bool
 		}
 	}
 	return effective, exists, nil
+}
+
+// configUnavailable reports a configuration that could not be loaded:
+// ErrConfigUnavailable, or a plain failure under the deny policy.
+func (s *Service) configUnavailable(err error) error {
+	if s != nil && s.denyWhenConfigUnavailable {
+		return fmt.Errorf("hooks configuration unavailable (policy: deny): %w", err)
+	}
+	return fmt.Errorf("%w: %w", ErrConfigUnavailable, err)
+}
+
+// unreadable reports whether err, from reading the configuration file, shows
+// that the file or the workspace holding it cannot be read right now.
+func unreadable(err error) bool {
+	return bridge.IsUnreachable(err) ||
+		errors.Is(err, bridge.ErrForbidden) ||
+		errors.Is(err, ctr.ErrUnavailable) ||
+		ctr.IsNotFound(err)
 }
 
 func (s *Service) currentWorkspaceTargetID(ctx context.Context, botID string) (string, error) {

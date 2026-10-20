@@ -11,6 +11,7 @@ import (
 	sdk "github.com/felinics/twilight/sdk"
 
 	"github.com/felinics/memoh/internal/agent/runtime/native"
+	ctr "github.com/felinics/memoh/internal/container"
 	"github.com/felinics/memoh/internal/hooks"
 	"github.com/felinics/memoh/internal/workspace"
 	"github.com/felinics/memoh/internal/workspace/bridge"
@@ -97,7 +98,7 @@ func (p failingHooksProvider) MCPClient(context.Context, string) (*bridge.Client
 // When the hooks configuration cannot be loaded the user message is still
 // answered, but the policy the hooks enforce is unknown, so no tools run.
 func TestUnavailableHooksConfigAllowsTextOnlyTurn(t *testing.T) {
-	s := &Service{hookService: hooks.NewService(nil, failingHooksProvider{err: errors.New("read hooks.json: permission denied")})}
+	s := &Service{hookService: hooks.NewService(nil, failingHooksProvider{err: fmt.Errorf("read hooks.json: %w", bridge.ErrForbidden)})}
 	ctx := hooks.WithAuxiliaryTurn(t.Context())
 	req := ChatRequest{BotID: "bot-1", Query: "hello"}
 	got, err := s.applyUserMessageHook(ctx, req)
@@ -110,6 +111,21 @@ func TestUnavailableHooksConfigAllowsTextOnlyTurn(t *testing.T) {
 	}
 	if strings.Contains(cfg.System, native.WorkspaceUnavailableNotice) {
 		t.Fatal("an unreadable hooks file was reported as an unavailable workspace")
+	}
+}
+
+// Under the deny policy, or when the workspace refused the read for a reason
+// of its own, the user message is rejected as before: the turn does not
+// continue without its hooks.
+func TestHooksConfigFailuresThatStillRejectTheMessage(t *testing.T) {
+	strict := hooks.NewService(nil, failingHooksProvider{err: fmt.Errorf("read hooks.json: %w", bridge.ErrForbidden)})
+	strict.SetDenyWhenConfigUnavailable(true)
+	refused := hooks.NewService(nil, failingHooksProvider{err: fmt.Errorf("workspace client: %w", ctr.ErrConflict)})
+	for name, service := range map[string]*hooks.Service{"deny policy": strict, "workspace refused": refused} {
+		s := &Service{hookService: service}
+		if _, err := s.applyUserMessageHook(hooks.WithAuxiliaryTurn(t.Context()), ChatRequest{BotID: "bot-1", Query: "hello"}); err == nil {
+			t.Errorf("%s: the user message passed without its hooks", name)
+		}
 	}
 }
 
@@ -171,10 +187,10 @@ func TestHookEventsShareOneWorkspaceDescriptionPerTurn(t *testing.T) {
 	}
 }
 
-// A turn that runs without tools must not send tool blocks from earlier
-// turns: providers reject them when no tools are defined. The history is
-// replayed as text with the same number of messages.
-func TestDegradedTurnReplaysToolHistoryAsText(t *testing.T) {
+// A degraded turn withholds its tools and says why; the history it carries
+// keeps its tool blocks, which the native runtime replays as text only in the
+// requests it sends.
+func TestDegradedTurnWithholdsToolsAndKeepsHistory(t *testing.T) {
 	s := &Service{workspaceTargets: stubWorkspaceTargets{
 		target: nativeTarget,
 		err:    fmt.Errorf("%w: %w", workspace.ErrCapabilityUnavailable, bridge.ErrUnavailable),
@@ -190,27 +206,18 @@ func TestDegradedTurnReplaysToolHistoryAsText(t *testing.T) {
 			sdk.ToolCallPart{ToolCallID: "call-1", ToolName: "exec", Input: sdk.ParseToolArguments(`{"command":"ls"}`)},
 		}},
 		sdk.ToolMessage(sdk.ToolResultPart{ToolCallID: "call-1", ToolName: "exec", Result: sdk.TextOutput("a.txt")}),
-		sdk.UserMessage("thanks"),
 	}
 	cfg := s.prepareRunConfig(ctx, native.RunConfig{SupportsToolCall: true, Messages: history, Identity: native.SessionContext{BotID: "bot-1"}})
-	if cfg.SupportsToolCall || len(cfg.Messages) != len(history) {
-		t.Fatalf("SupportsToolCall=%v messages=%d, want tools disabled and %d messages", cfg.SupportsToolCall, len(cfg.Messages), len(history))
+	if cfg.SupportsToolCall || cfg.ToolsWithheld != native.ToolsWithheldWorkspaceUnavailable {
+		t.Fatalf("SupportsToolCall=%v ToolsWithheld=%q, want tools withheld for the workspace", cfg.SupportsToolCall, cfg.ToolsWithheld)
 	}
-	for i, msg := range cfg.Messages {
-		if msg.Role == sdk.MessageRoleTool || hasToolParts(msg.Content) {
-			t.Fatalf("message %d still carries tool blocks: %+v", i, msg)
-		}
-	}
-	if text := cfg.Messages[2].Content[0].(sdk.TextPart).Text; !strings.Contains(text, "exec") || !strings.Contains(text, "a.txt") {
-		t.Fatalf("tool result lost in text replay: %q", text)
-	}
-	if got := textOnlyMessages(history[:1]); &got[0] != &history[0] {
-		t.Fatal("a history without tool blocks was copied")
+	if cfg.Messages[2].Role != sdk.MessageRoleTool {
+		t.Fatalf("the stored history was rewritten: %+v", cfg.Messages[2])
 	}
 
 	healthy := (&Service{}).prepareRunConfig(hooks.WithAuxiliaryTurn(t.Context()), native.RunConfig{SupportsToolCall: true, Messages: history, Identity: native.SessionContext{BotID: "bot-1"}})
-	if !healthy.SupportsToolCall || !hasToolParts(healthy.Messages[1].Content) {
-		t.Fatal("a healthy turn had its tool history rewritten")
+	if !healthy.SupportsToolCall || healthy.ToolsWithheld != "" {
+		t.Fatalf("a healthy turn withheld its tools: %q", healthy.ToolsWithheld)
 	}
 }
 

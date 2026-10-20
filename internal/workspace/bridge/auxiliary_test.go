@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"testing"
-	"time"
 
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -15,34 +14,29 @@ import (
 
 type statTimeoutTestServer struct {
 	pb.UnimplementedContainerServiceServer
-	reported bool
 }
 
-func (s *statTimeoutTestServer) Stat(ctx context.Context, _ *pb.StatRequest) (*pb.StatResponse, error) {
-	if s.reported {
-		return nil, status.Error(codes.DeadlineExceeded, "sandbox provider timed out")
-	}
-	<-ctx.Done()
-	return nil, ctx.Err()
+func (*statTimeoutTestServer) Stat(context.Context, *pb.StatRequest) (*pb.StatResponse, error) {
+	return nil, status.Error(codes.DeadlineExceeded, "sandbox provider timed out")
 }
 
-// Neither the caller's own deadline nor a timeout the provider reports is
-// ErrUnavailable or context.DeadlineExceeded on the error chain;
-// IsDeadlineExceeded recognizes both.
-func TestClientTimeoutsAreDeadlineExceeded(t *testing.T) {
+// A timeout the provider reports arrives as a DeadlineExceeded status, which
+// is neither ErrUnavailable nor context.DeadlineExceeded on the error chain;
+// IsProviderTimeout recognizes it. A deadline that expired in the caller's
+// own code is not the workspace's answer.
+func TestProviderTimeoutIsUnreachable(t *testing.T) {
 	t.Parallel()
 
-	for name, reported := range map[string]bool{"caller deadline": false, "provider timeout": true} {
-		t.Run(name, func(t *testing.T) {
-			t.Parallel()
-			client := newTestClient(t, &statTimeoutTestServer{reported: reported})
-			ctx, cancel := context.WithTimeout(t.Context(), 200*time.Millisecond)
-			defer cancel()
-			_, err := client.Stat(ctx, "/")
-			if err == nil || !IsDeadlineExceeded(err) || !IsUnreachable(err) {
-				t.Fatalf("Stat() error = %v, want a deadline exceeded failure", err)
-			}
-		})
+	client := newTestClient(t, &statTimeoutTestServer{})
+	_, err := client.Stat(t.Context(), "/")
+	if err == nil || !IsProviderTimeout(err) || !IsUnreachable(err) {
+		t.Fatalf("Stat() error = %v, want a provider timeout", err)
+	}
+	if !IsUnreachable(fmt.Errorf("workspace client: %w", status.Error(codes.Unavailable, "runtime unreachable"))) {
+		t.Fatal("an undecoded Unavailable status from a provider is not unreachable")
+	}
+	if IsUnreachable(fmt.Errorf("load bot container: %w", context.DeadlineExceeded)) {
+		t.Fatal("a caller-side deadline reported as unreachable")
 	}
 	if IsUnreachable(mapError(context.Background(), status.Error(codes.NotFound, "missing"))) {
 		t.Fatal("not found reported as unreachable")
@@ -69,8 +63,8 @@ func TestWorkspaceAvailabilityIsTurnScoped(t *testing.T) {
 	}
 	child, cancel := context.WithCancel(turn)
 	defer cancel()
-	if !MarkWorkspaceUnavailableOn(child, fmt.Errorf("read: %w", context.DeadlineExceeded)) {
-		t.Fatal("a timeout did not mark the workspace unavailable")
+	if !MarkWorkspaceUnavailableOn(child, fmt.Errorf("read: %w", status.Error(codes.DeadlineExceeded, "sandbox provider timed out"))) {
+		t.Fatal("a provider timeout did not mark the workspace unavailable")
 	}
 	if !WorkspaceUnavailableFromContext(turn) {
 		t.Fatal("a later stage of the turn does not see the verdict")
