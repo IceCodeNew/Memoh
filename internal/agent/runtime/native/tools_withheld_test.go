@@ -6,6 +6,8 @@ import (
 	"testing"
 
 	sdk "github.com/felinics/twilight/sdk"
+	sdktrace "go.opentelemetry.io/otel/sdk/trace"
+	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 
 	contextfrag "github.com/felinics/memoh/internal/agent/context/fragment"
 	"github.com/felinics/memoh/internal/hooks"
@@ -119,5 +121,31 @@ func TestUnavailableHooksConfigAtModelCallWithholdsTools(t *testing.T) {
 	requests := recordingRun(t, a, RunConfig{Messages: toolExchangeHistory(), SupportsToolCall: true})
 	if len(requests[0].Tools) != 0 || requestCarriesToolBlocks(requests[0].Messages) {
 		t.Fatalf("tools offered = %d, tool blocks = %v; want the run to withhold its tools", len(requests[0].Tools), requestCarriesToolBlocks(requests[0].Messages))
+	}
+}
+
+// A turn that answers without its tools says why on its span, so a degraded
+// answer is not indistinguishable from an ordinary one in a trace. The first
+// reason is the one kept.
+func TestWithholdToolsRecordsTheReasonOnTheTurnSpan(t *testing.T) {
+	t.Parallel()
+	recorder := tracetest.NewSpanRecorder()
+	ctx, span := sdktrace.NewTracerProvider(sdktrace.WithSpanProcessor(recorder)).Tracer("test").Start(t.Context(), "agent.turn")
+	cfg := RunConfig{SupportsToolCall: true}
+	WithholdTools(ctx, &cfg, ToolsWithheldWorkspaceUnavailable)
+	WithholdTools(ctx, &cfg, ToolsWithheldHooksUnavailable)
+	span.End()
+
+	if cfg.SupportsToolCall || cfg.ToolsWithheld != ToolsWithheldWorkspaceUnavailable {
+		t.Fatalf("SupportsToolCall=%v ToolsWithheld=%q", cfg.SupportsToolCall, cfg.ToolsWithheld)
+	}
+	var recorded []string
+	for _, attr := range recorder.Ended()[0].Attributes() {
+		if attr.Key == "agent.turn.tools_withheld" {
+			recorded = append(recorded, attr.Value.AsString())
+		}
+	}
+	if len(recorded) != 1 || recorded[0] != string(ToolsWithheldWorkspaceUnavailable) {
+		t.Fatalf("tools_withheld attributes = %v, want the first reason once", recorded)
 	}
 }
