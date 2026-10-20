@@ -37,6 +37,7 @@
       "confirm": "✅ Confirm",
       "cancel": "✕ Cancel"
     },
+    "labelHarness": "Harness",
     "labelModel": "Model",
     "labelReasoning": "Reasoning",
     "labelContext": "Context",
@@ -131,6 +132,7 @@
       "title": "Context",
       "usedWithWindow": "{percent} · {used} / {window} used",
       "tokensUsed": "{used} tokens used",
+      "agentUnsupported": "This session's Agent manages its own context, so /context has nothing to show here.",
       "fieldCacheHit": "Cache hit"
     },
     "access": {
@@ -283,11 +285,13 @@
     "model": {
       "title": "Chat Models",
       "currentTitle": "Current Models",
+      "sessionCurrent": "Current model for this session: {model}",
       "byProvider": "By provider:",
       "fieldProvider": "Provider",
       "unavailable": "Models aren't available right now.",
       "listChanged": "Model list changed — reopen /model to pick again.",
       "setUsage": "Usage: /model set <model_id> | <provider_name> <model_name>",
+      "agentUnsupported": "This session's Agent changes its model inside the Agent. Switch it in the web chat.",
       "noneUnderProvider": "No chat models under provider {provider}. Run {command} to see all providers.",
       "empty": "No chat models yet.\n\nAdd a model in the web dashboard.",
       "notFound": "No model named {name}. Run {command} to see what's available.",
@@ -446,6 +450,7 @@
       "unavailable": "Reasoning isn't available right now.",
       "unsupported": "The current model doesn't support reasoning.",
       "uncontrollable": "The current model always reasons and exposes no reasoning controls.",
+      "agentUnsupported": "This session's Agent sets its reasoning inside the Agent. Switch it in the web chat.",
       "unknownLevel": "Unknown level {level} — available levels: {levels}."
     },
     "error": {
@@ -648,6 +653,7 @@
     },
     "external_runtime": {
       "auth_required": "Codex is not connected, or its sign-in has expired. Open Agent settings to connect ChatGPT or configure an API key.",
+      "busy": "This Agent is finishing an earlier operation. Try again when it has finished.",
       "context_window_exceeded": "This conversation no longer fits in the model's context window. Compact the context or start a new conversation.",
       "overloaded": "The external Agent's model service is unavailable or overloaded right now. Try again in a moment, or switch to another model.",
       "rate_limited": "The external Agent was rate limited by its model service. Please wait a moment before sending again.",
@@ -764,6 +770,7 @@
       "command_unavailable": "This runtime command is no longer available. Refresh and try again.",
       "failed": "The runtime control could not be completed. Try again.",
       "forbidden": "You do not have access to this conversation.",
+      "fork_latest_only": "Only the latest reply can be forked. Select the latest reply and try again.",
       "goal_requires_default_mode": "Exit Plan mode before creating or resuming a goal.",
       "mode_unavailable": "This permission mode is unavailable. Refresh and choose a supported mode.",
       "request_invalid": "The runtime control request is invalid.",
@@ -893,6 +900,8 @@
     },
     "workspace": {
       "archive_invalid": "The archive cannot be extracted. Use a valid .zip, .tar.gz or .tgz file.",
+      "display_clipboard_failed": "Clipboard synchronization failed. Reconnect the desktop and try again.",
+      "display_clipboard_too_large": "Clipboard text exceeds 48 KiB. Copy a smaller selection.",
       "display_prepare_failed": "Display preparation failed.",
       "image_not_found": "The workspace image does not exist, needs registry credentials, or its name is invalid. Check the image name and try again.",
       "image_registry_unavailable": "The image registry could not be reached. Please try again later.",

@@ -615,6 +615,36 @@ func (q *Queries) GetSessionDiscussCursor(ctx context.Context, arg GetSessionDis
 	return i, err
 }
 
+const listBotSessionIDs = `-- name: ListBotSessionIDs :many
+SELECT id
+FROM bot_sessions
+WHERE team_id = public.memoh_current_team_id()
+  AND bot_id = $1
+ORDER BY id
+`
+
+// Every session a bot-wide runtime reset covers, deleted ones included, as
+// ClearHistoryByBot does.
+func (q *Queries) ListBotSessionIDs(ctx context.Context, botID pgtype.UUID) ([]pgtype.UUID, error) {
+	rows, err := q.db.Query(ctx, listBotSessionIDs, botID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []pgtype.UUID
+	for rows.Next() {
+		var id pgtype.UUID
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		items = append(items, id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listSessionDiscussCursorsByBot = `-- name: ListSessionDiscussCursorsByBot :many
 SELECT c.session_id, c.scope_key, c.route_id, c.source, c.consumed_cursor, c.consumed_event_cursor, c.updated_at, c.team_id
 FROM bot_session_discuss_cursors c
@@ -845,10 +875,18 @@ WHERE s.team_id = public.memoh_current_team_id()
   )
   AND (
     NOT $11::bool
-    OR (s.updated_at, s.id) < ($12::timestamptz, $13::uuid)
+    OR s.type <> 'schedule'
+    OR EXISTS (
+      SELECT 1 FROM schedule sc
+      WHERE sc.team_id = s.team_id AND sc.target_session_id = s.id
+    )
+  )
+  AND (
+    NOT $12::bool
+    OR (s.updated_at, s.id) < ($13::timestamptz, $14::uuid)
   )
 ORDER BY s.updated_at DESC, s.id DESC
-LIMIT $14::int
+LIMIT $15::int
 `
 
 type ListSessionsByBotAndCreatedByUserPagedParams struct {
@@ -862,6 +900,7 @@ type ListSessionsByBotAndCreatedByUserPagedParams struct {
 	WorkdirID         pgtype.UUID        `json:"workdir_id"`
 	UseVisibility     bool               `json:"use_visibility"`
 	Visibility        string             `json:"visibility"`
+	HideScheduleRuns  bool               `json:"hide_schedule_runs"`
 	UseCursor         bool               `json:"use_cursor"`
 	CursorUpdatedAt   pgtype.Timestamptz `json:"cursor_updated_at"`
 	CursorID          pgtype.UUID        `json:"cursor_id"`
@@ -905,6 +944,7 @@ func (q *Queries) ListSessionsByBotAndCreatedByUserPaged(ctx context.Context, ar
 		arg.WorkdirID,
 		arg.UseVisibility,
 		arg.Visibility,
+		arg.HideScheduleRuns,
 		arg.UseCursor,
 		arg.CursorUpdatedAt,
 		arg.CursorID,
@@ -977,10 +1017,18 @@ WHERE s.team_id = public.memoh_current_team_id()
   )
   AND (
     NOT $10::bool
-    OR (s.updated_at, s.id) < ($11::timestamptz, $12::uuid)
+    OR s.type <> 'schedule'
+    OR EXISTS (
+      SELECT 1 FROM schedule sc
+      WHERE sc.team_id = s.team_id AND sc.target_session_id = s.id
+    )
+  )
+  AND (
+    NOT $11::bool
+    OR (s.updated_at, s.id) < ($12::timestamptz, $13::uuid)
   )
 ORDER BY s.updated_at DESC, s.id DESC
-LIMIT $13::int
+LIMIT $14::int
 `
 
 type ListSessionsByBotPagedParams struct {
@@ -993,6 +1041,7 @@ type ListSessionsByBotPagedParams struct {
 	WorkdirID         pgtype.UUID        `json:"workdir_id"`
 	UseVisibility     bool               `json:"use_visibility"`
 	Visibility        string             `json:"visibility"`
+	HideScheduleRuns  bool               `json:"hide_schedule_runs"`
 	UseCursor         bool               `json:"use_cursor"`
 	CursorUpdatedAt   pgtype.Timestamptz `json:"cursor_updated_at"`
 	CursorID          pgtype.UUID        `json:"cursor_id"`
@@ -1028,7 +1077,10 @@ type ListSessionsByBotPagedRow struct {
 // updated_at. Callers always pass an explicit types filter; to opt out of
 // filtering, pass every known type. The workdir filter is three-state:
 // disabled, "sessions of this workdir", or "sessions with no workdir"
-// (workdir_unassigned) for the sidebar's ungrouped bucket.
+// (workdir_unassigned) for the sidebar's ungrouped bucket. hide_schedule_runs
+// drops the sessions schedule fires created (type 'schedule'), which the
+// sidebar lists under their schedule instead, except one a schedule still
+// runs in (existing_session target): that conversation stays a normal row.
 func (q *Queries) ListSessionsByBotPaged(ctx context.Context, arg ListSessionsByBotPagedParams) ([]ListSessionsByBotPagedRow, error) {
 	rows, err := q.db.Query(ctx, listSessionsByBotPaged,
 		arg.BotID,
@@ -1040,6 +1092,7 @@ func (q *Queries) ListSessionsByBotPaged(ctx context.Context, arg ListSessionsBy
 		arg.WorkdirID,
 		arg.UseVisibility,
 		arg.Visibility,
+		arg.HideScheduleRuns,
 		arg.UseCursor,
 		arg.CursorUpdatedAt,
 		arg.CursorID,

@@ -37,6 +37,7 @@
       "confirm": "✅確認",
       "cancel": "✕ キャンセル"
     },
+    "labelHarness": "Harness",
     "labelModel": "Model",
     "labelReasoning": "推論",
     "labelContext": "コンテクスト",
@@ -131,6 +132,7 @@
       "title": "コンテクスト",
       "usedWithWindow": "{percent}・{used}・{window}使用",
       "tokensUsed": "使用される {used} Token",
+      "agentUnsupported": "このセッションの Agent はコンテキストを自分で管理するため、/context で表示できる内容はありません。",
       "fieldCacheHit": "キャッシュヒット"
     },
     "access": {
@@ -283,11 +285,13 @@
     "model": {
       "title": "チャットModel",
       "currentTitle": "現行Model",
+      "sessionCurrent": "このセッションの Model：{model}",
       "byProvider": "Provider別:",
       "fieldProvider": "Provider",
       "unavailable": "現在Modelは入手できません。",
       "listChanged": "Model リストが変更されました - /model を再度開いて選択します。",
       "setUsage": "使い方: /Modelセット<model_id> | <provider_name> <model_name>",
+      "agentUnsupported": "このセッションの Agent は Agent 内で Model を切り替えます。Web のチャットで切り替えてください。",
       "noneUnderProvider": "Provider {provider} にはチャット Modelがありません。 {command} を実行してすべてのProviderを表示します。",
       "empty": "チャットModelはまだありません。\n\nWeb ダッシュボードにModelを追加します。",
       "notFound": "{name} という名前のModelはありません。 {command} を実行して、利用可能なものを確認します。",
@@ -446,6 +450,7 @@
       "unavailable": "推論は現在利用できません。",
       "unsupported": "現在のモデルは推論に対応していません。",
       "uncontrollable": "現在のモデルは常に推論を行い、調整可能な推論設定はありません。",
+      "agentUnsupported": "このセッションの Agent は Agent 内で推論レベルを設定します。Web のチャットで切り替えてください。",
       "unknownLevel": "不明なレベル {level} —— 利用可能なレベル: {levels}。"
     },
     "error": {
@@ -648,6 +653,7 @@
     },
     "external_runtime": {
       "auth_required": "Codex のアカウントが未接続か、ログインの有効期限が切れています。Agent の設定で ChatGPT に接続するか、API Key を設定してください。",
+      "busy": "この Agent は前の処理を実行中です。完了してから再試行してください。",
       "context_window_exceeded": "この会話はモデルのコンテキストウィンドウを超えました。コンテキストを圧縮するか、新しい会話を開始してください。",
       "overloaded": "外部 Agent のモデルサービスが一時的に利用できないか、過負荷になっています。しばらくしてからもう一度お試しいただくか、別のモデルに切り替えてください。",
       "rate_limited": "外部 Agent がモデルサービスのレート制限に達しました。しばらく待ってからもう一度送信してください。",
@@ -764,6 +770,7 @@
       "command_unavailable": "このコマンドは利用できません。更新して再試行してください。",
       "failed": "操作を完了できませんでした。再試行してください。",
       "forbidden": "この会話へのアクセス権がありません。",
+      "fork_latest_only": "分岐できるのは最新の返信のみです。最新の返信を選択して再試行してください。",
       "goal_requires_default_mode": "目標を作成・再開するには、先にプランモードを終了してください。",
       "mode_unavailable": "この権限モードは利用できません。更新して選び直してください。",
       "request_invalid": "リクエストが無効です。更新して再試行してください。",
@@ -893,6 +900,8 @@
     },
     "workspace": {
       "archive_invalid": "アーカイブを展開できません。有効な .zip、.tar.gz、.tgz ファイルを使用してください。",
+      "display_clipboard_failed": "クリップボードの同期に失敗しました。デスクトップに再接続して、もう一度お試しください。",
+      "display_clipboard_too_large": "クリップボードのテキストが 48 KiB を超えています。コピー範囲を小さくしてください。",
       "display_prepare_failed": "ディスプレイの準備に失敗しました。しばらくしてからもう一度お試しください。",
       "image_not_found": "ワークスペースのイメージが存在しないか、レジストリの認証が必要か、名前が正しくありません。イメージ名を確認してからもう一度お試しください。",
       "image_registry_unavailable": "イメージレジストリに接続できません。しばらくしてからもう一度お試しください。",

@@ -28,6 +28,7 @@ import (
 	messagepkg "github.com/felinics/memoh/internal/chat/message"
 	dbsqlc "github.com/felinics/memoh/internal/db/postgres/sqlc"
 	postgresstore "github.com/felinics/memoh/internal/db/postgres/store"
+	dbstore "github.com/felinics/memoh/internal/db/store"
 	"github.com/felinics/memoh/internal/runtimefence"
 )
 
@@ -61,6 +62,10 @@ const (
 	// call, which commits a step, and breaks the second call's stream after
 	// some text.
 	wsStepHistoryToolThenBrokenStream wsStepHistoryModel = "tool_then_broken_stream"
+	// wsStepHistoryToolThenAuthFailure answers the first call with a tool
+	// call, which commits a step, and rejects the second call before any
+	// output.
+	wsStepHistoryToolThenAuthFailure wsStepHistoryModel = "tool_then_auth_failure"
 	// wsStepHistoryContextBudget fails the run before the model is called:
 	// the context view cannot fit the window, which the runtime reports with
 	// the code context.budget_unsatisfied.
@@ -107,7 +112,7 @@ func (t *wsStepHistoryTransport) RoundTrip(r *http.Request) (*http.Response, err
 		}
 	}
 	switch t.mode {
-	case wsStepHistoryToolThenBrokenStream:
+	case wsStepHistoryToolThenBrokenStream, wsStepHistoryToolThenAuthFailure:
 		if call == 1 {
 			return &http.Response{
 				StatusCode: http.StatusOK,
@@ -119,7 +124,10 @@ func (t *wsStepHistoryTransport) RoundTrip(r *http.Request) (*http.Response, err
 				Request: r,
 			}, nil
 		}
-		return stream(failingReader{err: errors.New("upstream stream broke")}), nil
+		if t.mode == wsStepHistoryToolThenBrokenStream {
+			return stream(failingReader{err: errors.New("upstream stream broke")}), nil
+		}
+		fallthrough
 	case wsStepHistoryAuthFailure:
 		return &http.Response{
 			StatusCode: http.StatusUnauthorized,
@@ -191,6 +199,11 @@ type wsStepHistoryHarness struct {
 
 func newWSStepHistoryHarness(t *testing.T, mode wsStepHistoryModel) wsStepHistoryHarness {
 	t.Helper()
+	return newWSStepHistoryHarnessOn(t, mode, sessionruntime.NewMemoryBackend())
+}
+
+func newWSStepHistoryHarnessOn(t *testing.T, mode wsStepHistoryModel, backend sessionruntime.Backend) wsStepHistoryHarness {
+	t.Helper()
 	ctx := context.Background()
 	pool := openTurnAdmissionPostgres(t, ctx)
 	botID, sessionID := createTurnAdmissionFixture(t, ctx, pool)
@@ -210,7 +223,7 @@ func newWSStepHistoryHarness(t *testing.T, mode wsStepHistoryModel) wsStepHistor
 		t.Fatalf("create model fixture: %v", err)
 	}
 	queries := postgresstore.NewQueriesWithPool(pool, dbsqlc.New(pool))
-	manager := sessionruntime.NewManager(sessionruntime.NewMemoryBackend(), sessionruntime.Options{
+	manager := sessionruntime.NewManager(backend, sessionruntime.Options{
 		OwnerID:       "owner-ws-step-history",
 		StateTTL:      time.Minute,
 		OwnerLeaseTTL: time.Minute,
@@ -218,7 +231,14 @@ func newWSStepHistoryHarness(t *testing.T, mode wsStepHistoryModel) wsStepHistor
 		Fence:         runtimefence.NewActivator(queries),
 	})
 	t.Cleanup(func() { _ = manager.Close() })
+	service, messages := newWSStepHistoryService(t, mode, queries, manager)
+	return wsStepHistoryHarness{pool: pool, botID: botID, sessionID: sessionID, service: service, manager: manager, messages: messages}
+}
 
+// newWSStepHistoryService is the application service of one server process:
+// its runtime is manager and its history lives in queries.
+func newWSStepHistoryService(t *testing.T, mode wsStepHistoryModel, queries dbstore.Queries, manager *sessionruntime.Manager) (*Service, *messagepkg.DBService) {
+	t.Helper()
 	fixture := newDirectLifecycleFixture(t, directLifecycleModelSuccess)
 	service := fixture.service
 	messages := messagepkg.NewService(service.logger, queries)
@@ -238,7 +258,7 @@ func newWSStepHistoryHarness(t *testing.T, mode wsStepHistoryModel) wsStepHistor
 	if mode == wsStepHistoryTextLoop {
 		service.queries = loopDetectionQueries{service.queries.(noDecisionQueries)}
 	}
-	return wsStepHistoryHarness{pool: pool, botID: botID, sessionID: sessionID, service: service, manager: manager, messages: messages}
+	return service, messages
 }
 
 // run admits one Web chat turn and runs it to its terminal write. stop, when
@@ -653,6 +673,27 @@ func TestPostgresWSStepHistoryFailureAfterCommittedStep(t *testing.T) {
 		[]string{
 			`user "` + directLifecyclePrompt + `"`,
 			`assistant [tool] [text "` + wsStepHistoryPartialText + `"] [error agent.response_interrupted]`,
+		},
+	)
+}
+
+// A failure after a committed step whose model call streamed nothing still
+// adds a row with the run's code, so the turn shows why it ended.
+func TestPostgresWSStepHistoryFailureAfterCommittedStepWithoutText(t *testing.T) {
+	h := newWSStepHistoryHarness(t, wsStepHistoryToolThenAuthFailure)
+	got := h.run(t, nil)
+	assertOrdered(t, got.events, "tool_call_start", "step_end", "error")
+	assertWSStepHistory(t, got,
+		[3]string{"failed", "agent.provider_auth_failed", ""},
+		[]string{
+			`user`,
+			`assistant ""`,
+			`tool ""`,
+			`assistant "" interrupted error_code=agent.provider_auth_failed`,
+		},
+		[]string{
+			`user "` + directLifecyclePrompt + `"`,
+			`assistant [tool] [error agent.provider_auth_failed]`,
 		},
 	)
 }

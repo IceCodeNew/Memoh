@@ -29,6 +29,7 @@ import (
 	"github.com/felinics/memoh/internal/db"
 	"github.com/felinics/memoh/internal/db/postgres/sqlc"
 	dbstore "github.com/felinics/memoh/internal/db/store"
+	"github.com/felinics/memoh/internal/errs"
 	fetchpkg "github.com/felinics/memoh/internal/fetchproviders"
 	"github.com/felinics/memoh/internal/mcp"
 	modelpkg "github.com/felinics/memoh/internal/models"
@@ -552,10 +553,12 @@ func (s *Service) Import(ctx context.Context, actorUserID string, raw []byte, op
 			return err
 		})
 		if bumpErr != nil {
-			return ImportResult{}, errors.Join(
-				ErrHistoryResetUnavailable,
-				fmt.Errorf("advance ACP runtime config generation: %w", bumpErr),
-			)
+			if errors.Is(bumpErr, runtimefence.ErrResetLeaseLost) || errors.Is(bumpErr, runtimefence.ErrTransactionsUnsupported) {
+				bumpErr = fmt.Errorf("advance ACP runtime config generation: %w", bumpErr)
+			} else {
+				bumpErr = errs.WrapDependency(bumpErr, "advance ACP runtime config generation")
+			}
+			return ImportResult{}, errors.Join(ErrHistoryResetUnavailable, bumpErr)
 		}
 	}
 	if err := s.applyRestore(ctx, actorUserID, targetBotID, cfg, deps, opts, state); err != nil {
@@ -1424,12 +1427,9 @@ func (s *Service) restoreHistory(ctx context.Context, actorUserID, botID string,
 		if sessionMode == "" {
 			sessionMode = sessionpkg.TypeChat
 		}
-		runtimeType := strings.TrimSpace(item.RuntimeType)
-		if runtimeType == "" {
-			runtimeType = descriptor.runtimeType
-		}
-		if runtimeType == "" {
-			runtimeType = sessionpkg.RuntimeModel
+		runtimeType := restoredMessageRuntimeType(item.RuntimeType, descriptor.runtimeType)
+		if raw := strings.TrimSpace(item.RuntimeType); raw != "" && raw != runtimeType {
+			state.warnings = appendWarningOnce(state.warnings, "history from a runtime this server does not know was restored under its session's runtime")
 		}
 		metadata := item.Metadata
 		eventID := pgtype.UUID{}
@@ -2094,6 +2094,20 @@ func restoredSessionDescriptor(legacyType, sessionMode, runtimeType string) (str
 		}
 	}
 	return sessionpkg.ResolveDescriptor(legacyType, sessionMode, runtimeType)
+}
+
+// restoredMessageRuntimeType falls back to the restored session's runtime for
+// a kind this server does not know, the same way restoredSessionDescriptor
+// treats the session's own.
+func restoredMessageRuntimeType(raw, sessionRuntime string) string {
+	runtimeType := strings.TrimSpace(raw)
+	if !sessionpkg.IsKnownRuntimeType(runtimeType) {
+		runtimeType = sessionRuntime
+	}
+	if runtimeType == "" {
+		runtimeType = sessionpkg.RuntimeModel
+	}
+	return runtimeType
 }
 
 func isRetiredAutomationSession(legacyType, sessionMode string) bool {

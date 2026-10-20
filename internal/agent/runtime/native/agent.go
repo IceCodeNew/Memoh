@@ -563,37 +563,36 @@ func (a *Agent) assembleTools(
 				cfg.capabilityChanges.Store(true)
 			}
 		},
-		BotID:                     cfg.Identity.BotID,
-		ChatID:                    cfg.Identity.ChatID,
-		SessionID:                 cfg.Identity.SessionID,
-		SessionType:               cfg.SessionType,
-		UserID:                    cfg.Identity.UserID,
-		ChannelIdentityID:         cfg.Identity.ChannelIdentityID,
-		SessionToken:              cfg.Identity.SessionToken,
-		WorkspaceTargetID:         cfg.Identity.WorkspaceTargetID,
-		WorkspaceTargetKind:       cfg.Identity.WorkspaceTargetKind,
-		WorkspaceTargetName:       cfg.Identity.WorkspaceTargetName,
-		WorkdirPath:               cfg.Identity.WorkdirPath,
-		CurrentPlatform:           cfg.Identity.CurrentPlatform,
-		ReplyTarget:               cfg.Identity.ReplyTarget,
-		ConversationType:          cfg.Identity.ConversationType,
-		CanRequestUserInput:       cfg.CanRequestUserInput,
-		SupportsImageInput:        cfg.SupportsImageInput,
-		SupportsFileInput:         cfg.SupportsFileInput,
-		IsSubagent:                cfg.Identity.IsSubagent,
-		CurrentModelUUID:          cfg.CurrentModelUUID,
-		CurrentModelID:            cfg.CurrentModelID,
-		CurrentModelProvider:      cfg.CurrentModelProvider,
-		CurrentModelProviderID:    cfg.CurrentModelProviderID,
-		ReasoningStoredEffort:     cfg.ReasoningStoredEffort,
-		ReasoningRequestedEffort:  cfg.ReasoningRequestedEffort,
-		ForkContext:               cfg.ForkContext,
-		Skills:                    skillsMap,
-		TimezoneLocation:          cfg.Identity.TimezoneLocation,
-		Emitter:                   emitter,
-		LiveStream:                liveStream,
-		ContextBudgetMaxTokens:    cfg.ContextBudgetMaxTokens,
-		ContextToolExchangePolicy: cfg.ContextToolExchangePolicy,
+		BotID:                    cfg.Identity.BotID,
+		ChatID:                   cfg.Identity.ChatID,
+		SessionID:                cfg.Identity.SessionID,
+		SessionType:              cfg.SessionType,
+		UserID:                   cfg.Identity.UserID,
+		ChannelIdentityID:        cfg.Identity.ChannelIdentityID,
+		SessionToken:             cfg.Identity.SessionToken,
+		WorkspaceTargetID:        cfg.Identity.WorkspaceTargetID,
+		WorkspaceTargetKind:      cfg.Identity.WorkspaceTargetKind,
+		WorkspaceTargetName:      cfg.Identity.WorkspaceTargetName,
+		WorkdirPath:              cfg.Identity.WorkdirPath,
+		CurrentPlatform:          cfg.Identity.CurrentPlatform,
+		ReplyTarget:              cfg.Identity.ReplyTarget,
+		ConversationType:         cfg.Identity.ConversationType,
+		CanRequestUserInput:      cfg.CanRequestUserInput,
+		SupportsImageInput:       cfg.SupportsImageInput,
+		SupportsFileInput:        cfg.SupportsFileInput,
+		IsSubagent:               cfg.Identity.IsSubagent,
+		CurrentModelUUID:         cfg.CurrentModelUUID,
+		CurrentModelID:           cfg.CurrentModelID,
+		CurrentModelProvider:     cfg.CurrentModelProvider,
+		CurrentModelProviderID:   cfg.CurrentModelProviderID,
+		ReasoningStoredEffort:    cfg.ReasoningStoredEffort,
+		ReasoningRequestedEffort: cfg.ReasoningRequestedEffort,
+		ForkContext:              cfg.ForkContext,
+		Skills:                   skillsMap,
+		TimezoneLocation:         cfg.Identity.TimezoneLocation,
+		Emitter:                  emitter,
+		LiveStream:               liveStream,
+		ContextBudgetMaxTokens:   cfg.ContextBudgetMaxTokens,
 	}
 
 	var allTools []toolexec.Tool
@@ -661,6 +660,20 @@ func (a *Agent) assembleTools(
 			usageSections = append(usageSections, toolUsageSection{
 				capability: registration.capability,
 				text:       text,
+			})
+		}
+	}
+	// Providers that could not register their tools still get to say so:
+	// a silent gap reads as "no such tool" to the model.
+	for i, provider := range a.toolProviders {
+		noticer, ok := provider.(tools.ToolNotice)
+		if !ok {
+			continue
+		}
+		if text := strings.TrimSpace(noticer.ToolNotice(ctx, session)); text != "" {
+			usageSections = append(usageSections, toolUsageSection{
+				id:   toolNoticeSectionID(provider, i),
+				text: text,
 			})
 		}
 	}
