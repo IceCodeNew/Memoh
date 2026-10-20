@@ -391,47 +391,51 @@
                     </FieldError>
                   </FieldStack>
 
-                  <FieldStack
-                    :label="$t('models.reasoningReplay')"
-                    :help="$t('models.reasoningReplayHint')"
-                  >
-                    <Select
-                      :model-value="reasoning.replayField || UNSET"
-                      @update:model-value="(val: unknown) => reasoning.replayField = fromSelect(val)"
+                  <!-- Only a Chat Completions host reads the replay; elsewhere the
+                       stored value is kept but not offered. -->
+                  <template v-if="offersReplay">
+                    <FieldStack
+                      :label="$t('models.reasoningReplay')"
+                      :help="$t('models.reasoningReplayHint')"
                     >
-                      <SelectTrigger
-                        class="w-full"
-                        :aria-label="$t('models.reasoningReplay')"
+                      <Select
+                        :model-value="reasoning.replayField || UNSET"
+                        @update:model-value="(val: unknown) => reasoning.replayField = fromSelect(val)"
                       >
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectGroup>
-                          <SelectItem :value="UNSET">
-                            {{ $t('models.reasoningReplayProvider') }}
-                          </SelectItem>
-                          <SelectItem
-                            v-for="field in REASONING_REPLAY_FIELDS"
-                            :key="field"
-                            :value="field"
-                          >
-                            {{ field }}
-                          </SelectItem>
-                        </SelectGroup>
-                      </SelectContent>
-                    </Select>
-                  </FieldStack>
+                        <SelectTrigger
+                          class="w-full"
+                          :aria-label="$t('models.reasoningReplay')"
+                        >
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectGroup>
+                            <SelectItem :value="UNSET">
+                              {{ $t('models.reasoningReplayProvider') }}
+                            </SelectItem>
+                            <SelectItem
+                              v-for="field in REASONING_REPLAY_FIELDS"
+                              :key="field"
+                              :value="field"
+                            >
+                              {{ field }}
+                            </SelectItem>
+                          </SelectGroup>
+                        </SelectContent>
+                      </Select>
+                    </FieldStack>
 
-                  <label
-                    v-if="reasoning.replayField && reasoning.replayField !== 'reasoning_details'"
-                    class="flex items-center gap-1.5 text-xs"
-                  >
-                    <Checkbox
-                      :model-value="reasoning.replayRequired"
-                      @update:model-value="(val: boolean | 'indeterminate') => reasoning.replayRequired = val === true"
-                    />
-                    {{ $t('models.reasoningReplayRequired') }}
-                  </label>
+                    <label
+                      v-if="reasoning.replayField && reasoning.replayField !== 'reasoning_details'"
+                      class="flex items-center gap-1.5 text-xs"
+                    >
+                      <Checkbox
+                        :model-value="reasoning.replayRequired"
+                        @update:model-value="(val: boolean | 'indeterminate') => reasoning.replayRequired = val === true"
+                      />
+                      {{ $t('models.reasoningReplayRequired') }}
+                    </label>
+                  </template>
                 </template>
               </template>
             </template>
@@ -591,6 +595,8 @@ const props = withDefaults(defineProps<{
   // Resolves the provider on submit when `id` is not known yet (a template
   // draft); cancelling the dialog therefore never creates a provider.
   ensureProviderId?: () => Promise<string>
+  // The provider's client type, when the caller knows it.
+  clientType?: string
   typeOptions?: ModelTypeOption[]
   defaultType?: string
   hideType?: boolean
@@ -608,8 +614,10 @@ const props = withDefaults(defineProps<{
 })
 
 const emit = defineEmits<{
-  // A model was added; editing one does not emit.
-  created: []
+  // A model was added, by its model id; editing one does not emit.
+  created: [modelId: string]
+  // The dialog closed, whether or not anything was saved.
+  closed: []
 }>()
 
 const form = useForm({
@@ -620,6 +628,9 @@ const form = useForm({
 })
 
 const selectedType = computed(() => form.values.type || props.defaultType)
+// The reasoning replay is sent only to a Chat Completions host; OpenCode Go
+// replays reasoning on its own, and the other protocols carry it natively.
+const offersReplay = computed(() => !props.clientType || props.clientType === 'openai-completions')
 
 const open = inject<Ref<boolean>>('openModel', ref(false))
 const title = inject<Ref<'edit' | 'title'>>('openModelTitle', ref('title'))
@@ -749,7 +760,7 @@ async function addModel() {
       fallbackMessage: t('common.saveFailed'),
       onSuccess: () => {
         open.value = false
-        if (!isEdit) emit('created')
+        if (!isEdit) emit('created', model_id)
       },
     },
   )
@@ -760,6 +771,7 @@ watch(open, async () => {
     // Keep the mode until the next open: the dialog is still playing its exit
     // animation here, and flipping it now flashes "Add model" on an edit dialog.
     editInfo.value = null
+    emit('closed')
     return
   }
 
