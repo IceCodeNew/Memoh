@@ -614,8 +614,10 @@ const props = withDefaults(defineProps<{
 })
 
 const emit = defineEmits<{
-  // A model was added; editing one does not emit.
-  created: []
+  // A model was added, by its model id; editing one does not emit.
+  created: [modelId: string]
+  // The dialog closed, whether or not anything was saved.
+  closed: []
 }>()
 
 const form = useForm({
@@ -758,7 +760,7 @@ async function addModel() {
       fallbackMessage: t('common.saveFailed'),
       onSuccess: () => {
         open.value = false
-        if (!isEdit) emit('created')
+        if (!isEdit) emit('created', model_id)
       },
     },
   )
@@ -769,6 +771,7 @@ watch(open, async () => {
     // Keep the mode until the next open: the dialog is still playing its exit
     // animation here, and flipping it now flashes "Add model" on an edit dialog.
     editInfo.value = null
+    emit('closed')
     return
   }
 
