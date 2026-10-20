@@ -1,9 +1,11 @@
 package application
 
 import (
+	"context"
 	"errors"
 	"testing"
 
+	toolapproval "github.com/felinics/memoh/internal/agent/decision/approval"
 	"github.com/felinics/memoh/internal/agent/runtime/native"
 	sessionruntime "github.com/felinics/memoh/internal/agent/runtime/session"
 	"github.com/felinics/memoh/internal/agent/sessionmode"
@@ -50,5 +52,25 @@ func TestTriggerScheduleWithUnavailableHooksConfigIsRefused(t *testing.T) {
 	}
 	if len(fixture.runtime.finishes) != 1 || fixture.runtime.finishes[0].status != sessionruntime.RunStatusErrored {
 		t.Fatalf("runtime finishes = %#v, want one errored finish", fixture.runtime.finishes)
+	}
+}
+
+// A turn that withholds its tools runs none of them, an approved one
+// included: the approval does not override a workspace or hooks policy the
+// turn cannot reach.
+func TestApprovedToolIsNotExecutedWhenToolsAreWithheld(t *testing.T) {
+	fixture := newDirectLifecycleFixture(t, directLifecycleModelSuccess)
+	fixture.service.hookService = hooks.NewService(nil, newBrokenHooksProvider(t))
+
+	_, _, err := fixture.service.executeApprovedTool(context.Background(), toolapproval.Request{
+		ID:         "approval-1",
+		BotID:      lifecycleTestBotID,
+		SessionID:  lifecycleTestSessionID,
+		ToolCallID: "call-1",
+		ToolName:   "read",
+		ToolInput:  map[string]any{"path": "/data/AGENTS.md"},
+	}, ToolApprovalResponseInput{BotID: lifecycleTestBotID, ThreadID: lifecycleTestSessionID}, lifecycleTestRunID)
+	if !errors.Is(err, hooks.ErrConfigUnavailable) {
+		t.Fatalf("executeApprovedTool() error = %v, want ErrConfigUnavailable before the tool runs", err)
 	}
 }
