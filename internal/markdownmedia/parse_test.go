@@ -42,7 +42,7 @@ func TestPresentationExpandsSharedDefinitionsBeforeSplitting(t *testing.T) {
 	for _, ref := range refs {
 		bindings = append(bindings, Binding{Reference: ref})
 	}
-	got := Render(source, bindings, func(_ Binding) string { return "<asset>" })
+	got := Render(source, bindings, func(Binding, string) string { return "<asset>" })
 	if strings.Contains(got, "/data/") || strings.Contains(got, "[image]:") || strings.Contains(got, "[site]:") || !strings.Contains(got, "[网站](<https://example.com>)") || strings.Count(got, "<asset>") != 2 {
 		t.Fatalf("presentation=%q", got)
 	}
@@ -55,7 +55,7 @@ func TestLinkedImagePreservesArchivedImageAndDestination(t *testing.T) {
 		t.Fatalf("refs=%+v", refs)
 	}
 	bindings := []Binding{{Reference: refs[0]}}
-	rendered := Render(source, bindings, func(Binding) string { return "![preview](/archived/image)" })
+	rendered := Render(source, bindings, func(Binding, string) string { return "![preview](/archived/image)" })
 	if rendered != "before [![preview](/archived/image)](<https://example.com>) after" {
 		t.Fatalf("rendered=%q", rendered)
 	}
@@ -75,7 +75,7 @@ func TestReferenceLinkContainingImageRetainsLabelAndDestination(t *testing.T) {
 		t.Fatalf("refs=%+v", refs)
 	}
 	bindings := []Binding{{Reference: refs[0]}}
-	rendered := Render(source, bindings, func(Binding) string { return "![preview](/archived/image)" })
+	rendered := Render(source, bindings, func(Binding, string) string { return "![preview](/archived/image)" })
 	if !strings.Contains(rendered, "[**open** ![preview](/archived/image) here](<https://example.com>)") || strings.Contains(rendered, "[site]") || strings.Contains(rendered, "/data/") {
 		t.Fatalf("rendered=%q", rendered)
 	}
@@ -106,5 +106,38 @@ func TestVisitPublishesMediaAfterItsBlock(t *testing.T) {
 	}
 	if strings.Join(events, "|") != strings.Join(want, "|") {
 		t.Fatalf("events=%q\nwant  =%q", events, want)
+	}
+}
+
+func TestTargetsAndLabelsResolveMarkdownEscapes(t *testing.T) {
+	refs := Parse("![a \\[b\\]](/data/a\\_b.png) [report\\_v2](/data/r&amp;d.pdf)")
+	if len(refs) != 2 || refs[0].Target != "/data/a_b.png" || refs[0].Label != "a [b]" || refs[1].Target != "/data/r&d.pdf" || refs[1].Label != "report_v2" {
+		t.Fatalf("refs=%+v", refs)
+	}
+}
+
+func TestOnlyTrailingLineNumbersAreSourceLocations(t *testing.T) {
+	for target, media := range map[string]bool{
+		"/data/shot 10:30:00.png": true, "/data/report:2024.png": true,
+		"/data/main.go:42": false, "/data/main.go:42:7": false, "/data/main.go:10-20": false,
+	} {
+		if got := len(Parse("[x](<"+target+">)")) == 1; got != media {
+			t.Errorf("%q media=%v want %v", target, got, media)
+		}
+	}
+}
+
+func TestRebuiltMarkdownKeepsLabelsAsWritten(t *testing.T) {
+	source := "see [**report**\\_v2](/data/r.pdf) and ![a \\[b\\]](/data/a.png)"
+	refs := Parse(source)
+	bindings := []Binding{{Reference: refs[0]}, {Reference: refs[1]}}
+	var prose strings.Builder
+	Visit(source, bindings, func(text string) { prose.WriteString(text) }, func(Binding) {})
+	if prose.String() != "see **report**\\_v2 and " {
+		t.Fatalf("prose=%q", prose.String())
+	}
+	got := Render(source, bindings[1:], func(_ Binding, label string) string { return "![" + label + "](/archived)" })
+	if got != "see [**report**\\_v2](/data/r.pdf) and ![a \\[b\\]](/archived)" {
+		t.Fatalf("rendered=%q", got)
 	}
 }

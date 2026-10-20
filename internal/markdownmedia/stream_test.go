@@ -28,8 +28,16 @@ func TestStreamHoldOnlyPausesPossibleMedia(t *testing.T) {
 		{"[outer ![c](/data/c.png)](https://example.com) x", 0, true},
 		{"[note ![c](/data/c.png)] x", 6, true},
 		{"[a\n\nb](/data/x)", 15, false},
+		{"Use the ` key. Chart: ![c](/data/c.png) next.", 22, true},
+		{"see ![chart][c] later", 4, true},
+		{"see [report][r] later", 4, true},
+		{"see [note] later", 16, false},
+		{"line one\nsee ![c](/data/c", 13, false},
 	} {
-		offset, media := StreamHold(tc.text)
+		offset, media, resume := StreamHold(tc.text)
+		if resume > offset || (resume > 0 && tc.text[resume-1] != '\n') {
+			t.Errorf("StreamHold(%q) resume=%d is not a line start at or before %d", tc.text, resume, offset)
+		}
 		if offset != tc.offset || media != tc.media {
 			t.Errorf("StreamHold(%q) = %d,%v want %d,%v", tc.text, offset, media, tc.offset, tc.media)
 		}

@@ -5,12 +5,14 @@ package markdownmedia
 import (
 	"net/url"
 	"path"
+	"regexp"
 	"sort"
 	"strings"
 
 	"github.com/yuin/goldmark/ast"
 	"github.com/yuin/goldmark/parser"
 	"github.com/yuin/goldmark/text"
+	"github.com/yuin/goldmark/util"
 )
 
 type Reference struct {
@@ -52,16 +54,19 @@ func Parse(source string) []Reference {
 		if !entering {
 			return ast.WalkContinue, nil
 		}
-		var target string
+		var destination []byte
 		image := false
 		switch node := n.(type) {
 		case *ast.Image:
-			target, image = string(node.Destination), true
+			destination, image = node.Destination, true
 		case *ast.Link:
-			target = string(node.Destination)
+			destination = node.Destination
 		default:
 			return ast.WalkContinue, nil
 		}
+		// Resolve escapes and entities as a CommonMark renderer would, so the
+		// archived path is the one the reader sees.
+		target := string(util.ResolveEntityNames(util.ResolveNumericReferences(util.UnescapePunctuations(destination))))
 		if !isMediaTarget(target, image) {
 			return ast.WalkContinue, nil
 		}
@@ -83,13 +88,16 @@ func Parse(source string) []Reference {
 	return refs
 }
 
+var sourceLocation = regexp.MustCompile(`:\d+(?:[-:]\d+)*$`)
+
 func isMediaTarget(target string, image bool) bool {
 	if strings.HasPrefix(target, "/") && !strings.HasPrefix(target, "//") {
 		if strings.ContainsAny(target, "#?") {
 			return false
 		}
-		// Source locations are navigational links, not file-sharing requests.
-		if i := strings.LastIndexByte(target, ':'); i >= 0 && i+1 < len(target) && target[i+1] >= '0' && target[i+1] <= '9' {
+		// Source locations (path:line, path:line:column, path:start-end) are
+		// navigational links, not file-sharing requests.
+		if sourceLocation.MatchString(target) {
 			return false
 		}
 		// Only files inside the workspace are media. Application routes,
@@ -172,5 +180,6 @@ func nodeLabel(node ast.Node, source []byte) string {
 		}
 		return ast.WalkContinue, nil
 	})
-	return label.String()
+	// The label is display text: escapes and entities are resolved.
+	return string(util.ResolveEntityNames(util.ResolveNumericReferences(util.UnescapePunctuations([]byte(label.String())))))
 }

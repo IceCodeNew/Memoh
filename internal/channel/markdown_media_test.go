@@ -74,11 +74,11 @@ func TestMarkdownMediaBuffersIncompleteReferenceUntilFinal(t *testing.T) {
 			t.Fatal("workspace reference leaked while streaming")
 		}
 	}
-	msg := Message{Format: MessageFormatMarkdown, Text: "before\n\n[report](/data/report.txt)\n\nafter"}
-	if err := stream.Push(ctx, StreamEvent{Type: StreamEventFinal, Final: &StreamFinalizePayload{Message: msg}}); err != nil {
+	final := boundFinal(stream, "before\n\n[report](/data/report.txt)\n\nafter")
+	if err := stream.Push(ctx, final); err != nil {
 		t.Fatal(err)
 	}
-	if err := stream.Push(ctx, StreamEvent{Type: StreamEventFinal, Final: &StreamFinalizePayload{Message: msg}}); err != nil {
+	if err := stream.Push(ctx, final); err != nil {
 		t.Fatal(err)
 	}
 	if len(*sent) != 2 || len((*sent)[0].Message.Attachments) != 1 || strings.TrimSpace((*sent)[1].Message.Text) != "after" {
@@ -88,7 +88,7 @@ func TestMarkdownMediaBuffersIncompleteReferenceUntilFinal(t *testing.T) {
 
 func TestFailedMediaPreservesRemainingContent(t *testing.T) {
 	msg := Message{Format: MessageFormatMarkdown, Text: "before ![missing](/data/missing.png) after"}
-	msg = resolveMarkdownMessage(context.Background(), nil, ChannelConfig{BotID: "bot"}, msg)
+	msg = resolveMarkdownMessage(context.Background(), nil, ChannelConfig{BotID: "bot", ChannelType: ChannelTypeTelegram}, msg)
 	parts, ok := expandMarkdownMessage(OutboundMessage{Message: msg})
 	if !ok || len(parts) != 2 || parts[0].Message.Text != "before after" || !strings.Contains(parts[1].Message.Text, "could not be shared") {
 		t.Fatalf("parts=%+v", parts)
@@ -100,10 +100,11 @@ func TestFailedMediaPreservesRemainingContent(t *testing.T) {
 
 func TestMediaOnlyFinalUsesAttachmentSender(t *testing.T) {
 	ctx := context.Background()
-	stream, _, sent := newDeltaSplitTestStream(t, 2000, 1)
+	stream, reo, sent := newDeltaSplitTestStream(t, 2000, 1)
 	store := stream.manager.attachmentStore.(*channeltest.MemoryAttachmentStore)
-	store.SeedContainerFile("bot-1", "/data/report.txt", []byte("snapshot"), "text/plain", "report.txt")
-	final := StreamEvent{Type: StreamEventFinal, Final: &StreamFinalizePayload{Message: Message{Text: "[report](/data/report.txt)", Format: MessageFormatMarkdown}}}
+	png, _ := base64.StdEncoding.DecodeString("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+a2ioAAAAASUVORK5CYII=")
+	store.SeedContainerFile("bot-1", "/data/chart.png", png, "image/png", "chart.png")
+	final := boundFinal(stream, "![chart](/data/chart.png)")
 	if err := stream.Push(ctx, final); err != nil {
 		t.Fatal(err)
 	}
@@ -112,6 +113,10 @@ func TestMediaOnlyFinalUsesAttachmentSender(t *testing.T) {
 	}
 	if len(*sent) != 1 || len((*sent)[0].Message.Attachments) != 1 {
 		t.Fatalf("sent=%+v", *sent)
+	}
+	// The adapter's open message is still completed, so no placeholder stays.
+	if finals := adapterFinalTexts(reo); len(finals) != 1 || finals[0] != "" {
+		t.Fatalf("adapter finals=%q", finals)
 	}
 }
 
@@ -132,7 +137,7 @@ func TestSplitMarkdownFinalPreservesWithheldProseWithoutRepeatingChunks(t *testi
 		if err := stream.Push(ctx, StreamEvent{Type: StreamEventDelta, Delta: tail}); err != nil {
 			t.Fatal(err)
 		}
-		final := StreamEvent{Type: StreamEventFinal, Final: &StreamFinalizePayload{Message: Message{Format: MessageFormatMarkdown, Text: prefix + tail}}}
+		final := boundFinal(stream, prefix+tail)
 		if err := stream.Push(ctx, final); err != nil {
 			t.Fatal(err)
 		}
@@ -203,7 +208,7 @@ func TestMarkdownFinalRetryClearsPendingText(t *testing.T) {
 		}
 		return send(ctx, msg)
 	}
-	final := StreamEvent{Type: StreamEventFinal, Final: &StreamFinalizePayload{Message: Message{Text: "before [report](/data/report.txt) after", Format: MessageFormatMarkdown}}}
+	final := boundFinal(stream, "before [report](/data/report.txt) after")
 	if err := stream.Push(ctx, final); err == nil {
 		t.Fatal("expected transport failure")
 	}
@@ -224,7 +229,7 @@ func TestMarkdownFinalRetryClearsPendingText(t *testing.T) {
 
 func TestSplitMarkdownFinalWithFullyStreamedProse(t *testing.T) {
 	ctx := context.Background()
-	stream, _, sent := newDeltaSplitTestStream(t, 4096, 2)
+	stream, reo, sent := newDeltaSplitTestStream(t, 4096, 2)
 	store := stream.manager.attachmentStore.(*channeltest.MemoryAttachmentStore)
 	store.SeedContainerFile("bot-1", "/data/report.txt", []byte("snapshot"), "text/plain", "report.txt")
 	prefix := strings.Repeat("a", 3072) + "\n"
@@ -234,13 +239,16 @@ func TestSplitMarkdownFinalWithFullyStreamedProse(t *testing.T) {
 	if stream.splitCount == 0 {
 		t.Fatal("expected the prefix to split the stream")
 	}
-	final := Message{Text: prefix + "[report](/data/report.txt)", Format: MessageFormatMarkdown}
-	if err := stream.Push(ctx, StreamEvent{Type: StreamEventFinal, Final: &StreamFinalizePayload{Message: final}}); err != nil {
+	if err := stream.Push(ctx, boundFinal(stream, prefix+"[report](/data/report.txt)")); err != nil {
 		t.Fatal(err)
 	}
-	// The link label stays in its paragraph; only the unstreamed rest is sent.
-	if len(*sent) != 2 || (*sent)[0].Message.Text != "report" || len((*sent)[1].Message.Attachments) != 1 {
+	// The link label stays in its paragraph. Only the unstreamed rest of it is
+	// delivered, completing the message the split opened; the file follows.
+	if len(*sent) != 1 || len((*sent)[0].Message.Attachments) != 1 {
 		t.Fatalf("sent=%+v", *sent)
+	}
+	if finals := adapterFinalTexts(reo); finals[len(finals)-1] != "report" || strings.Contains(strings.Join(finals, ""), "aaa") {
+		t.Fatalf("adapter finals=%q", finals)
 	}
 }
 
@@ -257,6 +265,24 @@ func TestUnsupportedAttachmentsDegradeToNotice(t *testing.T) {
 	if len(last.Attachments) != 0 || !strings.Contains(last.Text, "could not be shared") {
 		t.Fatalf("built=%+v", built)
 	}
+}
+
+// boundFinal binds a final the way inbound does before Channel delivers it.
+func boundFinal(stream *managerOutboundStream, text string) StreamEvent {
+	msg := resolveMarkdownMessage(context.Background(), stream.manager.attachmentStore, stream.config, Message{Format: MessageFormatMarkdown, Text: text})
+	return StreamEvent{Type: StreamEventFinal, Final: &StreamFinalizePayload{Message: msg}}
+}
+
+func adapterFinalTexts(reo *reopenableStream) []string {
+	var texts []string
+	for _, recording := range reo.streams {
+		for _, event := range recording.Events() {
+			if event.Type == StreamEventFinal && event.Final != nil {
+				texts = append(texts, strings.TrimSpace(event.Final.Message.PlainText()))
+			}
+		}
+	}
+	return texts
 }
 
 func pushDeltas(t *testing.T, stream *managerOutboundStream, deltas ...string) {
@@ -320,7 +346,8 @@ func TestEarlierStepMediaIsPublishedFromItsSnapshot(t *testing.T) {
 	if got := streamedText(reo); got != "Created " {
 		t.Fatalf("streamed=%q", got)
 	}
-	var texts []string
+	// The carried prose completes the adapter's open message; the rest follows.
+	texts := adapterFinalTexts(reo)
 	hash := ""
 	for _, part := range *sent {
 		if strings.Contains(part.Message.Text, "/data/") {
@@ -369,5 +396,148 @@ func TestLocalChannelsStreamMarkdownUnchanged(t *testing.T) {
 	}
 	if msg := resolveMarkdownMessage(context.Background(), stream.manager.attachmentStore, ChannelConfig{BotID: "bot-1", ChannelType: "web"}, Message{Text: text, Format: MessageFormatMarkdown}); msg.Metadata != nil {
 		t.Fatalf("local channel archived references: %+v", msg)
+	}
+}
+
+func seedChart(stream *managerOutboundStream) {
+	png, _ := base64.StdEncoding.DecodeString("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+a2ioAAAAASUVORK5CYII=")
+	stream.manager.attachmentStore.(*channeltest.MemoryAttachmentStore).SeedContainerFile("bot-1", "/data/c.png", png, "image/png", "c.png")
+}
+
+// Adapters may post a placeholder when the stream starts; a reply that opens
+// with media must still complete that message with its prose.
+func TestLeadingMediaCompletesTheAdapterMessageWithProse(t *testing.T) {
+	stream, reo, sent := newDeltaSplitTestStream(t, 4096, 1)
+	seedChart(stream)
+	text := "![chart](/data/c.png)\n\nHere is the analysis."
+	pushDeltas(t, stream, text)
+	if err := stream.Push(context.Background(), boundFinal(stream, text)); err != nil {
+		t.Fatal(err)
+	}
+	if finals := adapterFinalTexts(reo); len(finals) != 1 || finals[0] != "Here is the analysis." {
+		t.Fatalf("adapter finals=%q", finals)
+	}
+	if len(*sent) != 1 || len((*sent)[0].Message.Attachments) != 1 {
+		t.Fatalf("sent=%+v", *sent)
+	}
+}
+
+// Some runtimes repeat the text before a tool call as the final output. With
+// tool calls hidden, that final still has to reach the stream that withheld
+// the media, and the repeated text is delivered once.
+func TestRepeatedPreToolFinalDeliversCarriedMediaOnce(t *testing.T) {
+	ctx := context.Background()
+	stream, reo, sent := newDeltaSplitTestStream(t, 4096, 1)
+	seedChart(stream)
+	wrapped := NewToolCallDroppingStream(stream)
+	text := "Here ![c](/data/c.png)"
+	if err := wrapped.Push(ctx, StreamEvent{Type: StreamEventDelta, Delta: text}); err != nil {
+		t.Fatal(err)
+	}
+	if err := wrapped.Push(ctx, StreamEvent{Type: StreamEventToolCallStart, ToolCall: &StreamToolCall{Name: "exec"}}); err != nil {
+		t.Fatal(err)
+	}
+	final := boundFinal(stream, text)
+	snapshot := markdownmedia.Bindings(final.Final.Message.Metadata)
+	final.Final.Message.Metadata[markdownmedia.EarlierMetadataKey] = snapshot
+	if err := wrapped.Push(ctx, final); err != nil {
+		t.Fatal(err)
+	}
+	images := 0
+	for _, part := range *sent {
+		images += len(part.Message.Attachments)
+		if strings.Contains(part.Message.Text, "Here") {
+			t.Fatalf("repeated text delivered again: %+v", *sent)
+		}
+	}
+	if images != 1 || streamedText(reo) != "Here " {
+		t.Fatalf("images=%d streamed=%q sent=%+v", images, streamedText(reo), *sent)
+	}
+}
+
+func TestPreToolMediaAfterUnclosedBacktickIsPublished(t *testing.T) {
+	ctx := context.Background()
+	stream, reo, sent := newDeltaSplitTestStream(t, 4096, 1)
+	pushDeltas(t, stream, "Use the ` key. Chart: ![c](/data/c.png) next.")
+	if err := stream.Push(ctx, StreamEvent{Type: StreamEventSegmentEnd}); err != nil {
+		t.Fatal(err)
+	}
+	pushDeltas(t, stream, "Done.")
+	ref := markdownmedia.Parse("![c](/data/c.png)")[0]
+	earlier := []markdownmedia.Binding{{Reference: ref, Asset: media.Asset{BotID: "bot-1", ContentHash: "step-one", Mime: "image/png"}}}
+	final := Message{Text: "Done.", Format: MessageFormatMarkdown, Metadata: map[string]any{markdownmedia.EarlierMetadataKey: earlier}}
+	if err := stream.Push(ctx, StreamEvent{Type: StreamEventFinal, Final: &StreamFinalizePayload{Message: final}}); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(streamedText(reo), "/data/") {
+		t.Fatalf("workspace path streamed: %q", streamedText(reo))
+	}
+	hash := ""
+	for _, part := range *sent {
+		if len(part.Message.Attachments) == 1 {
+			hash = part.Message.Attachments[0].ContentHash
+		}
+	}
+	if hash != "step-one" {
+		t.Fatalf("sent=%+v", *sent)
+	}
+}
+
+// Carried text is parsed in the context of its whole segment, so a held
+// image inside an indented code block stays code, without a failure notice.
+func TestCarriedSegmentKeepsCodeAsCode(t *testing.T) {
+	ctx := context.Background()
+	stream, reo, sent := newDeltaSplitTestStream(t, 4096, 1)
+	seedChart(stream)
+	pushDeltas(t, stream, "Real: ![c](/data/c.png)\n\nExample:\n\n    ![a](/data/a.png)\n\nnow running.")
+	if err := stream.Push(ctx, StreamEvent{Type: StreamEventSegmentEnd}); err != nil {
+		t.Fatal(err)
+	}
+	ref := markdownmedia.Parse("![c](/data/c.png)")[0]
+	earlier := []markdownmedia.Binding{{Reference: ref, Asset: media.Asset{BotID: "bot-1", ContentHash: "real", Mime: "image/png"}}}
+	final := Message{Text: "Done.", Format: MessageFormatMarkdown, Metadata: map[string]any{markdownmedia.EarlierMetadataKey: earlier}}
+	if err := stream.Push(ctx, StreamEvent{Type: StreamEventFinal, Final: &StreamFinalizePayload{Message: final}}); err != nil {
+		t.Fatal(err)
+	}
+	var delivered strings.Builder
+	delivered.WriteString(strings.Join(adapterFinalTexts(reo), "|"))
+	for _, part := range *sent {
+		delivered.WriteString("|" + part.Message.Text)
+	}
+	if strings.Contains(delivered.String(), "could not be shared") || !strings.Contains(delivered.String(), "    ![a](/data/a.png)") {
+		t.Fatalf("delivered=%q", delivered.String())
+	}
+}
+
+func TestFenceOpenedInEarlierDeltaStreamsAfterResume(t *testing.T) {
+	stream, reo, _ := newDeltaSplitTestStream(t, 4096, 1)
+	pushDeltas(t, stream, "Intro [site](https://example.com)\n```md\n", "![a](/data/a.png)\n", "```\nafter")
+	if got := streamedText(reo); got != "Intro [site](https://example.com)\n```md\n![a](/data/a.png)\n```\nafter" {
+		t.Fatalf("streamed=%q", got)
+	}
+}
+
+// Channel delivers references the agent already bound; it never archives an
+// unbound message itself (for example one posted through the HTTP send API).
+func TestManagerSendDeliversUnboundMarkdownAsWritten(t *testing.T) {
+	channelType := ChannelType("target-resolving-send")
+	adapter := &targetResolvingAdapter{channelType: channelType}
+	registry := NewRegistry()
+	if err := registry.Register(adapter); err != nil {
+		t.Fatal(err)
+	}
+	manager := NewManager(nil, registry, &fakeConfigStore{effectiveConfig: ChannelConfig{BotID: "bot-1", ChannelType: channelType}}, nil)
+	store := channeltest.NewMemoryAttachmentStore()
+	store.SeedContainerFile("bot-1", "/data/report.txt", []byte("report"), "text/plain", "report.txt")
+	manager.SetAttachmentStore(store)
+	msg := WithoutMarkdownMedia(Message{Text: "see [report](/data/report.txt)", Format: MessageFormatMarkdown, Metadata: map[string]any{markdownmedia.MetadataKey: []markdownmedia.Binding{{}}}})
+	if _, ok := msg.Metadata[markdownmedia.MetadataKey]; ok {
+		t.Fatal("caller-supplied publication metadata kept")
+	}
+	if err := manager.Send(context.Background(), "bot-1", channelType, SendRequest{Target: "alias", Message: msg}); err != nil {
+		t.Fatal(err)
+	}
+	if len(adapter.sent) != 1 || len(adapter.sent[0].Message.Attachments) != 0 {
+		t.Fatalf("sent=%+v", adapter.sent)
 	}
 }

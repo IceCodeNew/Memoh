@@ -250,3 +250,43 @@ func Rebind(text string, earlier *[]Binding) []Binding {
 	}
 	return bindings
 }
+
+// IsWorkspaceSurface reports platforms that render Markdown from history
+// and open linked workspace files in place (Web, Desktop, CLI). Only other
+// platforms archive linked files and receive published media as messages.
+func IsWorkspaceSurface(platform string) bool {
+	switch strings.ToLower(strings.TrimSpace(platform)) {
+	case "", "web", "cli", "local":
+		return true
+	}
+	return false
+}
+
+// BindFinal binds a run's final reply to the snapshots its steps published,
+// in publication order. The final reply is the run's last text, so its
+// references take the latest matching snapshots, matched from the end; this
+// does not depend on the reply text equalling any one persisted message. The
+// snapshots left over belong to earlier steps and are returned in order.
+func BindFinal(text string, published []Binding) (final []Binding, earlier []Binding) {
+	refs := Parse(text)
+	used := make([]bool, len(published))
+	final = make([]Binding, len(refs))
+	next := len(published)
+	for i := len(refs) - 1; i >= 0; i-- {
+		ref := refs[i]
+		final[i] = Binding{Reference: ref, ErrorCode: "media.reference_unavailable"}
+		for j := next - 1; j >= 0; j-- {
+			if !used[j] && published[j].Image == ref.Image && published[j].Target == ref.Target {
+				final[i].Asset, final[i].ErrorCode = published[j].Asset, published[j].ErrorCode
+				used[j], next = true, j
+				break
+			}
+		}
+	}
+	for j, b := range published {
+		if !used[j] {
+			earlier = append(earlier, b)
+		}
+	}
+	return final, earlier
+}

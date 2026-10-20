@@ -737,7 +737,6 @@ func (s *managerReplySender) Send(ctx context.Context, msg OutboundMessage) erro
 		return err
 	}
 	msg.Target = target
-	msg.Message = resolveMarkdownMessage(ctx, s.manager.attachmentStore, s.config, msg.Message)
 	policy := s.manager.resolveOutboundPolicy(s.channelType)
 	caps, hasCaps := s.manager.registry.GetOutboundCapabilities(s.channelType, s.config, msg.Target)
 	outbound, err := buildOutboundMessagesWithCaps(msg, policy, caps, hasCaps)
@@ -813,13 +812,17 @@ type managerOutboundStream struct {
 	deltaText   strings.Builder
 	splitCount  int
 	// Markdown media publication state; see markdown_stream.go.
-	segmentText         strings.Builder
-	heldText            strings.Builder
-	holdingMedia        bool
-	carried             []string
-	markdownFinalSource string
-	markdownFinalParts  []OutboundMessage
-	markdownFinalNext   int
+	segmentText          strings.Builder
+	heldText             strings.Builder
+	adapterText          strings.Builder
+	holdingMedia         bool
+	scanFrom             int
+	segmentSplits        int
+	segments             []streamSegment
+	markdownFinalSource  string
+	markdownFinalParts   []OutboundMessage
+	markdownFinalAdapter int
+	markdownFinalNext    int
 }
 
 func (s *managerOutboundStream) Push(ctx context.Context, event StreamEvent) (err error) {
@@ -827,8 +830,11 @@ func (s *managerOutboundStream) Push(ctx context.Context, event StreamEvent) (er
 		if event.Type == StreamEventFinal && err == nil {
 			s.segmentText.Reset()
 			s.heldText.Reset()
+			s.adapterText.Reset()
 			s.holdingMedia = false
-			s.carried = nil
+			s.segments = nil
+			s.scanFrom = 0
+			s.segmentSplits = s.splitCount
 		}
 	}()
 	if s.manager == nil || s.stream == nil {

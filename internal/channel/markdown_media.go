@@ -16,9 +16,24 @@ func ResolveMarkdownMessage(ctx context.Context, store OutboundAttachmentStore, 
 	return resolveMarkdownMessage(ctx, store, ChannelConfig{BotID: botID, ChannelType: channelType}, msg)
 }
 
+// WithoutMarkdownMedia drops publication metadata a caller supplied itself.
+// Only the agent publishes media, from snapshots it archived; other senders
+// deliver their Markdown as written.
+func WithoutMarkdownMedia(msg Message) Message {
+	_, bound := msg.Metadata[markdownmedia.MetadataKey]
+	_, earlier := msg.Metadata[markdownmedia.EarlierMetadataKey]
+	if !bound && !earlier {
+		return msg
+	}
+	msg.Metadata = maps.Clone(msg.Metadata)
+	delete(msg.Metadata, markdownmedia.MetadataKey)
+	delete(msg.Metadata, markdownmedia.EarlierMetadataKey)
+	return msg
+}
+
 func resolveMarkdownMessage(ctx context.Context, store OutboundAttachmentStore, cfg ChannelConfig, msg Message) Message {
 	// Web and Desktop render Markdown from history and open workspace links.
-	if msg.Format == MessageFormatPlain || isLocalChannel(cfg.ChannelType) {
+	if msg.Format == MessageFormatPlain || markdownmedia.IsWorkspaceSurface(string(cfg.ChannelType)) {
 		return msg
 	}
 	if _, prepared := msg.Metadata[markdownmedia.MetadataKey]; prepared {

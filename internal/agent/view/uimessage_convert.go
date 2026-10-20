@@ -357,8 +357,7 @@ func ConvertMessagesToUITurns(messages []messagepkg.Message) []UITurn {
 					text = modelMessage.textContent()
 				}
 			}
-			text = markdownmedia.Render(text, bindings, func(b markdownmedia.Binding) string {
-				label := strings.NewReplacer("[", "\\[", "]", "\\]").Replace(b.Label)
+			text = markdownmedia.Render(text, bindings, func(b markdownmedia.Binding, label string) string {
 				target := markdownmedia.AssetURL(b)
 				if b.ErrorCode != "" {
 					target = "memoh-media-error:" + b.ErrorCode

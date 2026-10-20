@@ -875,17 +875,10 @@ func (h *MessageHandler) ServeMedia(c echo.Context) error {
 	if contentType == "" {
 		contentType = "application/octet-stream"
 	}
-	disposition := ""
-	if name := c.QueryParam("download"); name != "" {
-		disposition = mime.FormatMediaType("attachment", map[string]string{"filename": name})
-	}
-	if disposition == "" && !inlineSafeMedia(contentType) {
+	if !inlineSafeMedia(contentType) {
 		// Assets include model-referenced files and remote content. Active
 		// types such as HTML or SVG must never render on the app origin.
-		disposition = "attachment"
-	}
-	if disposition != "" {
-		c.Response().Header().Set("Content-Disposition", disposition)
+		c.Response().Header().Set("Content-Disposition", "attachment")
 	}
 	c.Response().Header().Set("X-Content-Type-Options", "nosniff")
 	c.Response().Header().Set("Content-Type", contentType)

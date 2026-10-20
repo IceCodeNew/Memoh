@@ -10,17 +10,21 @@ const maxHeldConstruct = 2048
 // From the returned offset on, the text is either an unfinished construct
 // that may still become a media reference, or (media == true) starts with a
 // complete one. Ordinary links, brackets, exclamation marks and code never
-// hold, so most replies keep streaming.
-func StreamHold(text string) (offset int, media bool) {
+// hold, so most replies keep streaming. resume is a line start at or before
+// offset, outside code fences, where a later scan of the same text may begin
+// instead of rescanning from the start.
+func StreamHold(text string) (offset int, media bool, resume int) {
 	bang := -1
 	lineStart := true
+	line := 0
 	for i := 0; i < len(text); i++ {
 		if lineStart {
 			lineStart = false
+			line = i
 			if end, ok := skipFence(text, i); ok {
 				if end < 0 {
 					// Code inside an unfinished fence never publishes media.
-					return len(text), false
+					return len(text), false, line
 				}
 				i = end
 				lineStart = true
@@ -33,15 +37,18 @@ func StreamHold(text string) (offset int, media bool) {
 		case '\\':
 			i++
 		case '`':
-			end, ok := skipCodeSpan(text, i)
-			if !ok {
-				// An unclosed span is code until proven otherwise.
-				return len(text), false
+			// An unclosed run is literal text, as CommonMark reads it, so the
+			// references after it still hold.
+			if end, ok := skipCodeSpan(text, i); ok {
+				i = end
+			} else {
+				for i+1 < len(text) && text[i+1] == '`' {
+					i++
+				}
 			}
-			i = end
 		case '!':
 			if i == len(text)-1 {
-				return i, false
+				return i, false, line
 			}
 			bang = i
 		case '[':
@@ -51,13 +58,13 @@ func StreamHold(text string) (offset int, media bool) {
 			}
 			switch classifyCandidate(text, start, i) {
 			case candidatePending:
-				return start, false
+				return start, false, line
 			case candidateMedia:
-				return start, true
+				return start, true, line
 			}
 		}
 	}
-	return len(text), false
+	return len(text), false, line
 }
 
 type candidateState int
@@ -100,9 +107,22 @@ func classifyCandidate(text string, start, open int) candidateState {
 	if closeLabel < 0 || closeLabel+1 >= len(text) {
 		return candidatePending
 	}
-	// Reference-style links resolve against definitions that may arrive
-	// later; they stream as text and the final message publishes them.
 	if text[closeLabel+1] != '(' {
+		// A reference image or full reference link may resolve against a
+		// definition that arrives later, so it holds until the message is
+		// complete. A bare [label] is far more often prose, so it streams.
+		if text[closeLabel+1] == '[' {
+			if strings.IndexByte(text[closeLabel+2:], ']') < 0 {
+				if len(text)-closeLabel > maxHeldConstruct {
+					return candidateDead
+				}
+				return candidatePending
+			}
+			return candidateMedia
+		}
+		if start < open {
+			return candidateMedia
+		}
 		return candidateDead
 	}
 	parens := 0

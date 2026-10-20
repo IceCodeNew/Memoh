@@ -8,8 +8,12 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"path/filepath"
 	"strings"
+
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 
 	attachmentpkg "github.com/felinics/memoh/internal/attachment"
 	"github.com/felinics/memoh/internal/workspace/bridge"
@@ -23,11 +27,18 @@ const (
 // Provider stores media assets inside bot containers via gRPC.
 type Provider struct {
 	clients bridge.Provider
+	logger  *slog.Logger
 }
 
 // New creates a container-based storage provider.
 func New(clients bridge.Provider) *Provider {
 	return &Provider{clients: clients}
+}
+
+// WithLogger sets the logger for degraded reads.
+func (p *Provider) WithLogger(log *slog.Logger) *Provider {
+	p.logger = log
+	return p
 }
 
 // Put writes data to the bot container via gRPC streaming.
@@ -213,5 +224,15 @@ func (p *Provider) OpenWorkspaceFile(ctx context.Context, botID, containerPath s
 	if err != nil {
 		return nil, err
 	}
-	return client.ReadRawNoFollow(ctx, "/data", sub)
+	reader, err := client.ReadRawNoFollow(ctx, "/data", sub)
+	if status.Code(err) == codes.Unimplemented {
+		// A workspace started before this server still runs a bridge without
+		// descriptor-anchored reads. Until it restarts, read the file the way
+		// the workspace file manager does, which follows symbolic links.
+		if p.logger != nil {
+			p.logger.WarnContext(ctx, "workspace bridge lacks nofollow reads; using ordinary read until the workspace restarts", slog.String("bot_id", botID))
+		}
+		return client.ReadRaw(ctx, clean)
+	}
+	return reader, err
 }

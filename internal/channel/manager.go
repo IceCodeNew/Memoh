@@ -288,7 +288,6 @@ func (m *Manager) Send(ctx context.Context, botID string, channelType ChannelTyp
 	if m.logger != nil {
 		m.logger.InfoContext(ctx, "send outbound", slog.String("channel", channelType.String()), slog.String("bot_id", botID))
 	}
-	req.Message = resolveMarkdownMessage(ctx, m.attachmentStore, config, req.Message)
 	policy := m.resolveOutboundPolicy(channelType)
 	caps, hasCaps := m.registry.GetOutboundCapabilities(channelType, config, target)
 	outbound, err := buildOutboundMessagesWithCaps(OutboundMessage{

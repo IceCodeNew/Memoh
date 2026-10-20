@@ -150,3 +150,23 @@ func TestImageMustBeImageBytes(t *testing.T) {
 		t.Fatalf("non-image bytes published as an image: %+v", b)
 	}
 }
+
+func TestBindFinalTakesLatestSnapshotsAndKeepsEarlierInOrder(t *testing.T) {
+	snapshot := func(source, hash string) Binding {
+		return Binding{Reference: Parse(source)[0], Asset: media.Asset{ContentHash: hash}}
+	}
+	published := []Binding{
+		snapshot("![c](/data/c.png)", "step-one"),
+		snapshot("[r](/data/r.txt)", "step-two"),
+		snapshot("![c](/data/c.png)", "final-a"),
+		snapshot("[r](/data/r.txt)", "final-b"),
+	}
+	// The reply joins two outputs, so it equals no single persisted source.
+	final, earlier := BindFinal("A ![c](/data/c.png)\nB [r](/data/r.txt) [x](/data/missing.txt)", published)
+	if len(final) != 3 || final[0].Asset.ContentHash != "final-a" || final[1].Asset.ContentHash != "final-b" || final[2].ErrorCode == "" {
+		t.Fatalf("final=%+v", final)
+	}
+	if len(earlier) != 2 || earlier[0].Asset.ContentHash != "step-one" || earlier[1].Asset.ContentHash != "step-two" {
+		t.Fatalf("earlier=%+v", earlier)
+	}
+}

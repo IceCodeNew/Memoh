@@ -26,12 +26,13 @@ func Visit(source string, bindings []Binding, prose func(string), media func(Bin
 	doc, definitions := parseDocument(source)
 	data := []byte(source)
 	edits := linkEdits(doc, data, bindings, definitions, false)
+	labels := labelSources(doc, source)
 	for i := range bindings {
 		b := &bindings[i]
 		end, replacement := b.End, ""
 		if !b.Image {
 			// The file follows its block; the sentence keeps its label.
-			replacement = escapeLabel(b.Label)
+			replacement = markdownLabel(labels[b.Start], b.Label)
 		} else if b.Start > 0 && end < len(source) && source[b.Start-1] == ' ' && source[end] == ' ' {
 			end++
 		}
@@ -62,14 +63,17 @@ func Visit(source string, bindings []Binding, prose func(string), media func(Bin
 }
 
 // Render replaces only validated source ranges, preserving all other Markdown.
-func Render(source string, bindings []Binding, replace func(Binding) string) string {
+// replace receives the reference's label as Markdown source.
+func Render(source string, bindings []Binding, replace func(b Binding, label string) string) string {
 	if len(bindings) == 0 {
 		return source
 	}
 	doc, definitions := parseDocument(source)
 	edits := linkEdits(doc, []byte(source), bindings, definitions, true)
+	labels := labelSources(doc, source)
 	for i := range bindings {
-		edits = append(edits, presentationEdit{start: bindings[i].Start, end: bindings[i].End, text: replace(bindings[i])})
+		b := bindings[i]
+		edits = append(edits, presentationEdit{start: b.Start, end: b.End, text: replace(b, markdownLabel(labels[b.Start], b.Label))})
 	}
 	sort.SliceStable(edits, func(i, j int) bool { return edits[i].start < edits[j].start })
 	return applyEdits(source, 0, len(source), edits)
@@ -121,7 +125,12 @@ func linkEdits(doc ast.Node, data []byte, bindings []Binding, definitions []text
 		}
 		// An IM message cannot nest the image it publishes separately, so the
 		// link keeps its text label, including the image's alternative text.
-		edits = append(edits, presentationEdit{start: start.(int), end: end.(int), text: "[" + escapeLabel(nodeLabel(n, data)) + "](<" + target + ">)"})
+		label := escapeText(nodeLabel(n, data))
+		if !containsMedia {
+			labelEnd, _ := n.AttributeString("media-label-end")
+			label = string(data[start.(int)+1 : labelEnd.(int)])
+		}
+		edits = append(edits, presentationEdit{start: start.(int), end: end.(int), text: "[" + label + "](<" + target + ">)"})
 		return ast.WalkSkipChildren, nil
 	})
 	return edits
@@ -197,6 +206,42 @@ func lineStart(source string, pos int) int {
 	return strings.LastIndexByte(source[:pos], '\n') + 1
 }
 
-func escapeLabel(label string) string {
-	return strings.NewReplacer("\\", "\\\\", "[", "\\[", "]", "\\]").Replace(label)
+// labelSources maps each link or image to its label as written, so rebuilt
+// Markdown keeps the label's formatting and escapes.
+func labelSources(doc ast.Node, source string) map[int]string {
+	labels := map[int]string{}
+	_ = ast.Walk(doc, func(n ast.Node, entering bool) (ast.WalkStatus, error) {
+		if !entering {
+			return ast.WalkContinue, nil
+		}
+		offset := 1
+		switch n.(type) {
+		case *ast.Image:
+			offset = 2
+		case *ast.Link:
+		default:
+			return ast.WalkContinue, nil
+		}
+		start, hasStart := n.AttributeString("media-start")
+		end, hasEnd := n.AttributeString("media-label-end")
+		if hasStart && hasEnd && start.(int)+offset <= end.(int) && end.(int) <= len(source) {
+			labels[start.(int)] = source[start.(int)+offset : end.(int)]
+		}
+		return ast.WalkContinue, nil
+	})
+	return labels
+}
+
+// markdownLabel prefers the label as written. A label that itself holds a
+// media reference falls back to its escaped display text, so a separately
+// published file never leaks its path into prose.
+func markdownLabel(raw, display string) string {
+	if raw != "" && len(Parse(raw)) == 0 {
+		return raw
+	}
+	return escapeText(display)
+}
+
+func escapeText(text string) string {
+	return strings.NewReplacer("\\", "\\\\", "[", "\\[", "]", "\\]", "*", "\\*", "_", "\\_", "`", "\\`").Replace(text)
 }

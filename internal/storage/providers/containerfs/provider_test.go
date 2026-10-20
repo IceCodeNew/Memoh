@@ -188,3 +188,29 @@ func TestWorkspacePublicationUsesAnchoredRead(t *testing.T) {
 		t.Fatal("traversal accepted")
 	}
 }
+
+// oldBridgeServer predates ReadRawNoFollow, like a workspace that has not
+// restarted since the server upgrade.
+type oldBridgeServer struct {
+	pb.UnimplementedContainerServiceServer
+	path string
+}
+
+func (s *oldBridgeServer) ReadRaw(req *pb.ReadRawRequest, stream pb.ContainerService_ReadRawServer) error {
+	s.path = req.GetPath()
+	return stream.Send(&pb.DataChunk{Data: []byte("from old bridge")})
+}
+
+func TestWorkspacePublicationFallsBackForOldBridges(t *testing.T) {
+	server := &oldBridgeServer{}
+	provider := New(staticClientProvider{client: newRecordingClient(t, server)})
+	reader, err := provider.OpenWorkspaceFile(context.Background(), "bot-1", "/data/report.txt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, err := io.ReadAll(reader)
+	_ = reader.Close()
+	if err != nil || string(data) != "from old bridge" || server.path != "/data/report.txt" {
+		t.Fatalf("data=%q path=%q err=%v", data, server.path, err)
+	}
+}

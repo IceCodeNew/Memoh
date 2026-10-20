@@ -378,7 +378,8 @@ func spoolAndHashWithLimit(reader io.Reader, maxBytes int64) (contentHash string
 }
 
 // IngestWorkspaceFile archives a regular workspace file through descriptor-anchored
-// reads. Unsafe or unsupported symlinks fail closed; no unrestricted read fallback.
+// reads that never follow symbolic links. Only a workspace whose bridge predates
+// those reads falls back to the ordinary read until it restarts.
 func (s *Service) IngestWorkspaceFile(ctx context.Context, botID, containerPath string) (Asset, error) {
 	if s.provider == nil {
 		return Asset{}, ErrProviderUnavailable
