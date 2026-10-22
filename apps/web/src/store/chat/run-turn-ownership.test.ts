@@ -200,7 +200,11 @@ describe('a terminal run view is not a source of new turns', () => {
     const history: UITurn[] = [
       settledTurn('m1', 'turn-1', 1, 'user', '2026-07-20T08:00:00.000Z'),
       {
-        ...settledTurn('m2', 'turn-1', 1, 'assistant', '2026-07-20T08:00:01.000Z'),
+        id: 'm2',
+        turn_id: 'turn-1',
+        turn_position: 1,
+        role: 'assistant',
+        timestamp: '2026-07-20T08:00:01.000Z',
         messages: [{ id: 0, type: 'text', content: published }],
       },
     ]
@@ -226,7 +230,9 @@ describe('a terminal run view is not a source of new turns', () => {
         status,
         messages: [{ id: 0, type: 'text', content: status }],
       }))
-      expect(assistant?.role === 'assistant' && assistant.messages[0]?.content).toBe(status)
+      expect(assistant?.role === 'assistant' && assistant.messages).toEqual([
+        expect.objectContaining({ content: status }),
+      ])
     }
   })
 
