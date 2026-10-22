@@ -19,19 +19,18 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	ContainerService_ReadFile_FullMethodName        = "/bridgepb.ContainerService/ReadFile"
-	ContainerService_WriteFile_FullMethodName       = "/bridgepb.ContainerService/WriteFile"
-	ContainerService_ListDir_FullMethodName         = "/bridgepb.ContainerService/ListDir"
-	ContainerService_Stat_FullMethodName            = "/bridgepb.ContainerService/Stat"
-	ContainerService_Mkdir_FullMethodName           = "/bridgepb.ContainerService/Mkdir"
-	ContainerService_Rename_FullMethodName          = "/bridgepb.ContainerService/Rename"
-	ContainerService_Exec_FullMethodName            = "/bridgepb.ContainerService/Exec"
-	ContainerService_Tunnel_FullMethodName          = "/bridgepb.ContainerService/Tunnel"
-	ContainerService_ReverseHTTP_FullMethodName     = "/bridgepb.ContainerService/ReverseHTTP"
-	ContainerService_ReadRaw_FullMethodName         = "/bridgepb.ContainerService/ReadRaw"
-	ContainerService_WriteRaw_FullMethodName        = "/bridgepb.ContainerService/WriteRaw"
-	ContainerService_ReadRawNoFollow_FullMethodName = "/bridgepb.ContainerService/ReadRawNoFollow"
-	ContainerService_DeleteFile_FullMethodName      = "/bridgepb.ContainerService/DeleteFile"
+	ContainerService_ReadFile_FullMethodName    = "/bridgepb.ContainerService/ReadFile"
+	ContainerService_WriteFile_FullMethodName   = "/bridgepb.ContainerService/WriteFile"
+	ContainerService_ListDir_FullMethodName     = "/bridgepb.ContainerService/ListDir"
+	ContainerService_Stat_FullMethodName        = "/bridgepb.ContainerService/Stat"
+	ContainerService_Mkdir_FullMethodName       = "/bridgepb.ContainerService/Mkdir"
+	ContainerService_Rename_FullMethodName      = "/bridgepb.ContainerService/Rename"
+	ContainerService_Exec_FullMethodName        = "/bridgepb.ContainerService/Exec"
+	ContainerService_Tunnel_FullMethodName      = "/bridgepb.ContainerService/Tunnel"
+	ContainerService_ReverseHTTP_FullMethodName = "/bridgepb.ContainerService/ReverseHTTP"
+	ContainerService_ReadRaw_FullMethodName     = "/bridgepb.ContainerService/ReadRaw"
+	ContainerService_WriteRaw_FullMethodName    = "/bridgepb.ContainerService/WriteRaw"
+	ContainerService_DeleteFile_FullMethodName  = "/bridgepb.ContainerService/DeleteFile"
 )
 
 // ContainerServiceClient is the client API for ContainerService service.
@@ -49,10 +48,6 @@ type ContainerServiceClient interface {
 	ReverseHTTP(ctx context.Context, opts ...grpc.CallOption) (grpc.BidiStreamingClient[ReverseHTTPFrame, ReverseHTTPFrame], error)
 	ReadRaw(ctx context.Context, in *ReadRawRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[DataChunk], error)
 	WriteRaw(ctx context.Context, opts ...grpc.CallOption) (grpc.ClientStreamingClient[WriteRawChunk, WriteRawResponse], error)
-	// ReadRawNoFollow is a security boundary for reading workspace files that
-	// are published from model-authored references. The server opens root and
-	// every relative_path component without following symbolic links.
-	ReadRawNoFollow(ctx context.Context, in *ReadRawNoFollowRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[DataChunk], error)
 	DeleteFile(ctx context.Context, in *DeleteFileRequest, opts ...grpc.CallOption) (*DeleteFileResponse, error)
 }
 
@@ -195,25 +190,6 @@ func (c *containerServiceClient) WriteRaw(ctx context.Context, opts ...grpc.Call
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
 type ContainerService_WriteRawClient = grpc.ClientStreamingClient[WriteRawChunk, WriteRawResponse]
 
-func (c *containerServiceClient) ReadRawNoFollow(ctx context.Context, in *ReadRawNoFollowRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[DataChunk], error) {
-	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	stream, err := c.cc.NewStream(ctx, &ContainerService_ServiceDesc.Streams[5], ContainerService_ReadRawNoFollow_FullMethodName, cOpts...)
-	if err != nil {
-		return nil, err
-	}
-	x := &grpc.GenericClientStream[ReadRawNoFollowRequest, DataChunk]{ClientStream: stream}
-	if err := x.ClientStream.SendMsg(in); err != nil {
-		return nil, err
-	}
-	if err := x.ClientStream.CloseSend(); err != nil {
-		return nil, err
-	}
-	return x, nil
-}
-
-// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
-type ContainerService_ReadRawNoFollowClient = grpc.ServerStreamingClient[DataChunk]
-
 func (c *containerServiceClient) DeleteFile(ctx context.Context, in *DeleteFileRequest, opts ...grpc.CallOption) (*DeleteFileResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(DeleteFileResponse)
@@ -239,10 +215,6 @@ type ContainerServiceServer interface {
 	ReverseHTTP(grpc.BidiStreamingServer[ReverseHTTPFrame, ReverseHTTPFrame]) error
 	ReadRaw(*ReadRawRequest, grpc.ServerStreamingServer[DataChunk]) error
 	WriteRaw(grpc.ClientStreamingServer[WriteRawChunk, WriteRawResponse]) error
-	// ReadRawNoFollow is a security boundary for reading workspace files that
-	// are published from model-authored references. The server opens root and
-	// every relative_path component without following symbolic links.
-	ReadRawNoFollow(*ReadRawNoFollowRequest, grpc.ServerStreamingServer[DataChunk]) error
 	DeleteFile(context.Context, *DeleteFileRequest) (*DeleteFileResponse, error)
 	mustEmbedUnimplementedContainerServiceServer()
 }
@@ -286,9 +258,6 @@ func (UnimplementedContainerServiceServer) ReadRaw(*ReadRawRequest, grpc.ServerS
 }
 func (UnimplementedContainerServiceServer) WriteRaw(grpc.ClientStreamingServer[WriteRawChunk, WriteRawResponse]) error {
 	return status.Error(codes.Unimplemented, "method WriteRaw not implemented")
-}
-func (UnimplementedContainerServiceServer) ReadRawNoFollow(*ReadRawNoFollowRequest, grpc.ServerStreamingServer[DataChunk]) error {
-	return status.Error(codes.Unimplemented, "method ReadRawNoFollow not implemented")
 }
 func (UnimplementedContainerServiceServer) DeleteFile(context.Context, *DeleteFileRequest) (*DeleteFileResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method DeleteFile not implemented")
@@ -461,17 +430,6 @@ func _ContainerService_WriteRaw_Handler(srv interface{}, stream grpc.ServerStrea
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
 type ContainerService_WriteRawServer = grpc.ClientStreamingServer[WriteRawChunk, WriteRawResponse]
 
-func _ContainerService_ReadRawNoFollow_Handler(srv interface{}, stream grpc.ServerStream) error {
-	m := new(ReadRawNoFollowRequest)
-	if err := stream.RecvMsg(m); err != nil {
-		return err
-	}
-	return srv.(ContainerServiceServer).ReadRawNoFollow(m, &grpc.GenericServerStream[ReadRawNoFollowRequest, DataChunk]{ServerStream: stream})
-}
-
-// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
-type ContainerService_ReadRawNoFollowServer = grpc.ServerStreamingServer[DataChunk]
-
 func _ContainerService_DeleteFile_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(DeleteFileRequest)
 	if err := dec(in); err != nil {
@@ -554,11 +512,6 @@ var ContainerService_ServiceDesc = grpc.ServiceDesc{
 			StreamName:    "WriteRaw",
 			Handler:       _ContainerService_WriteRaw_Handler,
 			ClientStreams: true,
-		},
-		{
-			StreamName:    "ReadRawNoFollow",
-			Handler:       _ContainerService_ReadRawNoFollow_Handler,
-			ServerStreams: true,
 		},
 	},
 	Metadata: "internal/workspace/bridgepb/bridge.proto",

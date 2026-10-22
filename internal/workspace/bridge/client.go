@@ -472,22 +472,6 @@ func (c *Client) ReadRaw(ctx context.Context, path string) (io.ReadCloser, error
 	return newStreamReader(stream, cancel)
 }
 
-// ReadRawNoFollow streams a regular file below root without following any
-// symbolic-link component. The bridge performs validation and open as one
-// descriptor-anchored operation; callers must pass a clean relative path.
-func (c *Client) ReadRawNoFollow(ctx context.Context, root, relativePath string) (io.ReadCloser, error) {
-	streamCtx, cancel := context.WithCancel(ctx)
-	stream, err := c.svc.ReadRawNoFollow(streamCtx, &pb.ReadRawNoFollowRequest{
-		Root:         root,
-		RelativePath: relativePath,
-	})
-	if err != nil {
-		cancel()
-		return nil, mapError(ctx, err)
-	}
-	return newStreamReader(stream, cancel)
-}
-
 // WriteRaw writes raw bytes to a file in the container.
 func (c *Client) WriteRaw(ctx context.Context, path string, r io.Reader) (int64, error) {
 	streamCtx, cancel := context.WithCancel(ctx)

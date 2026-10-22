@@ -377,23 +377,26 @@ func spoolAndHashWithLimit(reader io.Reader, maxBytes int64) (contentHash string
 	return hex.EncodeToString(hasher.Sum(nil)), written, tmp, nil
 }
 
-// IngestWorkspaceFile archives a regular workspace file through descriptor-anchored
-// reads that never follow symbolic links. Only a workspace whose bridge predates
-// those reads falls back to the ordinary read until it restarts.
+// IngestWorkspaceFile archives a file below /data that a model referenced in
+// Markdown. It reads the file the same way the workspace file manager does.
 func (s *Service) IngestWorkspaceFile(ctx context.Context, botID, containerPath string) (Asset, error) {
 	if s.provider == nil {
 		return Asset{}, ErrProviderUnavailable
 	}
-	opener, ok := s.provider.(storage.WorkspaceFileOpener)
+	clean := path.Clean(containerPath)
+	if !strings.HasPrefix(clean, "/data/") {
+		return Asset{}, errors.New("workspace file must be below /data")
+	}
+	opener, ok := s.provider.(storage.ContainerFileOpener)
 	if !ok {
 		return Asset{}, storage.ErrContainerFileNotSupported
 	}
-	file, err := opener.OpenWorkspaceFile(ctx, botID, containerPath)
+	file, err := opener.OpenContainerFile(ctx, botID, clean)
 	if err != nil {
-		return Asset{}, err
+		return Asset{}, fmt.Errorf("open workspace file: %w", err)
 	}
 	defer func() { _ = file.Close() }()
-	ext := path.Ext(containerPath)
+	ext := path.Ext(clean)
 	mime := mimeFromExtension(ext)
 	// The stored type decides how the asset is served later. An image is
 	// stored as the image its bytes are, and an extension claiming an image

@@ -16,10 +16,6 @@ service ContainerService {
   rpc ReverseHTTP(stream ReverseHTTPFrame) returns (stream ReverseHTTPFrame);
   rpc ReadRaw(ReadRawRequest) returns (stream DataChunk);
   rpc WriteRaw(stream WriteRawChunk) returns (WriteRawResponse);
-  // ReadRawNoFollow is a security boundary for reading workspace files that
-  // are published from model-authored references. The server opens root and
-  // every relative_path component without following symbolic links.
-  rpc ReadRawNoFollow(ReadRawNoFollowRequest) returns (stream DataChunk);
   rpc DeleteFile(DeleteFileRequest) returns (DeleteFileResponse);
 }
 
@@ -173,11 +169,6 @@ message WriteRawChunk {
 
 message WriteRawResponse {
   int64 bytes_written = 1;
-}
-
-message ReadRawNoFollowRequest {
-  string root = 1;
-  string relative_path = 2;
 }
 
 message DeleteFileRequest {

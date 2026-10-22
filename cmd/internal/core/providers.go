@@ -1240,8 +1240,8 @@ func (a *acpRuntimePoolAdapter) CloseAgentRuntime(botID, runtimeID string) error
 	return a.pool.CloseRuntime(botID, runtimeID)
 }
 
-func provideMediaStorage(log *slog.Logger, provider bridge.Provider, cfg config.Config) storagepkg.Provider {
-	primary := containerfs.New(provider).WithLogger(log)
+func provideMediaStorage(provider bridge.Provider, cfg config.Config) storagepkg.Provider {
+	primary := containerfs.New(provider)
 	dataRoot := cfg.Workspace.DataRoot
 	if dataRoot == "" {
 		dataRoot = config.DefaultDataRoot
