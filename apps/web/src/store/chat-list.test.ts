@@ -5204,6 +5204,73 @@ describe('chat-list store', () => {
       expect(h.abortedWSRuns).toEqual([])
     })
 
+    it('shows what the run produced while away once it stops to ask the user', async () => {
+      const { store, runId } = await startRunOnBotOne()
+      emitRuntime(
+        runtime.message({ id: 0, type: 'text', content: 'The story begins' }),
+        'session-bot-1',
+        runId,
+      )
+      await flushPromises()
+
+      await store.selectBot('bot-2')
+      await flushPromises()
+      const text: UIMessage = { id: 0, type: 'text', content: 'The story begins and goes on.' }
+      const askUser: UIMessage = {
+        id: 1,
+        type: 'tool',
+        name: 'ask_user',
+        tool_call_id: 'call-ask',
+        input: { questions: [{ text: 'Where next?', kind: 'single_select' }] },
+        running: false,
+        user_input: {
+          user_input_id: 'input-1',
+          short_id: 1,
+          status: 'pending',
+          can_respond: true,
+          questions: [{
+            id: 'q1',
+            text: 'Where next?',
+            kind: 'single_select',
+            options: [{ id: 'north', label: 'North' }, { id: 'south', label: 'South' }],
+          }],
+        },
+      }
+      const away = (update: RuntimeTestUpdate) =>
+        publishRuntimeUpdate(() => {}, 'session-bot-1', runId, update)
+      away(runtime.message(text))
+      away(runtime.message(askUser))
+      away({ kind: 'run', status: 'waiting_decision' })
+      // A run that stops to ask the user has already written its turn.
+      api.fetchMessagesUI.mockResolvedValue([
+        {
+          id: 'user-1',
+          turn_id: `turn-${runId}`,
+          role: 'user',
+          text: 'long task',
+          attachments: [],
+          timestamp: '2026-10-22T04:00:00.000Z',
+        },
+        {
+          id: 'assistant-1',
+          turn_id: `turn-${runId}`,
+          role: 'assistant',
+          messages: [text, askUser],
+          timestamp: '2026-10-22T04:00:01.000Z',
+        },
+      ])
+
+      await returnToBotOne(store)
+
+      expect(store.messages.at(-1)).toMatchObject({
+        role: 'assistant',
+        messages: [
+          { type: 'text', content: 'The story begins and goes on.' },
+          { type: 'tool', name: 'ask_user', running: false, user_input: { status: 'pending' } },
+        ],
+      })
+    })
+
     it('still stops the run from the stop button after returning', async () => {
       const { store, sending, runId } = await startRunOnBotOne()
 
