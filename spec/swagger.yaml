@@ -77,6 +77,11 @@ definitions:
     type: object
   accounts.UpdateProfileMetadata:
     properties:
+      chat_examples_sidebar_entry_hidden:
+        description: |-
+          ChatExamplesSidebarEntryHidden hides the Web sidebar's usage-example
+          entry for this account, on every device.
+        type: boolean
       onboarding_completed:
         type: boolean
     type: object
@@ -4221,7 +4226,7 @@ definitions:
         description: |-
           SourcePath is the existing SKILL.md being edited when saving a single skill.
           Empty means create (or overwrite by frontmatter name under
-          /data/skills/user/personal/<name>/).
+          /data/skills/<name>/).
         type: string
     type: object
   handlers.SnapshotInfo:
@@ -7205,6 +7210,10 @@ definitions:
         type: string
       running_text:
         type: string
+      skill:
+        description: Skill marks a prompt skill, which clients list apart from the
+          runtime's own commands.
+        type: boolean
     type: object
   turn.RuntimeCommandKind:
     enum:
@@ -9073,6 +9082,10 @@ paths:
         in: path
         name: id
         required: true
+        type: string
+      - description: Folder a draft would run in, which decides its project commands
+        in: query
+        name: workdir_id
         type: string
       responses:
         "200":
@@ -11654,6 +11667,12 @@ paths:
   /bots/{bot_id}/mcp:
     get:
       description: List MCP connections for a bot
+      parameters:
+      - description: Bot ID
+        in: path
+        name: bot_id
+        required: true
+        type: string
       responses:
         "200":
           description: OK
@@ -11681,6 +11700,11 @@ paths:
     post:
       description: Create a MCP connection for a bot
       parameters:
+      - description: Bot ID
+        in: path
+        name: bot_id
+        required: true
+        type: string
       - description: MCP payload
         in: body
         name: payload
@@ -11715,6 +11739,11 @@ paths:
     post:
       description: Delete multiple MCP connections by IDs.
       parameters:
+      - description: Bot ID
+        in: path
+        name: bot_id
+        required: true
+        type: string
       - description: IDs to delete
         in: body
         name: payload
@@ -11742,6 +11771,12 @@ paths:
   /bots/{bot_id}/mcp-ops/export:
     get:
       description: Export all MCP connections for a bot in standard mcpServers format.
+      parameters:
+      - description: Bot ID
+        in: path
+        name: bot_id
+        required: true
+        type: string
       responses:
         "200":
           description: OK
@@ -11768,6 +11803,11 @@ paths:
         connections (matched by name) get config updated with is_active preserved.
         New connections are created as active.
       parameters:
+      - description: Bot ID
+        in: path
+        name: bot_id
+        required: true
+        type: string
       - description: mcpServers dict
         in: body
         name: payload
@@ -11874,6 +11914,11 @@ paths:
     delete:
       description: Delete a MCP connection by ID
       parameters:
+      - description: Bot ID
+        in: path
+        name: bot_id
+        required: true
+        type: string
       - description: MCP ID
         in: path
         name: id
@@ -11904,6 +11949,11 @@ paths:
     get:
       description: Get a MCP connection by ID
       parameters:
+      - description: Bot ID
+        in: path
+        name: bot_id
+        required: true
+        type: string
       - description: MCP ID
         in: path
         name: id
@@ -11936,6 +11986,11 @@ paths:
     put:
       description: Update a MCP connection by ID
       parameters:
+      - description: Bot ID
+        in: path
+        name: bot_id
+        required: true
+        type: string
       - description: MCP ID
         in: path
         name: id
@@ -11975,6 +12030,11 @@ paths:
     post:
       description: Generate PKCE and return authorization URL for the user to authorize
       parameters:
+      - description: Bot ID
+        in: path
+        name: bot_id
+        required: true
+        type: string
       - description: MCP connection ID
         in: path
         name: id
@@ -12006,6 +12066,11 @@ paths:
       description: Probe MCP server URL for OAuth requirements and discover authorization
         server metadata
       parameters:
+      - description: Bot ID
+        in: path
+        name: bot_id
+        required: true
+        type: string
       - description: MCP connection ID
         in: path
         name: id
@@ -12037,6 +12102,16 @@ paths:
       description: Frontend callback page calls this to exchange the authorization
         code for access/refresh tokens
       parameters:
+      - description: Bot ID
+        in: path
+        name: bot_id
+        required: true
+        type: string
+      - description: MCP connection ID
+        in: path
+        name: id
+        required: true
+        type: string
       - description: Authorization code and state
         in: body
         name: payload
@@ -12061,6 +12136,11 @@ paths:
     get:
       description: Returns the current OAuth status including whether tokens are available
       parameters:
+      - description: Bot ID
+        in: path
+        name: bot_id
+        required: true
+        type: string
       - description: MCP connection ID
         in: path
         name: id
@@ -12086,6 +12166,11 @@ paths:
     delete:
       description: Clears stored OAuth tokens
       parameters:
+      - description: Bot ID
+        in: path
+        name: bot_id
+        required: true
+        type: string
       - description: MCP connection ID
         in: path
         name: id
@@ -12105,6 +12190,11 @@ paths:
     post:
       description: Probe a MCP connection to discover tools and verify connectivity
       parameters:
+      - description: Bot ID
+        in: path
+        name: bot_id
+        required: true
+        type: string
       - description: MCP connection ID
         in: path
         name: id

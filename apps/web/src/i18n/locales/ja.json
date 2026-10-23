@@ -108,6 +108,7 @@
     "restore": "接続を復元",
     "existingDescription": "「{name}」でコマンドを実行し、元の認証情報でバックグラウンド接続を復元してください。コンピューターの記録と Bot の権限は保持されます。",
     "commandLabel": "接続コマンド",
+    "platformLabel": "OS",
     "commandDescription": "接続先に Node.js 20+ を入れ、ターミナルで次のコマンドを実行してください。",
     "waiting": "コンピューターの接続を待っています…",
     "finish": "完了"
@@ -321,7 +322,8 @@
       "oauth_not_discovered": "先にこの接続の OAuth 検出を実行してください。"
     },
     "media": {
-      "asset_not_found": "このファイルは存在しなくなりました。必要な場合は再度アップロードしてください。"
+      "asset_not_found": "このファイルは存在しなくなりました。必要な場合は再度アップロードしてください。",
+      "reference_unavailable": "ファイルを共有できませんでした。Agent に再生成または再共有を依頼してください。"
     },
     "memory": {
       "compact_unsupported": "選択中の Memory Provider は Memory の圧縮に対応していません。Bot の Memory 設定で、圧縮に対応した Provider に切り替えてください。"
@@ -441,6 +443,7 @@
     },
     "skill": {
       "builtin_read_only": "Memoh 組み込みの Skill はシステムによって管理されているため、編集または削除できません。",
+      "directory_shared": "この Skill のフォルダには他の Skill も含まれているため、ここでは名前の変更や削除ができません。ファイルからこの SKILL.md を削除してください。",
       "name_invalid": "Skill の YAML frontmatter に有効な名前が必要です。",
       "name_taken": "同じ名前の Skill がすでに存在します。別の名前を使用してください。",
       "not_found": "このスキルが見つかりません。一覧を更新してからやり直してください。",
@@ -786,6 +789,8 @@
       "interface": "表示設定",
       "interfaceDescription": "これらの設定はローカルに保存され、すぐに適用されます。",
       "colorScheme": "配色",
+      "showExamplesEntry": "サイドバーの使用例",
+      "showExamplesEntryDescription": "サイドバー左下に「Memoh でできること」を表示します",
       "colorSchemeDescription": "ブランド、ステータス、UI 要素に使うパレットを選択します。",
       "typography": "タイポグラフィ",
       "uiFontFamily": "UI フォント",
@@ -1107,6 +1112,12 @@
       "fragmentSeparator": "、"
     },
     "currentBot": "現在のBot",
+    "stopResponse": "応答の生成を停止",
+    "composer": {
+      "selectBot": "Botを選択してから送信してください",
+      "selectModel": "モデルを選択してから送信してください",
+      "modeChanging": "モードを保存中です。しばらく待ってから送信してください。"
+    },
     "queue": {
       "steer": "現在の応答",
       "followUp": "次のメッセージ",
@@ -1116,6 +1127,7 @@
       "steerPlaceholder": "現在の応答に追加する内容を入力…",
       "enqueueSteer": "現在の応答に追加",
       "enqueueFollowUp": "次のメッセージに追加",
+      "textOnly": "キューに追加できるのはテキストのみです。添付ファイルとスキルを削除してから送信してください。",
       "steerQueued": "現在の応答キューに追加済み",
       "steerFailed": "現在の応答に追加できませんでした。メッセージはキューに残っています。",
       "reorder": "並べ替え",
@@ -1829,6 +1841,10 @@
       "channel": "チャンネル"
     },
     "sidebarEntry": "Memoh でできること",
+    "hideSidebarEntry": "この入口を非表示",
+    "sidebarEntryHidden": "非表示にしました。外観設定で戻せます",
+    "undoHideSidebarEntry": "元に戻す",
+    "sidebarEntrySaveFailed": "保存できませんでした。しばらくしてからもう一度お試しください。",
     "galleryTitle": "Memoh でできること",
     "galleryDescription": "例を選ぶと入力欄に入ります。送信前に編集できます。",
     "refresh": "他の候補",
@@ -2061,6 +2077,10 @@
     "fetchProviders": "フェッチ",
     "searchHint": "web_search ツールが使用する検索サービスです。",
     "fetchHint": "web_fetch ツールがページを読み取るためのサービスです。",
+    "httpHeaders": "HTTP Headers",
+    "headerName": "Header 名",
+    "headerValue": "Header 値",
+    "addHeader": "Header を追加",
     "selectHint": "Web 検索プロバイダーを選択または作成します",
     "unsupportedProvider": "このプロバイダーには設定パネルがまだありません",
     "nativeManaged": "ネイティブは Memoh によって管理され、常に有効になります。",
@@ -2607,10 +2627,6 @@
     "avatarUpdateSuccess": "アバターが更新されました",
     "avatarUpdateFailed": "アバターの更新に失敗しました",
     "typePlaceholder": "Botの種類を選択してください",
-    "types": {
-      "personal": "個人的",
-      "public": "公共"
-    },
     "active": "アクティブ",
     "inactive": "非アクティブ",
     "lifecycle": {

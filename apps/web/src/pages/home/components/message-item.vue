@@ -244,6 +244,7 @@
                      not long documents. -->
                 <MarkdownRender
                   :content="node.block.content"
+                  :custom-markdown-it="withLiteralSingleDollars"
                   :is-dark="isDark"
                   mode="chat"
                   :smooth-streaming="isBlockStreaming(node.index)"
@@ -363,6 +364,7 @@
 <script lang="ts">
 import { setCustomComponents } from 'markstream-vue'
 import ChatCodeBlock from './chat-code-block.vue'
+import MdImage from '@/components/markdown/md-image.vue'
 import { registerSharedMarkdownComponents } from '@/components/markdown'
 import ThemedMermaidBlock from '@/components/themed-mermaid-block/index.vue'
 
@@ -372,7 +374,7 @@ import ThemedMermaidBlock from '@/components/themed-mermaid-block/index.vue'
 // shell/bash blocks render identically — and register the shared design-system
 // node components (library Checkbox task markers, link-language footnotes).
 // Runs once at module load.
-registerSharedMarkdownComponents('chat-msg', { code_block: ChatCodeBlock, shell: ChatCodeBlock })
+registerSharedMarkdownComponents('chat-msg', { code_block: ChatCodeBlock, shell: ChatCodeBlock, image: MdImage })
 // Mermaid is registered globally so the appearance preference wins over the
 // markstream default (which only follows the host renderer's isDark flag). One
 // registration covers chat + file preview + any future MarkdownRender call site.
@@ -433,6 +435,7 @@ import type {
 } from '@/store/chat-list'
 import { structuredToolResult } from '@/store/chat-list.normalize'
 import { runtimeGoalObjective } from '@/utils/runtime-slash-commands'
+import { withLiteralSingleDollars } from '@/utils/markdown-dollar'
 
 import { resolveUrl } from '../composables/useMediaGallery'
 import { useElementVisibility } from '@vueuse/core'
@@ -863,7 +866,7 @@ function noticeBlockContent(block: { name?: string; content: string; args?: Reco
 // Consecutive tools and reasoning form one process, regardless of tool kind.
 // Text, errors, attachments and completed questions retain their own positions.
 type ProcessNode = { kind: 'process'; key: string; items: ContentBlock[]; lastIndex: number }
-type AnswersNode = { kind: 'answers'; key: string; block: ContentBlock; index: number }
+type AnswersNode = { kind: 'answers'; key: string; block: ToolCallBlockType; index: number }
 type BlockNode = { kind: 'block'; key: string; block: ContentBlock; index: number }
 type RenderNode = ProcessNode | AnswersNode | BlockNode
 
@@ -877,9 +880,7 @@ type RenderNode = ProcessNode | AnswersNode | BlockNode
 // history where userInput is absent.
 const ASK_USER_TERMINAL_STATUSES = new Set(['submitted', 'canceled', 'expired', 'failed'])
 
-function isCompletedAskUser(block: ContentBlock): boolean {
-  if (block.type !== 'tool') return false
-  const b = block as ToolCallBlockType
+function isCompletedAskUser(b: ToolCallBlockType): boolean {
   if (b.toolName !== 'ask_user') return false
   const result = structuredToolResult(b.result)
   if (Array.isArray(result.answers)) return true
@@ -894,7 +895,7 @@ const renderNodes = computed<RenderNode[]>(() => {
   let run: ProcessNode | null = null
   props.message.messages.forEach((block, index) => {
     if (!isVisibleAssistantBlock(block)) return
-    if (isCompletedAskUser(block)) {
+    if (block.type === 'tool' && isCompletedAskUser(block)) {
       run = null
       nodes.push({ kind: 'answers', key: `a${block.id}`, block, index })
       return

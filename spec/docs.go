@@ -2357,6 +2357,12 @@ const docTemplate = `{
                         "name": "id",
                         "in": "path",
                         "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Folder a draft would run in, which decides its project commands",
+                        "name": "workdir_id",
+                        "in": "query"
                     }
                 ],
                 "responses": {
@@ -6182,6 +6188,15 @@ const docTemplate = `{
                     "mcp"
                 ],
                 "summary": "List MCP connections",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Bot ID",
+                        "name": "bot_id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
                 "responses": {
                     "200": {
                         "description": "OK",
@@ -6222,6 +6237,13 @@ const docTemplate = `{
                 ],
                 "summary": "Create MCP connection",
                 "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Bot ID",
+                        "name": "bot_id",
+                        "in": "path",
+                        "required": true
+                    },
                     {
                         "description": "MCP payload",
                         "name": "payload",
@@ -6275,6 +6297,13 @@ const docTemplate = `{
                 "summary": "Batch delete MCP connections",
                 "parameters": [
                     {
+                        "type": "string",
+                        "description": "Bot ID",
+                        "name": "bot_id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
                         "description": "IDs to delete",
                         "name": "payload",
                         "in": "body",
@@ -6316,6 +6345,15 @@ const docTemplate = `{
                     "mcp"
                 ],
                 "summary": "Export MCP connections",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Bot ID",
+                        "name": "bot_id",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
                 "responses": {
                     "200": {
                         "description": "OK",
@@ -6352,6 +6390,13 @@ const docTemplate = `{
                 ],
                 "summary": "Import MCP connections",
                 "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Bot ID",
+                        "name": "bot_id",
+                        "in": "path",
+                        "required": true
+                    },
                     {
                         "description": "mcpServers dict",
                         "name": "payload",
@@ -6513,6 +6558,13 @@ const docTemplate = `{
                 "parameters": [
                     {
                         "type": "string",
+                        "description": "Bot ID",
+                        "name": "bot_id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
                         "description": "MCP ID",
                         "name": "id",
                         "in": "path",
@@ -6559,6 +6611,13 @@ const docTemplate = `{
                 ],
                 "summary": "Update MCP connection",
                 "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Bot ID",
+                        "name": "bot_id",
+                        "in": "path",
+                        "required": true
+                    },
                     {
                         "type": "string",
                         "description": "MCP ID",
@@ -6618,6 +6677,13 @@ const docTemplate = `{
                 "parameters": [
                     {
                         "type": "string",
+                        "description": "Bot ID",
+                        "name": "bot_id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
                         "description": "MCP ID",
                         "name": "id",
                         "in": "path",
@@ -6663,6 +6729,13 @@ const docTemplate = `{
                 ],
                 "summary": "Start OAuth authorization flow",
                 "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Bot ID",
+                        "name": "bot_id",
+                        "in": "path",
+                        "required": true
+                    },
                     {
                         "type": "string",
                         "description": "MCP connection ID",
@@ -6711,6 +6784,13 @@ const docTemplate = `{
                 "parameters": [
                     {
                         "type": "string",
+                        "description": "Bot ID",
+                        "name": "bot_id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
                         "description": "MCP connection ID",
                         "name": "id",
                         "in": "path",
@@ -6756,6 +6836,20 @@ const docTemplate = `{
                 "summary": "Exchange OAuth authorization code for tokens",
                 "parameters": [
                     {
+                        "type": "string",
+                        "description": "Bot ID",
+                        "name": "bot_id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "MCP connection ID",
+                        "name": "id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
                         "description": "Authorization code and state",
                         "name": "payload",
                         "in": "body",
@@ -6792,6 +6886,13 @@ const docTemplate = `{
                 ],
                 "summary": "Get OAuth status for MCP connection",
                 "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Bot ID",
+                        "name": "bot_id",
+                        "in": "path",
+                        "required": true
+                    },
                     {
                         "type": "string",
                         "description": "MCP connection ID",
@@ -6832,6 +6933,13 @@ const docTemplate = `{
                 "parameters": [
                     {
                         "type": "string",
+                        "description": "Bot ID",
+                        "name": "bot_id",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
                         "description": "MCP connection ID",
                         "name": "id",
                         "in": "path",
@@ -6859,6 +6967,13 @@ const docTemplate = `{
                 ],
                 "summary": "Probe MCP connection",
                 "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Bot ID",
+                        "name": "bot_id",
+                        "in": "path",
+                        "required": true
+                    },
                     {
                         "type": "string",
                         "description": "MCP connection ID",
@@ -17314,6 +17429,10 @@ const docTemplate = `{
         "accounts.UpdateProfileMetadata": {
             "type": "object",
             "properties": {
+                "chat_examples_sidebar_entry_hidden": {
+                    "description": "ChatExamplesSidebarEntryHidden hides the Web sidebar's usage-example\nentry for this account, on every device.",
+                    "type": "boolean"
+                },
                 "onboarding_completed": {
                     "type": "boolean"
                 }
@@ -23337,7 +23456,7 @@ const docTemplate = `{
                     }
                 },
                 "source_path": {
-                    "description": "SourcePath is the existing SKILL.md being edited when saving a single skill.\nEmpty means create (or overwrite by frontmatter name under\n/data/skills/user/personal/\u003cname\u003e/).",
+                    "description": "SourcePath is the existing SKILL.md being edited when saving a single skill.\nEmpty means create (or overwrite by frontmatter name under\n/data/skills/\u003cname\u003e/).",
                     "type": "string"
                 }
             }
@@ -27483,6 +27602,10 @@ const docTemplate = `{
                 },
                 "running_text": {
                     "type": "string"
+                },
+                "skill": {
+                    "description": "Skill marks a prompt skill, which clients list apart from the runtime's own commands.",
+                    "type": "boolean"
                 }
             }
         },

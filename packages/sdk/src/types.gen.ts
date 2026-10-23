@@ -51,6 +51,11 @@ export type AccountsUpdatePasswordRequest = {
 };
 
 export type AccountsUpdateProfileMetadata = {
+    /**
+     * ChatExamplesSidebarEntryHidden hides the Web sidebar's usage-example
+     * entry for this account, on every device.
+     */
+    chat_examples_sidebar_entry_hidden?: boolean;
     onboarding_completed?: boolean;
 };
 
@@ -2418,7 +2423,7 @@ export type HandlersSkillsUpsertRequest = {
     /**
      * SourcePath is the existing SKILL.md being edited when saving a single skill.
      * Empty means create (or overwrite by frontmatter name under
-     * /data/skills/user/personal/<name>/).
+     * /data/skills/<name>/).
      */
     source_path?: string;
 };
@@ -4265,6 +4270,10 @@ export type TurnRuntimeCommand = {
     kind?: TurnRuntimeCommandKind;
     name?: string;
     running_text?: string;
+    /**
+     * Skill marks a prompt skill, which clients list apart from the runtime's own commands.
+     */
+    skill?: boolean;
 };
 
 export type TurnRuntimeCommandKind = 'turn' | 'read' | 'operation';
@@ -6387,7 +6396,12 @@ export type GetBotsByBotIdAgentsByIdRuntimeControlsData = {
          */
         id: string;
     };
-    query?: never;
+    query?: {
+        /**
+         * Folder a draft would run in, which decides its project commands
+         */
+        workdir_id?: string;
+    };
     url: '/bots/{bot_id}/agents/{id}/runtime-controls';
 };
 
@@ -9415,7 +9429,12 @@ export type PostBotsByBotIdHooksTestResponse = PostBotsByBotIdHooksTestResponses
 
 export type GetBotsByBotIdMcpData = {
     body?: never;
-    path?: never;
+    path: {
+        /**
+         * Bot ID
+         */
+        bot_id: string;
+    };
     query?: never;
     url: '/bots/{bot_id}/mcp';
 };
@@ -9455,7 +9474,12 @@ export type PostBotsByBotIdMcpData = {
      * MCP payload
      */
     body: McpUpsertRequest;
-    path?: never;
+    path: {
+        /**
+         * Bot ID
+         */
+        bot_id: string;
+    };
     query?: never;
     url: '/bots/{bot_id}/mcp';
 };
@@ -9495,7 +9519,12 @@ export type PostBotsByBotIdMcpOpsBatchDeleteData = {
      * IDs to delete
      */
     body: HandlersBatchDeleteRequest;
-    path?: never;
+    path: {
+        /**
+         * Bot ID
+         */
+        bot_id: string;
+    };
     query?: never;
     url: '/bots/{bot_id}/mcp-ops/batch-delete';
 };
@@ -9526,7 +9555,12 @@ export type PostBotsByBotIdMcpOpsBatchDeleteResponses = {
 
 export type GetBotsByBotIdMcpOpsExportData = {
     body?: never;
-    path?: never;
+    path: {
+        /**
+         * Bot ID
+         */
+        bot_id: string;
+    };
     query?: never;
     url: '/bots/{bot_id}/mcp-ops/export';
 };
@@ -9562,7 +9596,12 @@ export type PutBotsByBotIdMcpOpsImportData = {
      * mcpServers dict
      */
     body: McpImportRequest;
-    path?: never;
+    path: {
+        /**
+         * Bot ID
+         */
+        bot_id: string;
+    };
     query?: never;
     url: '/bots/{bot_id}/mcp-ops/import';
 };
@@ -9687,6 +9726,10 @@ export type DeleteBotsByBotIdMcpByIdData = {
     body?: never;
     path: {
         /**
+         * Bot ID
+         */
+        bot_id: string;
+        /**
          * MCP ID
          */
         id: string;
@@ -9726,6 +9769,10 @@ export type DeleteBotsByBotIdMcpByIdResponses = {
 export type GetBotsByBotIdMcpByIdData = {
     body?: never;
     path: {
+        /**
+         * Bot ID
+         */
+        bot_id: string;
         /**
          * MCP ID
          */
@@ -9772,6 +9819,10 @@ export type PutBotsByBotIdMcpByIdData = {
     body: McpUpsertRequest;
     path: {
         /**
+         * Bot ID
+         */
+        bot_id: string;
+        /**
          * MCP ID
          */
         id: string;
@@ -9817,6 +9868,10 @@ export type PostBotsByBotIdMcpByIdOauthAuthorizeData = {
     body?: HandlersOauthAuthorizeRequest;
     path: {
         /**
+         * Bot ID
+         */
+        bot_id: string;
+        /**
          * MCP connection ID
          */
         id: string;
@@ -9854,6 +9909,10 @@ export type PostBotsByBotIdMcpByIdOauthDiscoverData = {
     body?: HandlersOauthDiscoverRequest;
     path: {
         /**
+         * Bot ID
+         */
+        bot_id: string;
+        /**
          * MCP connection ID
          */
         id: string;
@@ -9889,7 +9948,16 @@ export type PostBotsByBotIdMcpByIdOauthExchangeData = {
      * Authorization code and state
      */
     body: HandlersOauthExchangeRequest;
-    path?: never;
+    path: {
+        /**
+         * Bot ID
+         */
+        bot_id: string;
+        /**
+         * MCP connection ID
+         */
+        id: string;
+    };
     query?: never;
     url: '/bots/{bot_id}/mcp/{id}/oauth/exchange';
 };
@@ -9917,6 +9985,10 @@ export type PostBotsByBotIdMcpByIdOauthExchangeResponse = PostBotsByBotIdMcpById
 export type GetBotsByBotIdMcpByIdOauthStatusData = {
     body?: never;
     path: {
+        /**
+         * Bot ID
+         */
+        bot_id: string;
         /**
          * MCP connection ID
          */
@@ -9952,6 +10024,10 @@ export type DeleteBotsByBotIdMcpByIdOauthTokenData = {
     body?: never;
     path: {
         /**
+         * Bot ID
+         */
+        bot_id: string;
+        /**
          * MCP connection ID
          */
         id: string;
@@ -9979,6 +10055,10 @@ export type DeleteBotsByBotIdMcpByIdOauthTokenResponses = {
 export type PostBotsByBotIdMcpByIdProbeData = {
     body?: never;
     path: {
+        /**
+         * Bot ID
+         */
+        bot_id: string;
         /**
          * MCP connection ID
          */
