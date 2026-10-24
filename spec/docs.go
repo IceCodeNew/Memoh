@@ -21735,6 +21735,9 @@ const docTemplate = `{
         },
         "fetchproviders.TestRequest": {
             "type": "object",
+            "required": [
+                "url"
+            ],
             "properties": {
                 "url": {
                     "type": "string"
@@ -27328,6 +27331,9 @@ const docTemplate = `{
         },
         "searchproviders.TestRequest": {
             "type": "object",
+            "required": [
+                "query"
+            ],
             "properties": {
                 "count": {
                     "type": "integer"
