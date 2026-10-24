@@ -51,6 +51,11 @@ export type AccountsUpdatePasswordRequest = {
 };
 
 export type AccountsUpdateProfileMetadata = {
+    /**
+     * ChatExamplesSidebarEntryHidden hides the Web sidebar's usage-example
+     * entry for this account, on every device.
+     */
+    chat_examples_sidebar_entry_hidden?: boolean;
     onboarding_completed?: boolean;
 };
 
@@ -937,6 +942,10 @@ export type ChannelReplyRef = {
 
 export type ChannelSendRequest = {
     channel_identity_id?: string;
+    /**
+     * ExcludedTarget is checked after platform target resolution, before publication.
+     */
+    excluded_target?: string;
     message?: ChannelMessage;
     target?: string;
 };
@@ -2418,7 +2427,7 @@ export type HandlersSkillsUpsertRequest = {
     /**
      * SourcePath is the existing SKILL.md being edited when saving a single skill.
      * Empty means create (or overwrite by frontmatter name under
-     * /data/skills/user/personal/<name>/).
+     * /data/skills/<name>/).
      */
     source_path?: string;
 };
@@ -3438,6 +3447,28 @@ export type McpUpsertRequest = {
     url?: string;
 };
 
+export type ModelcatalogInfo = {
+    checked_at?: string;
+    revision?: string;
+    source?: string;
+    stale?: boolean;
+};
+
+export type ModelcatalogModel = {
+    config?: ModelsModelConfig;
+    model_id?: string;
+    name?: string;
+    type?: ModelsModelType;
+};
+
+export type ModelcatalogResponse = {
+    checked_at?: string;
+    models?: Array<ModelcatalogModel>;
+    revision?: string;
+    source?: string;
+    stale?: boolean;
+};
+
 export type ModelsAddRequest = {
     config?: ModelsModelConfig;
     enable?: boolean;
@@ -3593,12 +3624,6 @@ export type ModelsUpdateRequest = {
     type?: ModelsModelType;
 };
 
-export type ProvidersCatalogModel = {
-    config?: ModelsModelConfig;
-    model_id?: string;
-    name?: string;
-};
-
 export type ProvidersCountResponse = {
     count?: number;
 };
@@ -3644,12 +3669,16 @@ export type ProvidersGetResponse = {
     updated_at?: string;
 };
 
+export type ProvidersImportCatalogModelsRequest = {
+    skip_model_ids?: Array<string>;
+};
+
 export type ProvidersImportModelsRequest = {
     default_compatibilities?: Array<string>;
-    models?: Array<ProvidersCatalogModel>;
 };
 
 export type ProvidersImportModelsResponse = {
+    catalog?: ModelcatalogInfo;
     created?: number;
     models?: Array<string>;
     skipped?: number;
@@ -4272,6 +4301,10 @@ export type TurnRuntimeCommand = {
     kind?: TurnRuntimeCommandKind;
     name?: string;
     running_text?: string;
+    /**
+     * Skill marks a prompt skill, which clients list apart from the runtime's own commands.
+     */
+    skill?: boolean;
 };
 
 export type TurnRuntimeCommandKind = 'turn' | 'read' | 'operation';
@@ -6394,7 +6427,12 @@ export type GetBotsByBotIdAgentsByIdRuntimeControlsData = {
          */
         id: string;
     };
-    query?: never;
+    query?: {
+        /**
+         * Folder a draft would run in, which decides its project commands
+         */
+        workdir_id?: string;
+    };
     url: '/bots/{bot_id}/agents/{id}/runtime-controls';
 };
 
@@ -9422,7 +9460,12 @@ export type PostBotsByBotIdHooksTestResponse = PostBotsByBotIdHooksTestResponses
 
 export type GetBotsByBotIdMcpData = {
     body?: never;
-    path?: never;
+    path: {
+        /**
+         * Bot ID
+         */
+        bot_id: string;
+    };
     query?: never;
     url: '/bots/{bot_id}/mcp';
 };
@@ -9462,7 +9505,12 @@ export type PostBotsByBotIdMcpData = {
      * MCP payload
      */
     body: McpUpsertRequest;
-    path?: never;
+    path: {
+        /**
+         * Bot ID
+         */
+        bot_id: string;
+    };
     query?: never;
     url: '/bots/{bot_id}/mcp';
 };
@@ -9502,7 +9550,12 @@ export type PostBotsByBotIdMcpOpsBatchDeleteData = {
      * IDs to delete
      */
     body: HandlersBatchDeleteRequest;
-    path?: never;
+    path: {
+        /**
+         * Bot ID
+         */
+        bot_id: string;
+    };
     query?: never;
     url: '/bots/{bot_id}/mcp-ops/batch-delete';
 };
@@ -9533,7 +9586,12 @@ export type PostBotsByBotIdMcpOpsBatchDeleteResponses = {
 
 export type GetBotsByBotIdMcpOpsExportData = {
     body?: never;
-    path?: never;
+    path: {
+        /**
+         * Bot ID
+         */
+        bot_id: string;
+    };
     query?: never;
     url: '/bots/{bot_id}/mcp-ops/export';
 };
@@ -9569,7 +9627,12 @@ export type PutBotsByBotIdMcpOpsImportData = {
      * mcpServers dict
      */
     body: McpImportRequest;
-    path?: never;
+    path: {
+        /**
+         * Bot ID
+         */
+        bot_id: string;
+    };
     query?: never;
     url: '/bots/{bot_id}/mcp-ops/import';
 };
@@ -9694,6 +9757,10 @@ export type DeleteBotsByBotIdMcpByIdData = {
     body?: never;
     path: {
         /**
+         * Bot ID
+         */
+        bot_id: string;
+        /**
          * MCP ID
          */
         id: string;
@@ -9733,6 +9800,10 @@ export type DeleteBotsByBotIdMcpByIdResponses = {
 export type GetBotsByBotIdMcpByIdData = {
     body?: never;
     path: {
+        /**
+         * Bot ID
+         */
+        bot_id: string;
         /**
          * MCP ID
          */
@@ -9779,6 +9850,10 @@ export type PutBotsByBotIdMcpByIdData = {
     body: McpUpsertRequest;
     path: {
         /**
+         * Bot ID
+         */
+        bot_id: string;
+        /**
          * MCP ID
          */
         id: string;
@@ -9824,6 +9899,10 @@ export type PostBotsByBotIdMcpByIdOauthAuthorizeData = {
     body?: HandlersOauthAuthorizeRequest;
     path: {
         /**
+         * Bot ID
+         */
+        bot_id: string;
+        /**
          * MCP connection ID
          */
         id: string;
@@ -9861,6 +9940,10 @@ export type PostBotsByBotIdMcpByIdOauthDiscoverData = {
     body?: HandlersOauthDiscoverRequest;
     path: {
         /**
+         * Bot ID
+         */
+        bot_id: string;
+        /**
          * MCP connection ID
          */
         id: string;
@@ -9896,7 +9979,16 @@ export type PostBotsByBotIdMcpByIdOauthExchangeData = {
      * Authorization code and state
      */
     body: HandlersOauthExchangeRequest;
-    path?: never;
+    path: {
+        /**
+         * Bot ID
+         */
+        bot_id: string;
+        /**
+         * MCP connection ID
+         */
+        id: string;
+    };
     query?: never;
     url: '/bots/{bot_id}/mcp/{id}/oauth/exchange';
 };
@@ -9924,6 +10016,10 @@ export type PostBotsByBotIdMcpByIdOauthExchangeResponse = PostBotsByBotIdMcpById
 export type GetBotsByBotIdMcpByIdOauthStatusData = {
     body?: never;
     path: {
+        /**
+         * Bot ID
+         */
+        bot_id: string;
         /**
          * MCP connection ID
          */
@@ -9959,6 +10055,10 @@ export type DeleteBotsByBotIdMcpByIdOauthTokenData = {
     body?: never;
     path: {
         /**
+         * Bot ID
+         */
+        bot_id: string;
+        /**
          * MCP connection ID
          */
         id: string;
@@ -9986,6 +10086,10 @@ export type DeleteBotsByBotIdMcpByIdOauthTokenResponses = {
 export type PostBotsByBotIdMcpByIdProbeData = {
     body?: never;
     path: {
+        /**
+         * Bot ID
+         */
+        bot_id: string;
         /**
          * MCP connection ID
          */
@@ -15587,6 +15691,48 @@ export type PostProvidersResponses = {
 
 export type PostProvidersResponse = PostProvidersResponses[keyof PostProvidersResponses];
 
+export type GetProvidersCatalogModelsData = {
+    body?: never;
+    path?: never;
+    query: {
+        /**
+         * models.dev provider ID
+         */
+        source: string;
+        /**
+         * Memoh client protocol
+         */
+        client_type: string;
+    };
+    url: '/providers/catalog/models';
+};
+
+export type GetProvidersCatalogModelsErrors = {
+    /**
+     * Bad Request
+     */
+    400: ServerProblem;
+    /**
+     * Not Found
+     */
+    404: ServerProblem;
+    /**
+     * Service Unavailable
+     */
+    503: ServerProblem;
+};
+
+export type GetProvidersCatalogModelsError = GetProvidersCatalogModelsErrors[keyof GetProvidersCatalogModelsErrors];
+
+export type GetProvidersCatalogModelsResponses = {
+    /**
+     * OK
+     */
+    200: ModelcatalogResponse;
+};
+
+export type GetProvidersCatalogModelsResponse = GetProvidersCatalogModelsResponses[keyof GetProvidersCatalogModelsResponses];
+
 export type GetProvidersCountData = {
     body?: never;
     path?: never;
@@ -15839,9 +15985,54 @@ export type PutProvidersByIdResponses = {
 
 export type PutProvidersByIdResponse = PutProvidersByIdResponses[keyof PutProvidersByIdResponses];
 
+export type PostProvidersByIdImportCatalogModelsData = {
+    /**
+     * Models to preserve from a preceding manual creation
+     */
+    body?: ProvidersImportCatalogModelsRequest;
+    path: {
+        /**
+         * Provider ID (UUID)
+         */
+        id: string;
+    };
+    query?: never;
+    url: '/providers/{id}/import-catalog-models';
+};
+
+export type PostProvidersByIdImportCatalogModelsErrors = {
+    /**
+     * Bad Request
+     */
+    400: ServerProblem;
+    /**
+     * Forbidden
+     */
+    403: ServerProblem;
+    /**
+     * Not Found
+     */
+    404: ServerProblem;
+    /**
+     * Service Unavailable
+     */
+    503: ServerProblem;
+};
+
+export type PostProvidersByIdImportCatalogModelsError = PostProvidersByIdImportCatalogModelsErrors[keyof PostProvidersByIdImportCatalogModelsErrors];
+
+export type PostProvidersByIdImportCatalogModelsResponses = {
+    /**
+     * OK
+     */
+    200: ProvidersImportModelsResponse;
+};
+
+export type PostProvidersByIdImportCatalogModelsResponse = PostProvidersByIdImportCatalogModelsResponses[keyof PostProvidersByIdImportCatalogModelsResponses];
+
 export type PostProvidersByIdImportModelsData = {
     /**
-     * Explicit defaults for unknown custom chat models, or the catalog models to import
+     * Explicit defaults for unknown custom chat models
      */
     body?: ProvidersImportModelsRequest;
     path: {

@@ -75,6 +75,7 @@ import (
 	"github.com/felinics/memoh/internal/handlers"
 	hookspkg "github.com/felinics/memoh/internal/hooks"
 	"github.com/felinics/memoh/internal/logger"
+	"github.com/felinics/memoh/internal/markdownmedia"
 	"github.com/felinics/memoh/internal/mcp"
 	mcpfederation "github.com/felinics/memoh/internal/mcp/sources/federation"
 	"github.com/felinics/memoh/internal/media"
@@ -84,6 +85,7 @@ import (
 	storefs "github.com/felinics/memoh/internal/memory/storefs"
 	"github.com/felinics/memoh/internal/memory/wikistore"
 	"github.com/felinics/memoh/internal/messaging"
+	"github.com/felinics/memoh/internal/modelcatalog"
 	"github.com/felinics/memoh/internal/models"
 	netctl "github.com/felinics/memoh/internal/network"
 	netoverlay "github.com/felinics/memoh/internal/network/overlay"
@@ -455,8 +457,12 @@ func provideSessionService(log *slog.Logger, queries dbstore.Queries, hub *event
 	return service
 }
 
-func provideMessageService(log *slog.Logger, queries dbstore.Queries, hub *event.Hub) *message.DBService {
-	return message.NewService(log, queries, hub)
+func provideMessageService(log *slog.Logger, queries dbstore.Queries, hub *event.Hub, mediaService *media.Service) *message.DBService {
+	svc := message.NewService(log, queries, hub)
+	svc.SetMarkdownMediaResolver(func(ctx context.Context, botID, text string, opts markdownmedia.Options) []markdownmedia.Binding {
+		return markdownmedia.Resolve(ctx, mediaService, botID, text, opts)
+	})
+	return svc
 }
 
 func provideScheduleTriggerer(service *application.Service) schedule.Triggerer {
@@ -1295,6 +1301,12 @@ func provideProvidersService(log *slog.Logger, queries dbstore.Queries) *provide
 	return providers.NewService(log, queries, defaultProviderOAuthCallbackURL())
 }
 
+func provideModelCatalog(log *slog.Logger, cfg config.Config) *modelcatalog.Service {
+	return modelcatalog.New(log, modelcatalog.Options{
+		URL: cfg.ModelCatalog.URL, CachePath: cfg.ModelCatalogCachePath(),
+	})
+}
+
 func defaultProviderOAuthCallbackURL() string {
 	return "http://localhost:1455/auth/callback"
 }
@@ -1589,6 +1601,13 @@ func (a *mediaAssetResolverAdapter) IngestContainerFile(ctx context.Context, bot
 		return messaging.AssetMeta{}, errors.New("media service not configured")
 	}
 	return a.media.IngestContainerFile(ctx, botID, containerPath)
+}
+
+func (a *mediaAssetResolverAdapter) IngestWorkspaceFile(ctx context.Context, botID, containerPath string) (media.Asset, error) {
+	if a == nil || a.media == nil {
+		return media.Asset{}, errors.New("media service not configured")
+	}
+	return a.media.IngestWorkspaceFile(ctx, botID, containerPath)
 }
 
 type gatewayAssetLoaderAdapter struct {
