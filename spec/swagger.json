@@ -21759,6 +21759,9 @@
         },
         "fetchproviders.TestRequest": {
             "type": "object",
+            "required": [
+                "url"
+            ],
             "properties": {
                 "url": {
                     "type": "string"
@@ -27352,6 +27355,9 @@
         },
         "searchproviders.TestRequest": {
             "type": "object",
+            "required": [
+                "query"
+            ],
             "properties": {
                 "count": {
                     "type": "integer"
